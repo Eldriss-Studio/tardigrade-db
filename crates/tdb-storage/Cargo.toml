@@ -11,3 +11,6 @@ tdb-core = { workspace = true }
 memmap2 = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
