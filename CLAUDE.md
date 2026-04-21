@@ -120,3 +120,17 @@ Mandatory metrics updates for durability/recovery changes:
 - **Design patterns:** Solve problems using well-known engineering design patterns. Choose the pattern that fits the problem — don't force-fit, but don't ad-hoc either. Name and document the pattern in use.
 - **Mandatory refactor pass:** No work is considered complete until a final refactoring pass has been done for code quality — naming, structure, duplication, and adherence to SOLID.
 - **Mandatory gap review:** No work is considered complete until a review for gaps has been performed — missing edge cases, untested paths, incomplete error handling, and architectural blind spots.
+
+## Documentation Standards
+
+- **First-class open source quality required.** Follow the standard set by top Rust crates (tokio, serde, crossbeam, rocksdb). Documentation that merely restates what the code does is not acceptable.
+- **Crate-level `//!` docs are mandatory** in every `lib.rs`. These are the landing pages in `cargo doc`. They must include:
+  - A one-sentence summary (appears in workspace index).
+  - What problem this crate solves within TardigradeDB's 4-layer architecture.
+  - An ASCII text diagram where the crate's architecture benefits from visualization.
+  - Key public types/functions linked with `[Type]` intra-doc links.
+  - At least one working `# Usage` code example for the most important public API.
+  - Cross-references to related crates.
+- **Module-level `//!` docs** must explain *why* the module exists, not just what it contains. Design decisions and trade-offs belong here.
+- **Item-level `///` docs** must explain invariants, preconditions, panics, and non-obvious behavior. Do not repeat the function signature in prose.
+- **Challenge assumptions externally:** Before documenting a design choice, verify it against published research or first-class OSS references. Never document a claim that hasn't been validated.
