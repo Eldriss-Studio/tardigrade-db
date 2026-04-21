@@ -1,1 +1,1 @@
-//! BatchQuantizedKVCache — handles concurrent Q4 inference over multiple agents.
+//! `BatchQuantizedKVCache` — handles concurrent Q4 inference over multiple agents.

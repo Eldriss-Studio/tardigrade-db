@@ -1,0 +1,22 @@
+[package]
+name = "tdb-storage-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tdb-storage = { path = ".." }
+
+[[bin]]
+name = "fuzz_q4_round_trip"
+path = "fuzz_targets/fuzz_q4_round_trip.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_segment_read"
+path = "fuzz_targets/fuzz_segment_read.rs"
+doc = false

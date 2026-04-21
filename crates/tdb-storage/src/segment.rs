@@ -56,6 +56,7 @@ pub struct RecordLocation {
 }
 
 /// A single segment file — append-only storage for serialized memory cells.
+#[derive(Debug)]
 pub struct Segment {
     id: u32,
     path: PathBuf,
@@ -70,22 +71,14 @@ impl Segment {
         file.write_all(SEGMENT_MAGIC)?;
         file.write_all(&SEGMENT_VERSION.to_le_bytes())?;
         file.flush()?;
-        Ok(Self {
-            id,
-            path,
-            size: FILE_HEADER_SIZE,
-        })
+        Ok(Self { id, path, size: FILE_HEADER_SIZE })
     }
 
     /// Open an existing segment file.
     pub fn open(dir: &Path, id: u32) -> io::Result<Self> {
         let path = segment_path(dir, id);
         let meta = fs::metadata(&path)?;
-        Ok(Self {
-            id,
-            path,
-            size: meta.len(),
-        })
+        Ok(Self { id, path, size: meta.len() })
     }
 
     pub fn id(&self) -> u32 {
@@ -96,7 +89,7 @@ impl Segment {
         self.size
     }
 
-    /// Append a MemoryCell (quantized to Q4) and return its byte offset.
+    /// Append a `MemoryCell` (quantized to Q4) and return its byte offset.
     pub fn append(&mut self, cell: &MemoryCell) -> io::Result<u64> {
         let offset = self.size;
 
@@ -144,13 +137,13 @@ impl Segment {
         w.write_all(&val_q.data)?;
         write_f32_slice(&mut w, &cell.pos_encoding)?;
 
-        let inner = w.into_inner().map_err(|e| e.into_error())?;
+        let inner = w.into_inner().map_err(std::io::IntoInnerError::into_error)?;
         inner.sync_data()?;
         self.size = offset + 4 + record_bytes as u64; // 4 bytes for record_len prefix
         Ok(offset)
     }
 
-    /// Read a MemoryCell from a specific byte offset.
+    /// Read a `MemoryCell` from a specific byte offset.
     pub fn read_at(&self, byte_offset: u64) -> io::Result<MemoryCell> {
         let mut file = File::open(&self.path)?;
         file.seek(SeekFrom::Start(byte_offset))?;
@@ -183,16 +176,8 @@ impl Segment {
         let val_data = read_bytes(&mut file, val_data_len)?;
         let pos_encoding = read_f32_vec(&mut file, pos_dim)?;
 
-        let key_q = QuantizedTensor {
-            data: key_data,
-            scales: key_scales,
-            original_len: key_dim,
-        };
-        let val_q = QuantizedTensor {
-            data: val_data,
-            scales: val_scales,
-            original_len: value_dim,
-        };
+        let key_q = QuantizedTensor { data: key_data, scales: key_scales, original_len: key_dim };
+        let val_q = QuantizedTensor { data: val_data, scales: val_scales, original_len: value_dim };
 
         let key = Q4::dequantize(&key_q);
         let value = Q4::dequantize(&val_q);
@@ -217,13 +202,7 @@ impl Segment {
             value,
             token_span: (token_span_start, token_span_end),
             pos_encoding,
-            meta: CellMeta {
-                created_at,
-                updated_at,
-                importance,
-                tags,
-                tier,
-            },
+            meta: CellMeta { created_at, updated_at, importance, tags, tier },
         })
     }
 }
@@ -263,15 +242,17 @@ pub fn scan_segment(dir: &Path, segment_id: u32) -> io::Result<Vec<(CellId, u64)
             break; // partial record at EOF — discard it
         }
 
-        let cell_id = match read_u64(&mut file) {
-            Ok(id) => id,
-            Err(_) => break, // partial record — stop scanning
+        let Ok(cell_id) = read_u64(&mut file) else {
+            break; // partial record — stop scanning
         };
         entries.push((cell_id, pos));
 
         // Skip the rest of this record.
         let remaining = record_len.saturating_sub(8);
-        if file.seek(SeekFrom::Current(remaining as i64)).is_err() {
+        let Ok(seek_offset) = i64::try_from(remaining) else {
+            break;
+        };
+        if file.seek(SeekFrom::Current(seek_offset)).is_err() {
             break;
         }
         pos += 4 + record_len;
@@ -299,7 +280,7 @@ pub fn list_segments(dir: &Path) -> io::Result<Vec<u32>> {
             }
         }
     }
-    ids.sort();
+    ids.sort_unstable();
     Ok(ids)
 }
 
@@ -358,10 +339,7 @@ fn read_f32(r: &mut impl Read) -> io::Result<f32> {
 fn read_f32_vec(r: &mut impl Read, count: usize) -> io::Result<Vec<f32>> {
     let mut buf = vec![0u8; count * 4];
     r.read_exact(&mut buf)?;
-    Ok(buf
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
+    Ok(buf.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
 }
 
 fn read_bytes(r: &mut impl Read, count: usize) -> io::Result<Vec<u8>> {

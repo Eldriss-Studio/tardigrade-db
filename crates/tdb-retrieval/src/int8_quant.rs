@@ -13,6 +13,7 @@ pub struct QuantizedInt8Vec {
 }
 
 /// Symmetric INT8 quantizer.
+#[derive(Debug)]
 pub struct Int8Quantizer;
 
 impl Int8Quantizer {
@@ -24,15 +25,10 @@ impl Int8Quantizer {
         let scale = if abs_max == 0.0 { 1.0 } else { abs_max / 127.0 };
         let inv_scale = 1.0 / scale;
 
-        let quantized: Vec<i8> = values
-            .iter()
-            .map(|&v| (v * inv_scale).round().clamp(-127.0, 127.0) as i8)
-            .collect();
+        let quantized: Vec<i8> =
+            values.iter().map(|&v| (v * inv_scale).round().clamp(-127.0, 127.0) as i8).collect();
 
-        QuantizedInt8Vec {
-            values: quantized,
-            scale,
-        }
+        QuantizedInt8Vec { values: quantized, scale }
     }
 
     /// Dequantize back to f32.
@@ -59,12 +55,9 @@ mod tests {
         let q = Int8Quantizer::quantize(&values);
         let restored = Int8Quantizer::dequantize(&q);
 
-        let mse: f32 = values
-            .iter()
-            .zip(restored.iter())
-            .map(|(a, b)| (a - b) * (a - b))
-            .sum::<f32>()
-            / values.len() as f32;
+        let mse: f32 =
+            values.iter().zip(restored.iter()).map(|(a, b)| (a - b) * (a - b)).sum::<f32>()
+                / values.len() as f32;
 
         // INT8 with 254 levels should have very low quantization error.
         assert!(mse < 0.001, "INT8 MSE {mse:.6} exceeds 0.001");

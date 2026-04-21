@@ -5,25 +5,27 @@
 //! at >10K blocks where brute-force becomes too slow.
 //!
 //! Key parameters:
-//! - `R` (max_degree): maximum out-degree per node. Higher = better recall, more memory.
-//! - `L` (search_list_size): beam width during greedy search. Higher = better recall, slower.
+//! - `R` (`max_degree)`: maximum out-degree per node. Higher = better recall, more memory.
+//! - `L` (`search_list_size)`: beam width during greedy search. Higher = better recall, slower.
 
 use std::collections::{HashMap, HashSet};
 
 use tdb_core::CellId;
 
 /// A node in the Vamana graph.
+#[derive(Debug)]
 struct VamanaNode {
     id: CellId,
     vector: Vec<f32>,
-    /// Neighbor indices into `VamanaIndex::nodes` (not CellIds).
+    /// Neighbor indices into `VamanaIndex::nodes` (not `CellIds`).
     neighbors: Vec<usize>,
 }
 
-/// Result from a Vamana query: (cell_id, dot_product_score).
+/// Result from a Vamana query: (`cell_id`, `dot_product_score`).
 pub type VamanaResult = (CellId, f32);
 
 /// Vamana graph index for approximate nearest neighbor search.
+#[derive(Debug)]
 pub struct VamanaIndex {
     nodes: Vec<VamanaNode>,
     id_to_idx: HashMap<CellId, usize>,
@@ -34,13 +36,7 @@ pub struct VamanaIndex {
 
 impl VamanaIndex {
     pub fn new(dim: usize, max_degree: usize) -> Self {
-        Self {
-            nodes: Vec::new(),
-            id_to_idx: HashMap::new(),
-            dim,
-            max_degree,
-            medoid_idx: None,
-        }
+        Self { nodes: Vec::new(), id_to_idx: HashMap::new(), dim, max_degree, medoid_idx: None }
     }
 
     /// Add a vector to the index (does not build edges — call `build()` after all inserts).
@@ -49,16 +45,9 @@ impl VamanaIndex {
     /// Panics if `vector.len() != dim` or if `id` has already been inserted.
     pub fn insert(&mut self, id: CellId, vector: &[f32]) {
         assert_eq!(vector.len(), self.dim);
-        assert!(
-            !self.id_to_idx.contains_key(&id),
-            "duplicate CellId {id} in VamanaIndex"
-        );
+        assert!(!self.id_to_idx.contains_key(&id), "duplicate CellId {id} in VamanaIndex");
         let idx = self.nodes.len();
-        self.nodes.push(VamanaNode {
-            id,
-            vector: vector.to_vec(),
-            neighbors: Vec::new(),
-        });
+        self.nodes.push(VamanaNode { id, vector: vector.to_vec(), neighbors: Vec::new() });
         self.id_to_idx.insert(id, idx);
     }
 
@@ -66,7 +55,7 @@ impl VamanaIndex {
     ///
     /// Must be called after all inserts and before queries. Uses brute-force
     /// neighbor computation (O(n²) — acceptable for <100K nodes in Phase 3;
-    /// incremental DiskANN build is a future optimization).
+    /// incremental `DiskANN` build is a future optimization).
     pub fn build(&mut self) {
         let n = self.nodes.len();
         if n == 0 {
@@ -99,11 +88,7 @@ impl VamanaIndex {
         let search_beam = k.max(self.max_degree) * 2;
         let candidates = self.greedy_search(query, search_beam);
 
-        candidates
-            .into_iter()
-            .take(k)
-            .map(|(idx, score)| (self.nodes[idx].id, score))
-            .collect()
+        candidates.into_iter().take(k).map(|(idx, score)| (self.nodes[idx].id, score)).collect()
     }
 
     pub fn len(&self) -> usize {
@@ -132,11 +117,7 @@ impl VamanaIndex {
         let num_seeds = (n / 100).clamp(1, 10); // ~1% of nodes, at least 1, at most 10
         let stride = n / num_seeds;
         for s in 0..num_seeds {
-            let idx = if s == 0 {
-                self.medoid_idx.unwrap_or(0)
-            } else {
-                s * stride
-            };
+            let idx = if s == 0 { self.medoid_idx.unwrap_or(0) } else { s * stride };
             if visited.insert(idx) {
                 let score = dot(query, &self.nodes[idx].vector);
                 candidates.push((idx, score, false));
@@ -149,15 +130,10 @@ impl VamanaIndex {
                 .iter()
                 .enumerate()
                 .filter(|(_, (_, _, expanded))| !expanded)
-                .max_by(|a, b| {
-                    a.1.1
-                        .partial_cmp(&b.1.1)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                .max_by(|a, b| a.1.1.partial_cmp(&b.1.1).unwrap_or(std::cmp::Ordering::Equal));
 
-            let expand_pos = match best_unexpanded {
-                Some((pos, _)) => pos,
-                None => break, // All candidates expanded — search complete.
+            let Some((expand_pos, _)) = best_unexpanded else {
+                break; // All candidates expanded — search complete.
             };
 
             let expand_idx = candidates[expand_pos].0;
@@ -178,10 +154,7 @@ impl VamanaIndex {
             candidates.truncate(beam_size);
         }
 
-        candidates
-            .into_iter()
-            .map(|(idx, score, _)| (idx, score))
-            .collect()
+        candidates.into_iter().map(|(idx, score, _)| (idx, score)).collect()
     }
 
     /// Update medoid to the node closest to the centroid of all vectors.

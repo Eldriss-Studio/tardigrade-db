@@ -1,7 +1,7 @@
 //! Block pool — the Repository abstraction over segmented storage.
 //!
 //! Provides `append` and `get` operations over a collection of segment files,
-//! with an in-memory index mapping CellId → (segment_id, byte_offset).
+//! with an in-memory index mapping `CellId` → (`segment_id`, `byte_offset`).
 //! The index is rebuilt from segment files on open (recovery).
 
 use std::collections::BTreeMap;
@@ -18,9 +18,10 @@ const DEFAULT_SEGMENT_SIZE: u64 = 256 * 1024 * 1024;
 
 /// Repository over segmented, append-only storage for memory cells.
 ///
-/// The index is held in memory (BTreeMap) and rebuilt from segment files on open.
+/// The index is held in memory (`BTreeMap`) and rebuilt from segment files on open.
 /// Segments are append-only; when the active segment exceeds the size threshold,
 /// a new segment is created.
+#[derive(Debug)]
 pub struct BlockPool {
     dir: PathBuf,
     segments: Vec<Segment>,
@@ -47,13 +48,7 @@ impl BlockPool {
             let segment = Segment::open(dir, seg_id)?;
             let entries = scan_segment(dir, seg_id)?;
             for (cell_id, byte_offset) in entries {
-                index.insert(
-                    cell_id,
-                    RecordLocation {
-                        segment_id: seg_id,
-                        byte_offset,
-                    },
-                );
+                index.insert(cell_id, RecordLocation { segment_id: seg_id, byte_offset });
             }
             segments.push(segment);
         }
@@ -63,12 +58,7 @@ impl BlockPool {
             segments.push(Segment::create(dir, 0)?);
         }
 
-        Ok(Self {
-            dir: dir.to_path_buf(),
-            segments,
-            index,
-            segment_size_threshold,
-        })
+        Ok(Self { dir: dir.to_path_buf(), segments, index, segment_size_threshold })
     }
 
     /// Append a memory cell to the pool. Returns the cell ID on success.
@@ -79,23 +69,14 @@ impl BlockPool {
         let seg_id = active.id();
         let byte_offset = active.append(cell)?;
 
-        self.index.insert(
-            cell.id,
-            RecordLocation {
-                segment_id: seg_id,
-                byte_offset,
-            },
-        );
+        self.index.insert(cell.id, RecordLocation { segment_id: seg_id, byte_offset });
 
         Ok(cell.id)
     }
 
     /// Retrieve a memory cell by its ID.
     pub fn get(&self, cell_id: CellId) -> Result<MemoryCell> {
-        let loc = self
-            .index
-            .get(&cell_id)
-            .ok_or(TardigradeError::CellNotFound(cell_id))?;
+        let loc = self.index.get(&cell_id).ok_or(TardigradeError::CellNotFound(cell_id))?;
 
         let segment = self
             .segments
@@ -117,10 +98,8 @@ impl BlockPool {
 
     /// If the active segment exceeds the threshold, create a new one.
     fn ensure_active_segment_has_capacity(&mut self) -> Result<()> {
-        let needs_rollover = self
-            .segments
-            .last()
-            .is_some_and(|s| s.size() >= self.segment_size_threshold);
+        let needs_rollover =
+            self.segments.last().is_some_and(|s| s.size() >= self.segment_size_threshold);
 
         if needs_rollover {
             let new_id = self.segments.last().unwrap().id() + 1;
@@ -131,8 +110,6 @@ impl BlockPool {
     }
 
     fn active_segment_mut(&mut self) -> &mut Segment {
-        self.segments
-            .last_mut()
-            .expect("pool always has at least one segment")
+        self.segments.last_mut().expect("pool always has at least one segment")
     }
 }

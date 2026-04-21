@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 tdb-core = { workspace = true }
 memmap2 = { workspace = true }
@@ -13,4 +16,14 @@ bytemuck = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+criterion = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
+
+[[bench]]
+name = "quantization"
+harness = false
+
+[[bench]]
+name = "block_pool"
+harness = false

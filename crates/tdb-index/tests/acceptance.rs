@@ -97,10 +97,7 @@ fn test_vamana_query_latency() {
     let avg_us = elapsed.as_micros() as f64 / iterations as f64;
 
     // In debug mode, just verify it completes in reasonable time (<50ms per query).
-    assert!(
-        avg_us < 50_000.0,
-        "Average query latency {avg_us:.0}μs exceeds 50ms"
-    );
+    assert!(avg_us < 50_000.0, "Average query latency {avg_us:.0}μs exceeds 50ms");
 }
 
 /// ATDD Test 3: Insert cells A → B → C with causal edges.
@@ -115,14 +112,8 @@ fn test_trace_causal_chain() {
 
     // Ancestors of C (following CausedBy edges transitively).
     let ancestors = trace.ancestors(2, EdgeType::CausedBy);
-    assert!(
-        ancestors.contains(&0),
-        "Ancestor A(0) not found. Got: {ancestors:?}"
-    );
-    assert!(
-        ancestors.contains(&1),
-        "Ancestor B(1) not found. Got: {ancestors:?}"
-    );
+    assert!(ancestors.contains(&0), "Ancestor A(0) not found. Got: {ancestors:?}");
+    assert!(ancestors.contains(&1), "Ancestor B(1) not found. Got: {ancestors:?}");
     assert_eq!(ancestors.len(), 2);
 }
 
@@ -213,10 +204,7 @@ fn test_concurrent_trace_reads() {
                 let t = trace.read().unwrap();
                 let neighbors = t.outgoing(i, None);
                 // Should find at least one neighbor (the Follows edge).
-                assert!(
-                    !neighbors.is_empty() || i >= 100,
-                    "Expected neighbors for node {i}"
-                );
+                assert!(!neighbors.is_empty() || i >= 100, "Expected neighbors for node {i}");
             }
         }));
     }
@@ -240,9 +228,5 @@ fn test_concurrent_trace_reads() {
 
     // Verify all edges present.
     let t = trace.read().unwrap();
-    assert!(
-        t.edge_count() >= 200,
-        "Expected ≥200 edges, got {}",
-        t.edge_count()
-    );
+    assert!(t.edge_count() >= 200, "Expected ≥200 edges, got {}", t.edge_count());
 }

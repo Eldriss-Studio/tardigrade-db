@@ -28,7 +28,7 @@ pub trait DequantizeStrategy {
     fn dequantize(tensor: &QuantizedTensor) -> Vec<f32>;
 }
 
-/// Group-wise 4-bit quantization (Q4_0).
+/// Group-wise 4-bit quantization (`Q4_0`).
 ///
 /// For each group of 32 values:
 /// 1. Find `abs_max` — the maximum absolute value in the group.
@@ -36,7 +36,8 @@ pub trait DequantizeStrategy {
 /// 3. Quantize each value: `q = round(value / scale) + 8` clamped to [0, 15].
 /// 4. Pack two 4-bit values per byte (low nibble first).
 ///
-/// This matches the GGML Q4_0 scheme used in llama.cpp.
+/// This matches the GGML `Q4_0` scheme used in llama.cpp.
+#[derive(Debug)]
 pub struct Q4;
 
 impl QuantizeStrategy for Q4 {
@@ -71,11 +72,7 @@ impl QuantizeStrategy for Q4 {
             data.extend(std::iter::repeat_n(0x88u8, pad_count));
         }
 
-        QuantizedTensor {
-            data,
-            scales,
-            original_len: values.len(),
-        }
+        QuantizedTensor { data, scales, original_len: values.len() }
     }
 }
 
@@ -93,13 +90,13 @@ impl DequantizeStrategy for Q4 {
                     break;
                 }
                 let byte = tensor.data[byte_offset + j];
-                let q_low = (byte & 0x0F) as i8 - 8;
+                let q_low = i16::from(byte & 0x0F) - 8;
                 result.push(q_low as f32 * scale);
 
                 if group_start + j * 2 + 1 >= tensor.original_len {
                     break;
                 }
-                let q_high = ((byte >> 4) & 0x0F) as i8 - 8;
+                let q_high = i16::from((byte >> 4) & 0x0F) - 8;
                 result.push(q_high as f32 * scale);
             }
         }
@@ -136,11 +133,7 @@ mod tests {
             let values: Vec<f32> = (0..len).map(|i| (i as f32) * 0.1).collect();
             let quantized = Q4::quantize(&values);
             let restored = Q4::dequantize(&quantized);
-            assert_eq!(
-                restored.len(),
-                values.len(),
-                "Length mismatch for input size {len}"
-            );
+            assert_eq!(restored.len(), values.len(), "Length mismatch for input size {len}");
         }
     }
 
@@ -150,12 +143,9 @@ mod tests {
         let quantized = Q4::quantize(&values);
         let restored = Q4::dequantize(&quantized);
 
-        let mse: f32 = values
-            .iter()
-            .zip(restored.iter())
-            .map(|(a, b)| (a - b) * (a - b))
-            .sum::<f32>()
-            / values.len() as f32;
+        let mse: f32 =
+            values.iter().zip(restored.iter()).map(|(a, b)| (a - b) * (a - b)).sum::<f32>()
+                / values.len() as f32;
 
         assert!(mse < 0.01, "MSE {mse:.6} exceeds 0.01");
     }
@@ -168,9 +158,6 @@ mod tests {
         let compressed_bytes = quantized.data.len() + quantized.scales.len() * 4;
         let ratio = original_bytes as f32 / compressed_bytes as f32;
         // Q4 should achieve ~4x compression (4 bits vs 32 bits, plus scale overhead).
-        assert!(
-            ratio > 3.0,
-            "Compression ratio {ratio:.1}x is below 3x minimum"
-        );
+        assert!(ratio > 3.0, "Compression ratio {ratio:.1}x is below 3x minimum");
     }
 }

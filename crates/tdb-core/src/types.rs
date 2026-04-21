@@ -10,7 +10,7 @@ pub type LayerId = u16;
 /// Bitfield for tagging memory cells with categorical metadata.
 pub type TagBits = u32;
 
-/// Unique identifier for a synaptic bank entry (LoRA adapter pack).
+/// Unique identifier for a synaptic bank entry (`LoRA` adapter pack).
 pub type SynapticId = u64;
 
 /// Maturity tier in the Adaptive Knowledge Lifecycle.

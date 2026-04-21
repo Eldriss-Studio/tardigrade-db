@@ -2,11 +2,12 @@
 //!
 //! Strategy pattern: scalar fallback, with platform-specific optimizations.
 //! On aarch64 (Apple Silicon, ARM servers), uses NEON intrinsics.
-//! On x86_64, uses auto-vectorization-friendly loops.
+//! On `x86_64`, uses auto-vectorization-friendly loops.
 
 use crate::int8_quant::QuantizedInt8Vec;
 
 /// Dot product implementations for retrieval scoring.
+#[derive(Debug)]
 pub struct DotProduct;
 
 impl DotProduct {
@@ -38,11 +39,17 @@ impl DotProduct {
     #[cfg(target_arch = "aarch64")]
     #[inline]
     fn int8_dot_raw(a: &[i8], b: &[i8]) -> i32 {
-        use std::arch::aarch64::*;
+        use std::arch::aarch64::{
+            vaddvq_s32, vdupq_n_s32, vget_high_s8, vget_low_s8, vld1q_s8, vmull_s8, vpadalq_s16,
+        };
 
         let len = a.len();
         let chunks = len / 16;
 
+        // SAFETY: NEON intrinsics require `unsafe`. Pointer arithmetic is bounded by
+        // `chunks * 16 <= len`, so `a.as_ptr().add(offset)` and `b.as_ptr().add(offset)`
+        // always point within the slice. The `#[cfg(target_arch = "aarch64")]` gate
+        // ensures NEON is available.
         let mut acc: i32 = unsafe {
             let mut vacc = vdupq_n_s32(0);
 
@@ -81,10 +88,7 @@ impl DotProduct {
     #[cfg(not(target_arch = "aarch64"))]
     #[inline]
     fn int8_dot_raw(a: &[i8], b: &[i8]) -> i32 {
-        a.iter()
-            .zip(b.iter())
-            .map(|(&x, &y)| x as i32 * y as i32)
-            .sum()
+        a.iter().zip(b.iter()).map(|(&x, &y)| x as i32 * y as i32).sum()
     }
 }
 
@@ -112,7 +116,7 @@ mod tests {
         let a: Vec<i8> = vec![1, 2, 3, 4];
         let b: Vec<i8> = vec![5, 6, 7, 8];
         let result = DotProduct::int8_dot_raw(&a, &b);
-        assert_eq!(result, 1 * 5 + 2 * 6 + 3 * 7 + 4 * 8);
+        assert_eq!(result, 5 + 2 * 6 + 3 * 7 + 4 * 8);
     }
 
     #[test]
@@ -120,11 +124,7 @@ mod tests {
         let len = 128;
         let a: Vec<i8> = (0..len).map(|i| (i % 10) as i8).collect();
         let b: Vec<i8> = (0..len).map(|i| ((i + 3) % 10) as i8).collect();
-        let expected: i32 = a
-            .iter()
-            .zip(b.iter())
-            .map(|(&x, &y)| x as i32 * y as i32)
-            .sum();
+        let expected: i32 = a.iter().zip(b.iter()).map(|(&x, &y)| x as i32 * y as i32).sum();
         let result = DotProduct::int8_dot_raw(&a, &b);
         assert_eq!(result, expected);
     }

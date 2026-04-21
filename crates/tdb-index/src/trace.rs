@@ -1,6 +1,6 @@
 //! Episodic causal graph (Trace).
 //!
-//! Directed graph where nodes are CellIds and edges represent causal relationships.
+//! Directed graph where nodes are `CellIds` and edges represent causal relationships.
 //! Stored as adjacency lists. Supports transitive ancestor queries for causal reasoning.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -42,10 +42,11 @@ pub struct TraceEdge {
 ///
 /// Provides adjacency-list-based storage with outgoing/incoming edge queries
 /// and transitive ancestor traversal for causal chain reasoning.
+#[derive(Debug)]
 pub struct TraceGraph {
-    /// Outgoing edges: src → [(dst, edge_type, timestamp)]
+    /// Outgoing edges: src → [(dst, `edge_type`, timestamp)]
     outgoing: HashMap<CellId, Vec<TraceEdge>>,
-    /// Incoming edges: dst → [(src, edge_type, timestamp)]
+    /// Incoming edges: dst → [(src, `edge_type`, timestamp)]
     incoming: HashMap<CellId, Vec<TraceEdge>>,
     /// Total number of edges.
     count: usize,
@@ -53,21 +54,12 @@ pub struct TraceGraph {
 
 impl TraceGraph {
     pub fn new() -> Self {
-        Self {
-            outgoing: HashMap::new(),
-            incoming: HashMap::new(),
-            count: 0,
-        }
+        Self { outgoing: HashMap::new(), incoming: HashMap::new(), count: 0 }
     }
 
     /// Add a directed edge from `src` to `dst`.
     pub fn add_edge(&mut self, src: CellId, dst: CellId, edge_type: EdgeType, timestamp: u64) {
-        let edge = TraceEdge {
-            src,
-            dst,
-            edge_type,
-            timestamp,
-        };
+        let edge = TraceEdge { src, dst, edge_type, timestamp };
 
         self.outgoing.entry(src).or_default().push(edge.clone());
         self.incoming.entry(dst).or_default().push(edge);
@@ -79,10 +71,7 @@ impl TraceGraph {
         self.outgoing
             .get(&src)
             .map(|edges| {
-                edges
-                    .iter()
-                    .filter(|e| edge_type_filter.is_none_or(|t| e.edge_type == t))
-                    .collect()
+                edges.iter().filter(|e| edge_type_filter.is_none_or(|t| e.edge_type == t)).collect()
             })
             .unwrap_or_default()
     }
@@ -92,10 +81,7 @@ impl TraceGraph {
         self.incoming
             .get(&dst)
             .map(|edges| {
-                edges
-                    .iter()
-                    .filter(|e| edge_type_filter.is_none_or(|t| e.edge_type == t))
-                    .collect()
+                edges.iter().filter(|e| edge_type_filter.is_none_or(|t| e.edge_type == t)).collect()
             })
             .unwrap_or_default()
     }

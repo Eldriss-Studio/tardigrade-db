@@ -2,9 +2,9 @@ use half::f16;
 
 use crate::types::{OwnerId, SynapticId};
 
-/// A per-agent/user LoRA adapter pack for weight-like memory.
+/// A per-agent/user `LoRA` adapter pack for weight-like memory.
 ///
-/// Unlike episodic KV memory (MemoryCell), synaptic entries encode
+/// Unlike episodic KV memory (`MemoryCell`), synaptic entries encode
 /// stable preferences and patterns as low-rank weight deltas
 /// applied to the base model at runtime.
 #[derive(Debug, Clone, PartialEq)]
@@ -13,15 +13,15 @@ pub struct SynapticBankEntry {
     pub id: SynapticId,
     /// The agent/user these adapters belong to.
     pub owner: OwnerId,
-    /// LoRA matrix A (rank × d_model), stored in FP16.
+    /// `LoRA` matrix A (rank × `d_model`), stored in FP16.
     pub lora_a: Vec<f16>,
-    /// LoRA matrix B (d_model × rank), stored in FP16.
+    /// `LoRA` matrix B (`d_model` × rank), stored in FP16.
     pub lora_b: Vec<f16>,
     /// Scaling factor applied to the low-rank delta.
     pub scale: f16,
-    /// Rank of the LoRA decomposition.
+    /// Rank of the `LoRA` decomposition.
     pub rank: u32,
-    /// Model dimension (d_model).
+    /// Model dimension (`d_model`).
     pub d_model: u32,
     /// Unix timestamp of last use.
     pub last_used: u64,
@@ -60,17 +60,7 @@ impl SynapticBankEntry {
             d_model,
             rank
         );
-        Self {
-            id,
-            owner,
-            lora_a,
-            lora_b,
-            scale,
-            rank,
-            d_model,
-            last_used: 0,
-            quality: 0.0,
-        }
+        Self { id, owner, lora_a, lora_b, scale, rank, d_model, last_used: 0, quality: 0.0 }
     }
 }
 

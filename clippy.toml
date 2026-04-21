@@ -1,0 +1,5 @@
+# Storage engine safety: disallow methods that bypass project conventions
+disallowed-methods = [
+    { path = "std::io::Read::read_to_string", reason = "Use structured deserialization, not raw string reads" },
+    { path = "std::io::Read::read_to_end", reason = "Prefer bounded reads to avoid OOM on corrupt data" },
+]

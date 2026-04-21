@@ -1,7 +1,7 @@
 //! Brute-force attention scoring over stored key vectors.
 //!
 //! Computes `score = q · k / √d_k` for each stored key. At per-agent scale (<10K blocks),
-//! SIMD brute-force matmul is faster than any ANN index (validated by MemArt paper).
+//! SIMD brute-force matmul is faster than any ANN index (validated by `MemArt` paper).
 
 use tdb_core::{CellId, OwnerId};
 
@@ -16,6 +16,7 @@ pub struct RetrievalResult {
 }
 
 /// Entry in the retriever's key store.
+#[derive(Debug)]
 struct StoredKey {
     cell_id: CellId,
     owner: OwnerId,
@@ -26,24 +27,19 @@ struct StoredKey {
 ///
 /// Stores key vectors and computes attention scores via exhaustive dot product.
 /// Suitable for per-agent partitions with <10K blocks.
+#[derive(Debug)]
 pub struct BruteForceRetriever {
     entries: Vec<StoredKey>,
 }
 
 impl BruteForceRetriever {
     pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
+        Self { entries: Vec::new() }
     }
 
     /// Insert a key vector for a cell.
     pub fn insert(&mut self, cell_id: CellId, owner: OwnerId, _layer: u16, key: &[f32]) {
-        self.entries.push(StoredKey {
-            cell_id,
-            owner,
-            key: key.to_vec(),
-        });
+        self.entries.push(StoredKey { cell_id, owner, key: key.to_vec() });
     }
 
     /// Query for the top-k most relevant cells by attention score.
@@ -72,20 +68,12 @@ impl BruteForceRetriever {
             .filter(|e| e.key.len() == query.len())
             .map(|e| {
                 let dot = DotProduct::f32_dot(query, &e.key);
-                RetrievalResult {
-                    cell_id: e.cell_id,
-                    owner: e.owner,
-                    score: dot * inv_sqrt_dk,
-                }
+                RetrievalResult { cell_id: e.cell_id, owner: e.owner, score: dot * inv_sqrt_dk }
             })
             .collect();
 
         // Sort by score descending, take top-k.
-        scores.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scores.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         scores.truncate(k);
         scores
     }

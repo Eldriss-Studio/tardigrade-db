@@ -3,7 +3,7 @@ use tdb_core::memory_cell::MemoryCellBuilder;
 use tdb_storage::block_pool::BlockPool;
 use tdb_storage::quantization::{DequantizeStrategy, Q4, QuantizeStrategy};
 
-/// ATDD Test 1: Round-trip a MemoryCell through Q4 quantization and storage.
+/// ATDD Test 1: Round-trip a `MemoryCell` through Q4 quantization and storage.
 /// Write a cell, read it back, verify vectors match within Q4 tolerance (SNR > 20dB).
 #[test]
 fn test_round_trip_memory_cell_q4() {
@@ -24,17 +24,10 @@ fn test_round_trip_memory_cell_q4() {
     // Vectors should match within Q4 quantization tolerance.
     // SNR > 20dB means signal power / noise power > 100, i.e. MSE < signal_power / 100.
     let signal_power: f32 = key.iter().map(|x| x * x).sum::<f32>() / key.len() as f32;
-    let mse: f32 = key
-        .iter()
-        .zip(restored.key.iter())
-        .map(|(a, b)| (a - b) * (a - b))
-        .sum::<f32>()
+    let mse: f32 = key.iter().zip(restored.key.iter()).map(|(a, b)| (a - b) * (a - b)).sum::<f32>()
         / key.len() as f32;
     let snr_db = 10.0 * (signal_power / mse).log10();
-    assert!(
-        snr_db > 20.0,
-        "Key SNR {snr_db:.1}dB is below 20dB threshold"
-    );
+    assert!(snr_db > 20.0, "Key SNR {snr_db:.1}dB is below 20dB threshold");
 
     // Metadata must be exact.
     assert_eq!(restored.id, 1);
@@ -90,11 +83,7 @@ fn test_segment_rollover() {
     }
 
     // Must have created more than one segment.
-    assert!(
-        pool.segment_count() > 1,
-        "Expected multiple segments, got {}",
-        pool.segment_count()
-    );
+    assert!(pool.segment_count() > 1, "Expected multiple segments, got {}", pool.segment_count());
 
     // All cells should still be readable.
     for id in ids {
@@ -144,12 +133,9 @@ fn test_quantization_fidelity() {
     assert_eq!(original.len(), restored.len());
 
     // Compute MSE.
-    let mse: f32 = original
-        .iter()
-        .zip(restored.iter())
-        .map(|(a, b)| (a - b) * (a - b))
-        .sum::<f32>()
-        / original.len() as f32;
+    let mse: f32 =
+        original.iter().zip(restored.iter()).map(|(a, b)| (a - b) * (a - b)).sum::<f32>()
+            / original.len() as f32;
 
     // Q4 (4-bit, 16 levels) with group-wise scaling: theoretical max error per value
     // is ~scale/16. For typical data in [-1, 1], MSE should be well under 0.01.

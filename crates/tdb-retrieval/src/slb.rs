@@ -14,6 +14,7 @@ use crate::int8_quant::{Int8Quantizer, QuantizedInt8Vec};
 use crate::simd_distance::DotProduct;
 
 /// Entry stored in the SLB.
+#[derive(Debug)]
 struct SlbEntry {
     cell_id: CellId,
     owner: OwnerId,
@@ -23,6 +24,7 @@ struct SlbEntry {
 }
 
 /// Semantic Lookaside Buffer: fixed-capacity LRU cache with INT8-quantized keys.
+#[derive(Debug)]
 pub struct SemanticLookasideBuffer {
     entries: HashMap<CellId, SlbEntry>,
     capacity: usize,
@@ -33,12 +35,7 @@ pub struct SemanticLookasideBuffer {
 impl SemanticLookasideBuffer {
     /// Create a new SLB with the given capacity and vector dimensionality.
     pub fn new(capacity: usize, dim: usize) -> Self {
-        Self {
-            entries: HashMap::with_capacity(capacity),
-            capacity,
-            dim,
-            access_counter: 0,
-        }
+        Self { entries: HashMap::with_capacity(capacity), capacity, dim, access_counter: 0 }
     }
 
     /// Insert or update a cell in the SLB.
@@ -92,19 +89,11 @@ impl SemanticLookasideBuffer {
             .filter(|e| e.quantized_key.values.len() == query_q.values.len())
             .map(|e| {
                 let dot = DotProduct::int8_dot(&query_q, &e.quantized_key);
-                RetrievalResult {
-                    cell_id: e.cell_id,
-                    owner: e.owner,
-                    score: dot * inv_sqrt_dk,
-                }
+                RetrievalResult { cell_id: e.cell_id, owner: e.owner, score: dot * inv_sqrt_dk }
             })
             .collect();
 
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(k);
 
         // Mark returned cells as recently accessed.
@@ -134,14 +123,11 @@ impl SemanticLookasideBuffer {
 
     /// Evict the least-recently-used entry.
     ///
-    /// NOTE: O(n) scan over HashMap. Acceptable for <10K entries.
+    /// NOTE: O(n) scan over `HashMap`. Acceptable for <10K entries.
     /// If SLB capacity targets grow beyond 10K, replace with a dual-map
-    /// (BTreeMap<access_order, CellId>) or linked-list LRU for O(1) eviction.
+    /// (`BTreeMap`<`access_order`, `CellId`>) or linked-list LRU for O(1) eviction.
     fn evict_lru(&mut self) {
-        if let Some((&lru_id, _)) = self
-            .entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.access_order)
+        if let Some((&lru_id, _)) = self.entries.iter().min_by_key(|(_, entry)| entry.access_order)
         {
             self.entries.remove(&lru_id);
         }

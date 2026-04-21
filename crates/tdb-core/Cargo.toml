@@ -6,6 +6,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 thiserror = { workspace = true }
 half = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }

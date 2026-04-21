@@ -20,11 +20,7 @@ pub enum TardigradeError {
     Quantization(String),
 
     #[error("dimension mismatch: expected {expected}, got {actual} for {context}")]
-    DimensionMismatch {
-        expected: usize,
-        actual: usize,
-        context: String,
-    },
+    DimensionMismatch { expected: usize, actual: usize, context: String },
 
     #[error("WAL recovery failed: {0}")]
     WalRecovery(String),

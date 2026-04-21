@@ -20,20 +20,16 @@ use std::path::{Path, PathBuf};
 /// A single WAL entry representing a graph mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WalEntry {
-    AddEdge {
-        src: u64,
-        dst: u64,
-        edge_type: u8,
-        timestamp: u64,
-    },
+    AddEdge { src: u64, dst: u64, edge_type: u8, timestamp: u64 },
 }
 
-/// Size of a serialized AddEdge entry: type(1) + src(8) + dst(8) + edge_type(1) + timestamp(8) = 26
+/// Size of a serialized `AddEdge` entry: type(1) + src(8) + dst(8) + `edge_type(1)` + timestamp(8) = 26
 const ADD_EDGE_RECORD_SIZE: usize = 26;
 
 const ENTRY_TYPE_ADD_EDGE: u8 = 1;
 
 /// Write-Ahead Log for Trace graph mutations.
+#[derive(Debug)]
 pub struct Wal {
     path: PathBuf,
 }
@@ -54,12 +50,7 @@ impl Wal {
         let mut w = BufWriter::new(file);
 
         match entry {
-            WalEntry::AddEdge {
-                src,
-                dst,
-                edge_type,
-                timestamp,
-            } => {
+            WalEntry::AddEdge { src, dst, edge_type, timestamp } => {
                 w.write_all(&[ENTRY_TYPE_ADD_EDGE])?;
                 w.write_all(&src.to_le_bytes())?;
                 w.write_all(&dst.to_le_bytes())?;
@@ -68,7 +59,7 @@ impl Wal {
             }
         }
 
-        let inner = w.into_inner().map_err(|e| e.into_error())?;
+        let inner = w.into_inner().map_err(std::io::IntoInnerError::into_error)?;
         inner.sync_data()?;
         Ok(())
     }
@@ -119,12 +110,7 @@ impl Wal {
                     }
                     let timestamp = u64::from_le_bytes(buf);
 
-                    entries.push(WalEntry::AddEdge {
-                        src,
-                        dst,
-                        edge_type,
-                        timestamp,
-                    });
+                    entries.push(WalEntry::AddEdge { src, dst, edge_type, timestamp });
                 }
                 _ => break, // Unknown entry type — stop replay (possible corruption)
             }
@@ -137,10 +123,7 @@ impl Wal {
 
     /// Checkpoint: truncate the WAL (all mutations have been applied to durable state).
     pub fn checkpoint(&mut self) -> io::Result<()> {
-        let file = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(&self.path)?;
+        let file = OpenOptions::new().write(true).truncate(true).open(&self.path)?;
         file.sync_all()?;
         Ok(())
     }
@@ -155,25 +138,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut wal = Wal::open(dir.path()).unwrap();
 
-        wal.append(&WalEntry::AddEdge {
-            src: 1,
-            dst: 2,
-            edge_type: 0,
-            timestamp: 1000,
-        })
-        .unwrap();
+        wal.append(&WalEntry::AddEdge { src: 1, dst: 2, edge_type: 0, timestamp: 1000 }).unwrap();
 
         let entries = wal.replay().unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0],
-            WalEntry::AddEdge {
-                src: 1,
-                dst: 2,
-                edge_type: 0,
-                timestamp: 1000,
-            }
-        );
+        assert_eq!(entries[0], WalEntry::AddEdge { src: 1, dst: 2, edge_type: 0, timestamp: 1000 });
     }
 
     #[test]

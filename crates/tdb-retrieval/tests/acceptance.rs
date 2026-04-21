@@ -35,10 +35,7 @@ fn test_attention_retrieval_finds_nearest() {
 
     assert_eq!(results.len(), 5);
     let top_ids: Vec<u64> = results.iter().map(|r| r.cell_id).collect();
-    assert!(
-        top_ids.contains(&42),
-        "Cell #42 not in top-5. Got: {top_ids:?}"
-    );
+    assert!(top_ids.contains(&42), "Cell #42 not in top-5. Got: {top_ids:?}");
 }
 
 /// ATDD Test 2: Load 4096 cells into SLB. Run 10,000 lookups, measure P99 latency.
@@ -51,9 +48,7 @@ fn test_slb_sub_5us_latency() {
 
     // Fill the SLB.
     for i in 0..count as u64 {
-        let key: Vec<f32> = (0..dim)
-            .map(|d| ((i * 3 + d as u64) as f32 * 0.01).sin())
-            .collect();
+        let key: Vec<f32> = (0..dim).map(|d| ((i * 3 + d as u64) as f32 * 0.01).sin()).collect();
         slb.insert(i, 1, &key);
     }
 
@@ -135,14 +130,8 @@ fn test_slb_eviction_lru() {
     }
 
     // Cells 0..50 should have been evicted.
-    assert!(
-        !slb.contains(0),
-        "Cell 0 should have been evicted but is still present"
-    );
-    assert!(
-        !slb.contains(25),
-        "Cell 25 should have been evicted but is still present"
-    );
+    assert!(!slb.contains(0), "Cell 0 should have been evicted but is still present");
+    assert!(!slb.contains(25), "Cell 25 should have been evicted but is still present");
 
     // Cells 50..100 (recently used) should still be present.
     assert!(slb.contains(50), "Cell 50 should still be present");
@@ -162,24 +151,18 @@ fn test_retrieval_with_owner_filter() {
 
     // Owner 1: cells 0..50.
     for i in 0..50u64 {
-        let key: Vec<f32> = (0..dim)
-            .map(|d| ((i + d as u64) as f32 * 0.01).sin())
-            .collect();
+        let key: Vec<f32> = (0..dim).map(|d| ((i + d as u64) as f32 * 0.01).sin()).collect();
         retriever.insert(i, 1, 0, &key);
     }
 
     // Owner 2: cells 50..100.
     for i in 50..100u64 {
-        let key: Vec<f32> = (0..dim)
-            .map(|d| ((i + d as u64) as f32 * 0.01).sin())
-            .collect();
+        let key: Vec<f32> = (0..dim).map(|d| ((i + d as u64) as f32 * 0.01).sin()).collect();
         retriever.insert(i, 2, 0, &key);
     }
 
     // Query with a key close to cell #25 (owner 1), filtering to owner 1 only.
-    let query: Vec<f32> = (0..dim)
-        .map(|d| ((25u64 + d as u64) as f32 * 0.01).sin())
-        .collect();
+    let query: Vec<f32> = (0..dim).map(|d| ((25u64 + d as u64) as f32 * 0.01).sin()).collect();
 
     let results = retriever.query(&query, 10, Some(1));
 

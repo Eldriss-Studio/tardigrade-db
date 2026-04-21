@@ -1,0 +1,87 @@
+# TardigradeDB development tasks
+
+default:
+    @just --list
+
+# === Quality ===
+
+# Check formatting
+fmt:
+    cargo fmt --all -- --check
+
+# Fix formatting
+fmt-fix:
+    cargo fmt --all
+
+# Run clippy lints
+lint:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# Run cargo-deny checks (license, advisory, bans)
+deny:
+    cargo deny check
+
+# Spell-check code and docs
+typos:
+    typos
+
+# === Testing ===
+
+# Run all tests
+test:
+    cargo nextest run --workspace
+
+# Run tests with CI profile (retries, longer timeouts)
+test-ci:
+    cargo nextest run --workspace --profile ci
+
+# Run tests for a specific crate
+test-crate crate:
+    cargo nextest run -p {{crate}}
+
+# === Benchmarks ===
+
+# Run all benchmarks with native CPU optimizations
+bench:
+    RUSTFLAGS="-C target-cpu=native" cargo bench --workspace
+
+# Run benchmarks for a specific crate
+bench-crate crate:
+    RUSTFLAGS="-C target-cpu=native" cargo bench -p {{crate}}
+
+# === Coverage ===
+
+# Generate HTML coverage report
+coverage:
+    cargo llvm-cov --workspace --html
+    @echo "Report: target/llvm-cov/html/index.html"
+
+# Generate lcov output (for CI)
+coverage-lcov:
+    cargo llvm-cov --workspace --lcov --output-path target/llvm-cov/lcov.info
+
+# === Build ===
+
+# Debug build
+build:
+    cargo build --workspace
+
+# Release build
+release:
+    cargo build --workspace --release
+
+# Build documentation
+doc:
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
+
+# === Fuzz ===
+
+# Run a fuzz target (requires nightly)
+fuzz target:
+    cd crates/tdb-storage && cargo +nightly fuzz run {{target}} -- -max_total_time=300
+
+# === CI-local ===
+
+# Run the full CI check locally
+ci: fmt lint typos test deny
+    @echo "All CI checks passed."

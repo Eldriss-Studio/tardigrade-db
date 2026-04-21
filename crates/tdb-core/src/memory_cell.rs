@@ -16,7 +16,7 @@ pub struct CellMeta {
     pub tier: Tier,
 }
 
-/// A single memory cell — the fundamental storage unit in TardigradeDB.
+/// A single memory cell — the fundamental storage unit in `TardigradeDB`.
 ///
 /// Mirrors the transformer's attention internals: `key` and `value` vectors
 /// have the same dimensionality as the model's KV cache at a given layer.
@@ -45,6 +45,7 @@ pub struct MemoryCell {
 ///
 /// Required fields: `id`, `owner`, `layer`, `key`, `value`.
 /// Optional fields default to zero/empty.
+#[derive(Debug)]
 pub struct MemoryCellBuilder {
     id: CellId,
     owner: OwnerId,
@@ -135,7 +136,7 @@ mod tests {
         assert_eq!(cell.token_span, (0, 0));
         assert!(cell.pos_encoding.is_empty());
         assert_eq!(cell.meta.tier, Tier::Draft);
-        assert_eq!(cell.meta.importance, 0.0);
+        assert!((cell.meta.importance - 0.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -152,7 +153,7 @@ mod tests {
 
         assert_eq!(cell.token_span, (10, 20));
         assert_eq!(cell.pos_encoding, vec![0.5]);
-        assert_eq!(cell.meta.importance, 75.0);
+        assert!((cell.meta.importance - 75.0).abs() < f32::EPSILON);
         assert_eq!(cell.meta.tags, 0b1010);
         assert_eq!(cell.meta.tier, Tier::Validated);
         assert_eq!(cell.meta.created_at, 1000);

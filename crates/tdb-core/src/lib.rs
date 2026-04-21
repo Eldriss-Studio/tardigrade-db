@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 pub mod error;
 pub mod memory_cell;
 pub mod synaptic_bank;
