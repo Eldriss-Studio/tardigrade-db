@@ -8,6 +8,6 @@ rust-version.workspace = true
 
 [dependencies]
 tdb-core = { workspace = true }
-tdb-storage = { workspace = true }
-crossbeam-epoch = { workspace = true }
-crossbeam-utils = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
