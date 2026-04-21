@@ -36,7 +36,7 @@ Four-layer system treating memory as a managed OS resource:
 │                RelayCaching (cross-agent KV reuse)    │
 ├─────────────────────────────────────────────────────┤
 │  Storage       Q4 KV-cache block pool                │
-│                safetensors format · GPU DMA           │
+│                custom mmap arena · GPU DMA            │
 │                blob arena · decoupled position IDs    │
 └─────────────────────────────────────────────────────┘
 ```
@@ -72,6 +72,17 @@ cargo test --workspace
 ## Project Status
 
 **Early development.** The crate structure and core type definitions are in place. See `docs/technical/tdd.md` for the full technical design document and `docs/technical/spec.md` for the condensed specification.
+
+## Reliability & Consistency Contracts
+
+- **Durability boundary** — Writes are accepted asynchronously and durability is tracked via a monotonic `durable_offset`. Client-visible guarantees are defined against this boundary.
+- **Read visibility modes** — Two explicit modes exist:
+  - `unconfirmed`: lowest-latency path, can expose state before durability is confirmed.
+  - `confirmed`: waits until `durable_offset >= tx_offset` before exposing results/updates (default for safety-critical paths).
+- **Recovery pipeline** — Startup follows: restore latest valid snapshot -> replay WAL/commitlog suffix -> rebuild derived in-memory state.
+- **Derived state policy** — Indexes, caches, and other derived structures must be rebuildable from durable history and snapshots.
+- **Replay failure policy** — Replay runs fail-fast on inconsistency. The engine must not serve reconstructed-but-untrusted state.
+- **Observability requirements** — Replay/snapshot timing, replay counts, and durability queue depth are first-class metrics.
 
 ## Design Principles
 

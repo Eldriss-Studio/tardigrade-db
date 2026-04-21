@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -80,7 +80,7 @@ The original TDD/spec documents contain three assumptions that were invalidated 
 2. **Index: Vamana graph (DiskANN-style), NOT HNSW + B+ tree.** MemArt (the paper the spec cites) uses brute-force matmul, not ANN. HNSW fails for attention retrieval due to Q/K distribution shift. Hot path = SIMD brute-force matmul. Cold path = page-node Vamana graph (PageANN-inspired).
 3. **Language: Rust core + CUDA C++ kernels.** Rust for storage engine, concurrency (crossbeam-epoch), Python bindings (PyO3). CUDA C++ for GPU compute (attention, quantization, DMA) linked via cudarc. Same pattern as TiKV and Neon.
 
-See `.claude/plans/whimsical-crafting-stonebraker.md` for the full research findings and implementation plan.
+See `.Codex/plans/whimsical-crafting-stonebraker.md` for the full research findings and implementation plan.
 
 ## Reliability & Consistency Rules (Canonical)
 
