@@ -1,4 +1,6 @@
 [default.extend-words]
+# LoRA formula: W' = W + αBA (B×A is a matrix product, not a typo)
+BA = "BA"
 
 [files]
 extend-exclude = ["Cargo.lock", "*.bin", "*.ptx", "*.cubin"]

@@ -143,7 +143,7 @@ Given how quickly this area is moving and how benchmark results can vary, the sa
 
 ---
 
-# Okay so having that in mind, think on a brand new database built from scratch especially for llms, that lean on their strenghts and quirks. What would be the design spec
+# Okay so having that in mind, think on a brand new database built from scratch especially for llms, that lean on their strengths and quirks. What would be the design spec
 
 A database truly built “for LLMs” should look much more like a **memory OS** than a traditional row/column store or plain vector DB: it stores experiences, facts, and relations as first‑class objects, exposes a natural‑language query surface, and optimizes for semantic relevance, continual learning, and explainability under tight token/latency budgets. Below is a concrete design spec you could build to support OpenClaw‑style agents (or similar) from scratch.[^2_1][^2_2]
 
