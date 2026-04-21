@@ -1,0 +1,19 @@
+[package]
+name = "tdb-python"
+description = "Python bindings for TardigradeDB via PyO3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "tardigrade_db"
+crate-type = ["cdylib"]
+
+[dependencies]
+tdb-engine = { workspace = true }
+pyo3 = "0.24"
+numpy = "0.24"

@@ -7,6 +7,7 @@ members = [
     "crates/tdb-index",
     "crates/tdb-governance",
     "crates/tdb-engine",
+    "crates/tdb-python",
 ]
 
 [workspace.package]
@@ -22,6 +23,7 @@ tdb-storage = { path = "crates/tdb-storage" }
 tdb-retrieval = { path = "crates/tdb-retrieval" }
 tdb-index = { path = "crates/tdb-index" }
 tdb-governance = { path = "crates/tdb-governance" }
+tdb-engine = { path = "crates/tdb-engine" }
 
 # Shared external dependencies
 thiserror = "2"
