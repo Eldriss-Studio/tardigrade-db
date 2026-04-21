@@ -1,4 +1,4 @@
-//! Top-level engine — the unified entry point for TardigradeDB.
+//! Top-level engine — the unified entry point for `TardigradeDB`.
 //!
 //! `tdb-engine` exposes a single [`Engine`] struct that coordinates the four
 //! architectural layers behind two operations: `MEM.WRITE` and `MEM.READ`.

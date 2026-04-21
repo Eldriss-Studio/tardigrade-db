@@ -1,4 +1,4 @@
-//! Adaptive Knowledge Lifecycle (AKL) — autonomous memory management for TardigradeDB.
+//! Adaptive Knowledge Lifecycle (AKL) — autonomous memory management for `TardigradeDB`.
 //!
 //! `tdb-governance` implements the self-curating layer of the Aeon architecture.
 //! It answers the question: *given unlimited memory cells accumulating over time,

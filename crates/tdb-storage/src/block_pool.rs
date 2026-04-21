@@ -96,6 +96,12 @@ impl BlockPool {
         self.index.len()
     }
 
+    /// Iterate over all persisted cell IDs (sorted, from the in-memory index).
+    /// Used by `Engine::open()` to rebuild derived state from disk (Memento pattern).
+    pub fn iter_cell_ids(&self) -> impl Iterator<Item = CellId> + '_ {
+        self.index.keys().copied()
+    }
+
     /// If the active segment exceeds the threshold, create a new one.
     fn ensure_active_segment_has_capacity(&mut self) -> Result<()> {
         let needs_rollover =

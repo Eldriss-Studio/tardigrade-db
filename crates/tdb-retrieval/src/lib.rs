@@ -1,6 +1,6 @@
-//! Latent-space retrieval for TardigradeDB — find relevant memory cells by attention scoring.
+//! Latent-space retrieval for `TardigradeDB` — find relevant memory cells by attention scoring.
 //!
-//! TardigradeDB does not use cosine similarity over text embeddings. Relevance is computed
+//! `TardigradeDB` does not use cosine similarity over text embeddings. Relevance is computed
 //! as **scaled dot-product attention** directly in the model's latent space:
 //!
 //! ```text

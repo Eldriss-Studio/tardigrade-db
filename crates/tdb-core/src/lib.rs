@@ -1,4 +1,4 @@
-//! Shared types, error definitions, and the fundamental storage unit of TardigradeDB.
+//! Shared types, error definitions, and the fundamental storage unit of `TardigradeDB`.
 //!
 //! `tdb-core` is the vocabulary crate — it defines the language every other crate
 //! speaks. No business logic lives here. If you are adding a new field to a stored
@@ -6,7 +6,7 @@
 //!
 //! # What is a [`MemoryCell`]?
 //!
-//! TardigradeDB does not store text or embeddings. It stores **KV-cache tensors** —
+//! `TardigradeDB` does not store text or embeddings. It stores **KV-cache tensors** —
 //! the exact `(key, value)` vectors a transformer produces at a specific layer during
 //! inference. A [`MemoryCell`] is the on-disk representation of one such tensor pair,
 //! along with enough metadata for the engine to manage its lifecycle autonomously.

@@ -46,19 +46,51 @@ pub struct Engine {
 
 impl Engine {
     /// Open or create an engine at the given directory path.
+    ///
+    /// If the directory contains persisted cells from a prior session, the engine
+    /// rebuilds all in-memory state (retriever index, governance scores/tiers, ID counter)
+    /// by reading each cell from disk — the **Memento pattern**.
     pub fn open(dir: &Path) -> Result<Self> {
         let pool = BlockPool::open(dir)?;
+        Self::rebuild_from_pool(pool, dir)
+    }
 
-        // TODO: Rebuild retriever index, governance state, and next_id from
-        // persisted BlockPool on open. Currently the engine is ephemeral — state
-        // is lost on restart despite cells being durable on disk.
-        Ok(Self {
-            pool,
-            retriever: BruteForceRetriever::new(),
-            governance: HashMap::new(),
-            next_id: 0,
-            dir: dir.to_path_buf(),
-        })
+    /// Open with a custom segment size threshold (for testing segment rollover).
+    pub fn open_with_segment_size(dir: &Path, segment_size: u64) -> Result<Self> {
+        let pool = BlockPool::open_with_segment_size(dir, segment_size)?;
+        Self::rebuild_from_pool(pool, dir)
+    }
+
+    /// Rebuild all derived in-memory state from the persisted `BlockPool`.
+    ///
+    /// For each cell on disk: populate the retriever index, reconstruct the
+    /// governance scorer/tier from persisted metadata, and track the max ID.
+    fn rebuild_from_pool(pool: BlockPool, dir: &Path) -> Result<Self> {
+        let mut retriever = BruteForceRetriever::new();
+        let mut governance = HashMap::new();
+        let mut max_id: CellId = 0;
+
+        // Collect IDs first to avoid borrowing pool during iteration + get.
+        let cell_ids: Vec<CellId> = pool.iter_cell_ids().collect();
+
+        for cell_id in &cell_ids {
+            let cell = pool.get(*cell_id)?;
+
+            // Rebuild retriever index from persisted key vectors.
+            retriever.insert(cell.id, cell.owner, cell.layer, &cell.key);
+
+            // Reconstruct governance state from persisted metadata (Memento).
+            let scorer = ImportanceScorer::new(cell.meta.importance);
+            let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
+
+            governance.insert(cell.id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
+
+            if cell.id >= max_id {
+                max_id = cell.id + 1;
+            }
+        }
+
+        Ok(Self { pool, retriever, governance, next_id: max_id, dir: dir.to_path_buf() })
     }
 
     /// Write key/value vectors to the engine. Returns the assigned cell ID.
@@ -80,8 +112,16 @@ impl Engine {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos() as u64);
 
+        // Compute governance state BEFORE persisting so on-disk metadata
+        // matches in-memory state (required for Memento rebuild on reopen).
+        let mut scorer = ImportanceScorer::new(salience);
+        scorer.on_update(); // +5 for the initial write
+        let mut tier_sm = TierStateMachine::new();
+        tier_sm.evaluate(scorer.importance());
+
         let cell = MemoryCellBuilder::new(id, owner, layer, key.to_vec(), value)
-            .importance(salience)
+            .importance(scorer.importance())
+            .tier(tier_sm.current())
             .created_at(now_nanos)
             .updated_at(now_nanos)
             .build();
@@ -91,12 +131,6 @@ impl Engine {
 
         // Index the key for brute-force retrieval.
         self.retriever.insert(id, owner, layer, key);
-
-        // Initialize governance state.
-        let mut scorer = ImportanceScorer::new(salience);
-        scorer.on_update(); // +5 for the initial write
-        let mut tier_sm = TierStateMachine::new();
-        tier_sm.evaluate(scorer.importance());
 
         self.governance.insert(id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
 

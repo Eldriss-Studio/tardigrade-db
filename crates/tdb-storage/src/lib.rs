@@ -1,4 +1,4 @@
-//! Persistent quantized storage for KV-cache tensors — the storage layer of TardigradeDB.
+//! Persistent quantized storage for KV-cache tensors — the storage layer of `TardigradeDB`.
 //!
 //! `tdb-storage` owns the write path: it receives [`MemoryCell`] values, compresses
 //! their key and value vectors to Q4 (4-bit), and appends them to an mmap-backed

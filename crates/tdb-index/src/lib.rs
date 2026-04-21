@@ -1,4 +1,4 @@
-//! Organization layer for TardigradeDB: ANN graph, causal graph, and write-ahead log.
+//! Organization layer for `TardigradeDB`: ANN graph, causal graph, and write-ahead log.
 //!
 //! `tdb-index` implements the **neuro-symbolic dual topology** described in the Aeon
 //! architecture: two complementary data structures that organize memory cells, plus a
@@ -26,7 +26,7 @@
 //! **Key design choices vs. HNSW:**
 //! - Single layer (no multi-layer hierarchy) → simpler build, faster cold-start
 //! - Medoid seeding → avoids pathological cases when queries are far from the centroid
-//! - Page-clustered insertions (future) → DiskANN's disk-locality trick for NVMe I/O
+//! - Page-clustered insertions (future) → `DiskANN`'s disk-locality trick for `NVMe` I/O
 //!
 //! Configuration:
 //! - `max_degree` (R): out-degree per node. Higher = better recall, more memory.
