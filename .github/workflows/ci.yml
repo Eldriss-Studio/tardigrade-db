@@ -81,6 +81,37 @@ jobs:
   doc:
     name: Documentation
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      RUSTDOCFLAGS: -Dwarnings
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build docs
+        run: cargo doc --workspace --no-deps --document-private-items
+      - name: Add redirect to tdb_engine
+        run: echo '<meta http-equiv="refresh" content="0; url=tdb_engine/index.html">' > target/doc/index.html
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+        continue-on-error: true
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+  doc-check:
+    name: Doc Check (PR)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     env:
       RUSTDOCFLAGS: -Dwarnings
     steps:

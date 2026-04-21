@@ -1,5 +1,7 @@
 # TardigradeDB
 
+[![CI](https://github.com/Eldriss-Studio/tardigrade-db/actions/workflows/ci.yml/badge.svg)](https://github.com/Eldriss-Studio/tardigrade-db/actions/workflows/ci.yml)
+
 **An LLM-native database kernel — persistent memory for autonomous AI agents.**
 
 TardigradeDB is not a traditional database with tables and indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
@@ -54,24 +56,85 @@ Four-layer system treating memory as a managed OS resource:
 
 ## Requirements
 
-- **Rust** ≥ 1.95 (edition 2024)
+- **Rust** ≥ 1.85 (edition 2024) — pinned via `rust-toolchain.toml`
+- **[just](https://github.com/casey/just)** — task runner (`cargo install just`)
+- **[lefthook](https://github.com/evilmartians/lefthook)** — git hooks (`brew install lefthook`)
 - **CUDA toolkit** (optional, for GPU DMA paths)
+- **Nightly toolchain** (optional, for fuzzing: `rustup toolchain install nightly`)
 
-## Building
-
-```bash
-cargo build
-```
-
-Run tests:
+## Getting Started
 
 ```bash
-cargo test --workspace
+# Clone and set up git hooks
+git clone https://github.com/Eldriss-Studio/tardigrade-db.git
+cd tardigrade-db
+lefthook install
+
+# Build and test
+just build
+just test
 ```
+
+## Development
+
+Run `just` to see all available recipes:
+
+```
+Quality:     fmt, fmt-fix, lint, deny, typos
+Testing:     test, test-ci, test-crate <name>
+Benchmarks:  bench, bench-crate <name>
+Coverage:    coverage, coverage-lcov
+Build:       build, release, doc
+Fuzz:        fuzz <target>
+CI-local:    ci
+```
+
+### Common workflows
+
+```bash
+just ci                  # Run full CI locally (fmt + lint + typos + test + deny)
+just bench               # Run criterion benchmarks with native CPU opts
+just coverage            # Generate HTML coverage report
+just fuzz fuzz_q4_round_trip  # Fuzz Q4 quantization (requires nightly)
+```
+
+### Pre-commit hooks
+
+Lefthook runs automatically on commit (fmt + clippy + typos) and push (tests). Install with `lefthook install`.
+
+### API Documentation
+
+Rustdoc is built on every push to `main` and deployed to GitHub Pages when available:
+
+**[eldriss-studio.github.io/tardigrade-db](https://eldriss-studio.github.io/tardigrade-db)**
+
+To build locally: `just doc` (output in `target/doc/`).
+
+### CI
+
+Five jobs run on every push and PR:
+
+| Job | What it checks |
+|-----|---------------|
+| **Check & Lint** | `cargo fmt`, `clippy --pedantic`, `typos`, `cargo-deny` |
+| **Test** | `cargo nextest` on Ubuntu + macOS |
+| **Coverage** | `cargo-llvm-cov` with Codecov upload |
+| **MSRV** | Verifies build on Rust 1.85 |
+| **Documentation** | Rustdoc build with `-D warnings` (deploys to Pages on main, lint-only on PRs) |
 
 ## Project Status
 
-**Early development.** The crate structure and core type definitions are in place. See `docs/technical/tdd.md` for the full technical design document and `docs/technical/spec.md` for the condensed specification.
+**Active development.** The core architecture is implemented across all four layers. Current focus is hardening the storage layer for production use.
+
+| Phase | Status |
+|-------|--------|
+| Phase 0 — Scaffold | Complete |
+| Phase 1 — Storage (block pool, quantization, segments) | Complete |
+| Phase 2 — Retrieval (SLB, SIMD dot-product, INT8 quantization) | Complete |
+| Phase 3 — Organization (Vamana index, Trace graph, WAL) | Complete |
+| Phase 4 — Storage hardening & integration | Next |
+
+See `docs/technical/tdd.md` for the full technical design document and `docs/technical/spec.md` for the condensed specification.
 
 ## Reliability & Consistency Contracts
 
