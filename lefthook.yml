@@ -7,8 +7,11 @@ pre-commit:
       run: cargo clippy --workspace --all-targets -- -D warnings
     typos:
       run: typos
+      skip:
+        - merge
+        - rebase
 
 pre-push:
   commands:
-    test:
-      run: cargo nextest run --workspace
+    ci:
+      run: just ci

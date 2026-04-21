@@ -80,8 +80,16 @@ doc:
 fuzz target:
     cd crates/tdb-storage && cargo +nightly fuzz run {{target}} -- -max_total_time=300
 
+# === Setup ===
+
+# Install dev tools and git hooks
+setup:
+    cargo install cargo-nextest cargo-deny cargo-llvm-cov typos-cli
+    lefthook install
+    @echo "Dev environment ready. Pre-commit and pre-push hooks installed."
+
 # === CI-local ===
 
-# Run the full CI check locally
+# Run the full CI check locally (same checks as GitHub CI)
 ci: fmt lint typos test deny
     @echo "All CI checks passed."

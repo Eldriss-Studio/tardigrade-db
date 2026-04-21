@@ -1,7 +1,7 @@
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-unsound = "deny"
+# All advisory types (vulnerability, unsound, notice) emit errors by default in v2.
+# unmaintained: which crates to check — "workspace" skips transitive-only deps.
+unmaintained = "workspace"
 yanked = "deny"
 
 [licenses]
