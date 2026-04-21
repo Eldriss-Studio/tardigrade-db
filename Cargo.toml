@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tdb-core",
+    "crates/tdb-storage",
+    "crates/tdb-retrieval",
+    "crates/tdb-index",
+    "crates/tdb-governance",
+    "crates/tdb-engine",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Internal crates
+tdb-core = { path = "crates/tdb-core" }
+tdb-storage = { path = "crates/tdb-storage" }
+tdb-retrieval = { path = "crates/tdb-retrieval" }
+tdb-index = { path = "crates/tdb-index" }
+tdb-governance = { path = "crates/tdb-governance" }
+
+# Shared external dependencies
+thiserror = "2"
+memmap2 = "0.9"
+crossbeam-epoch = "0.9"
+crossbeam-utils = "0.8"
+half = { version = "2", features = ["num-traits"] }
+bytemuck = { version = "1", features = ["derive"] }

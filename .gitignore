@@ -1,0 +1,18 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.swp
+*.swo
+.DS_Store
+
+# CUDA build artifacts
+cuda/build/
+*.ptx
+*.cubin
+
+# Python
+__pycache__/
+*.egg-info/
+dist/
+*.whl
+.venv/
