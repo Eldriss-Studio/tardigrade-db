@@ -104,7 +104,11 @@ Lefthook runs automatically on commit (fmt + clippy + typos) and push (full CI: 
 
 ### API Documentation
 
-Build locally with `just doc` — output is in `target/doc/`.
+Rustdoc is built and deployed to GitHub Pages on every push to `main`:
+
+**[eldriss-studio.github.io/tardigrade-db](https://eldriss-studio.github.io/tardigrade-db)**
+
+To build locally: `just doc` (output in `target/doc/`).
 
 ### CI
 
@@ -116,7 +120,7 @@ Five jobs run on every push and PR:
 | **Test** | `cargo nextest` on Ubuntu + macOS |
 | **Coverage** | `cargo-llvm-cov` with Codecov upload |
 | **MSRV** | Verifies build on Rust 1.85 |
-| **Documentation** | Rustdoc build with `-D warnings` (catches broken links and missing docs) |
+| **Documentation** | Rustdoc build with `-D warnings`, deployed to GitHub Pages on main |
 
 ## Project Status
 
