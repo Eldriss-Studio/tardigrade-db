@@ -100,15 +100,11 @@ just fuzz fuzz_q4_round_trip  # Fuzz Q4 quantization (requires nightly)
 
 ### Pre-commit hooks
 
-Lefthook runs automatically on commit (fmt + clippy + typos) and push (tests). Install with `lefthook install`.
+Lefthook runs automatically on commit (fmt + clippy + typos) and push (full CI: fmt + lint + typos + test + deny). Install with `lefthook install` or `just setup`.
 
 ### API Documentation
 
-Rustdoc is built on every push to `main` and deployed to GitHub Pages when available:
-
-**[eldriss-studio.github.io/tardigrade-db](https://eldriss-studio.github.io/tardigrade-db)**
-
-To build locally: `just doc` (output in `target/doc/`).
+Build locally with `just doc` — output is in `target/doc/`.
 
 ### CI
 
@@ -120,7 +116,7 @@ Five jobs run on every push and PR:
 | **Test** | `cargo nextest` on Ubuntu + macOS |
 | **Coverage** | `cargo-llvm-cov` with Codecov upload |
 | **MSRV** | Verifies build on Rust 1.85 |
-| **Documentation** | Rustdoc build with `-D warnings` (deploys to Pages on main, lint-only on PRs) |
+| **Documentation** | Rustdoc build with `-D warnings` (catches broken links and missing docs) |
 
 ## Project Status
 
