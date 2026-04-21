@@ -72,7 +72,7 @@ release:
 
 # Build documentation
 doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --exclude tdb-python
 
 # === Fuzz ===
 

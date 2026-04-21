@@ -1,4 +1,4 @@
-//! Python bindings for `TardigradeDB` via PyO3.
+//! Python bindings for `TardigradeDB` via `PyO3`.
 //!
 //! Exposes the `Engine` as a Python class with `mem_write` / `mem_read` methods.
 //! Key/value vectors are exchanged as numpy arrays for zero-copy where possible.
@@ -97,7 +97,7 @@ impl Engine {
     /// Read the top-k most relevant cells for a query key.
     ///
     /// Args:
-    ///     query_key: Query vector (numpy float32 array).
+    ///     `query_key`: Query vector (numpy float32 array).
     ///     k: Number of results to return.
     ///     owner: Optional owner filter.
     ///

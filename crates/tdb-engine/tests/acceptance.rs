@@ -46,7 +46,7 @@ fn test_engine_mem_read_topk() {
     assert!(ids.contains(&10), "Cell #10 not in top-5. Got: {ids:?}");
 }
 
-/// ATDD Test 3: Owner filtering in mem_read.
+/// ATDD Test 3: Owner filtering in `mem_read`.
 #[test]
 fn test_engine_owner_filter() {
     let dir = tempfile::tempdir().unwrap();
@@ -54,11 +54,11 @@ fn test_engine_owner_filter() {
 
     // Owner 1 cells.
     for i in 0..10u64 {
-        engine.mem_write(1, 0, &vec![i as f32; 16], vec![0.0; 16], 50.0).unwrap();
+        engine.mem_write(1, 0, &[i as f32; 16], vec![0.0; 16], 50.0).unwrap();
     }
     // Owner 2 cells.
     for i in 10..20u64 {
-        engine.mem_write(2, 0, &vec![i as f32; 16], vec![0.0; 16], 50.0).unwrap();
+        engine.mem_write(2, 0, &[i as f32; 16], vec![0.0; 16], 50.0).unwrap();
     }
 
     let query = vec![5.0f32; 16];
