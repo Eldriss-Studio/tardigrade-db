@@ -160,11 +160,13 @@ fn test_rebuild_governance_on_reopen() {
     // Tier should be Core (persisted as tier byte in segment).
     assert_eq!(engine.cell_tier(cell_id), Some(Tier::Core), "Tier should be Core after reopen");
 
-    // Importance should be approximately what was stored.
-    // Note: the persisted value is the *initial* importance (90.0), not the boosted value (95).
-    // The engine reconstructs from cell.meta.importance which was set at write time.
+    // Importance should match the persisted value: 90 (salience) + 5 (write boost) = 95.
+    // Governance is computed before persistence, so the on-disk value includes the boost.
     let importance = engine.cell_importance(cell_id).unwrap();
-    assert!(importance > 80.0, "Importance {importance:.1} should be >80 after reopen");
+    assert!(
+        (importance - 95.0).abs() < 1.0,
+        "Importance {importance:.1} should be ≈95.0 after reopen"
+    );
 }
 
 /// ATDD Test 8: Write cells 0..5, drop, reopen, write one more.
