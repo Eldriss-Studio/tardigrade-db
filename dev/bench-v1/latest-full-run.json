@@ -1,0 +1,7 @@
+{
+  "run_validity": {
+    "state": "invalid",
+    "reason": "no_full_benchmark_published_yet"
+  },
+  "status_summary": {}
+}
