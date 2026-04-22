@@ -1,281 +1,306 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1, user-scalable=yes" />
-    <style>
-      html {
-        font-family: BlinkMacSystemFont,-apple-system,"Segoe UI",Roboto,Oxygen,Ubuntu,Cantarell,"Fira Sans","Droid Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
-        -webkit-font-smoothing: antialiased;
-        background-color: #fff;
-        font-size: 16px;
-      }
-      body {
-        color: #4a4a4a;
-        margin: 8px;
-        font-size: 1em;
-        font-weight: 400;
-      }
-      header {
-        margin-bottom: 8px;
-        display: flex;
-        flex-direction: column;
-      }
-      main {
-        width: 100%;
-        display: flex;
-        flex-direction: column;
-      }
-      a {
-        color: #3273dc;
-        cursor: pointer;
-        text-decoration: none;
-      }
-      a:hover {
-        color: #000;
-      }
-      button {
-        color: #fff;
-        background-color: #3298dc;
-        border-color: transparent;
-        cursor: pointer;
-        text-align: center;
-      }
-      button:hover {
-        background-color: #2793da;
-        flex: none;
-      }
-      .spacer {
-        flex: auto;
-      }
-      .small {
-        font-size: 0.75rem;
-      }
-      footer {
-        margin-top: 16px;
-        display: flex;
-        align-items: center;
-      }
-      .header-label {
-        margin-right: 4px;
-      }
-      .benchmark-set {
-        margin: 8px 0;
-        width: 100%;
-        display: flex;
-        flex-direction: column;
-      }
-      .benchmark-title {
-        font-size: 3rem;
-        font-weight: 600;
-        word-break: break-word;
-        text-align: center;
-      }
-      .benchmark-graphs {
-        display: flex;
-        flex-direction: row;
-        justify-content: space-around;
-        align-items: center;
-        flex-wrap: wrap;
-        width: 100%;
-      }
-      .benchmark-chart {
-        max-width: 1000px;
-      }
-    </style>
-    <title>Benchmarks</title>
-  </head>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TardigradeDB — Performance Dashboard</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --orange: #d29922;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .container { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+    h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
+    .subtitle { color: var(--text-muted); margin-bottom: 2rem; font-size: 0.95rem; }
+    .subtitle a { color: var(--accent); text-decoration: none; }
+    .subtitle a:hover { text-decoration: underline; }
 
-  <body>
-    <header id="header">
-      <div class="header-item">
-        <strong class="header-label">Last Update:</strong>
-        <span id="last-update"></span>
+    .section { margin-bottom: 2.5rem; }
+    .section-title {
+      font-size: 1.15rem;
+      color: var(--accent);
+      margin-bottom: 0.8rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .bench-group {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.2rem;
+      margin-bottom: 0.8rem;
+    }
+    .bench-name {
+      font-weight: 600;
+      font-size: 0.95rem;
+      margin-bottom: 0.3rem;
+    }
+    .bench-desc {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+    .bench-params {
+      display: inline-block;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.1rem 0.4rem;
+      font-family: monospace;
+      font-size: 0.8rem;
+      color: var(--green);
+      margin-top: 0.3rem;
+    }
+
+    .charts-link {
+      display: inline-block;
+      background: var(--accent);
+      color: var(--bg);
+      padding: 0.6rem 1.2rem;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.95rem;
+      margin-top: 1rem;
+    }
+    .charts-link:hover { opacity: 0.9; }
+
+    iframe {
+      width: 100%;
+      height: 600px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-top: 1rem;
+      background: #fff;
+    }
+
+    .legend {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .legend-item::before {
+      content: '';
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      margin-right: 0.4rem;
+      vertical-align: middle;
+    }
+    .legend-item.storage::before { background: #f97583; }
+    .legend-item.retrieval::before { background: #79c0ff; }
+    .legend-item.index::before { background: #d2a8ff; }
+    .legend-item.engine::before { background: #56d364; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>TardigradeDB — Performance Dashboard</h1>
+    <p class="subtitle">
+      Criterion benchmarks tracked over time.
+      <a href="data/index.html">Interactive charts →</a> ·
+      <a href="../tdb_engine/index.html">API docs</a> ·
+      <a href="https://github.com/Eldriss-Studio/tardigrade-db">Source</a>
+    </p>
+
+    <div class="legend">
+      <span class="legend-item storage">Storage layer</span>
+      <span class="legend-item retrieval">Retrieval layer</span>
+      <span class="legend-item index">Organization layer</span>
+      <span class="legend-item engine">Engine (full pipeline)</span>
+    </div>
+
+    <!-- Storage Layer -->
+    <div class="section">
+      <div class="section-title">Storage Layer — How fast can we persist and read KV tensors?</div>
+
+      <div class="bench-group">
+        <div class="bench-name">Q4 quantize — compress f32 → 4-bit (GGML Q4_0)</div>
+        <div class="bench-desc">
+          Measures how fast we compress a raw f32 activation vector into 4-bit quantized form for storage.
+          This runs on every <code>mem_write</code> — it's the cost of shrinking a KV tensor to ~4x smaller before hitting disk.
+          Lower is better. Scales linearly with vector dimension.
+        </div>
+        <div class="bench-params">Varies: 64, 128, 256, 512, 1024 floats</div>
       </div>
-      <div class="header-item">
-        <strong class="header-label">Repository:</strong>
-        <a id="repository-link" rel="noopener"></a>
+
+      <div class="bench-group">
+        <div class="bench-name">Q4 dequantize — decompress 4-bit → f32</div>
+        <div class="bench-desc">
+          The reverse of quantization: expand a stored 4-bit tensor back to full f32.
+          This runs on every <code>mem_read</code> when a cell is loaded from disk. If this is slow,
+          cold-path reads bottleneck here rather than in retrieval.
+        </div>
+        <div class="bench-params">Varies: 64, 128, 256, 512, 1024 floats</div>
       </div>
-    </header>
-    <main id="main"></main>
-    <footer>
-      <button id="dl-button">Download data as JSON</button>
-      <div class="spacer"></div>
-      <div class="small">Powered by <a rel="noopener" href="https://github.com/marketplace/actions/continuous-benchmark">github-action-benchmark</a></div>
-    </footer>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.2/dist/Chart.min.js"></script>
-    <script src="data.js"></script>
-    <script id="main-script">
-      'use strict';
-      (function() {
-        // Colors from https://github.com/github/linguist/blob/master/lib/linguist/languages.yml
-        const toolColors = {
-          cargo: '#dea584',
-          go: '#00add8',
-          benchmarkjs: '#f1e05a',
-          benchmarkluau: '#000080',
-          pytest: '#3572a5',
-          googlecpp: '#f34b7d',
-          catch2: '#f34b7d',
-          julia: '#a270ba',
-          jmh: '#b07219',
-          benchmarkdotnet: '#178600',
-          customBiggerIsBetter: '#38ff38',
-          customSmallerIsBetter: '#ff3838',
-          _: '#333333'
-        };
+      <div class="bench-group">
+        <div class="bench-name">Q4 round-trip — quantize + dequantize end-to-end</div>
+        <div class="bench-desc">
+          Full compression cycle: f32 → Q4 → f32. This is the total codec overhead per vector.
+          Useful for understanding the combined cost that every write-then-read path pays.
+        </div>
+        <div class="bench-params">Varies: 128, 256, 512 floats</div>
+      </div>
 
-        function init() {
-          function collectBenchesPerTestCase(entries) {
-            const map = new Map();
-            for (const entry of entries) {
-              const {commit, date, tool, benches} = entry;
-              for (const bench of benches) {
-                const result = { commit, date, tool, bench };
-                const arr = map.get(bench.name);
-                if (arr === undefined) {
-                  map.set(bench.name, [result]);
-                } else {
-                  arr.push(result);
-                }
-              }
-            }
-            return map;
-          }
+      <div class="bench-group">
+        <div class="bench-name">Block pool append — Q4-compress and fsync one cell to segment</div>
+        <div class="bench-desc">
+          The full storage write path: serialize a <code>MemoryCell</code>, Q4-compress both key and value vectors,
+          append the binary record to the active segment file, and <code>fsync</code> to guarantee durability.
+          Dominated by the fsync syscall — this is why batch writes exist (one fsync for N cells).
+        </div>
+        <div class="bench-params">dim=128, single cell per iteration</div>
+      </div>
 
-          const data = window.BENCHMARK_DATA;
+      <div class="bench-group">
+        <div class="bench-name">Block pool random read — dequantize one cell from 10K on disk</div>
+        <div class="bench-desc">
+          Read a single cell by ID from a pool of 10,000 stored cells. Involves seeking to the cell's
+          offset in the segment file and Q4-dequantizing its vectors. This is the cold-path read cost —
+          the price of going to disk when the SLB cache misses.
+        </div>
+        <div class="bench-params">dim=128, 10K cells pre-loaded, pseudo-random access pattern</div>
+      </div>
+    </div>
 
-          // Render header
-          document.getElementById('last-update').textContent = new Date(data.lastUpdate).toString();
-          const repoLink = document.getElementById('repository-link');
-          repoLink.href = data.repoUrl;
-          repoLink.textContent = data.repoUrl;
+    <!-- Retrieval Layer -->
+    <div class="section">
+      <div class="section-title">Retrieval Layer — How fast can we find relevant memories?</div>
 
-          // Render footer
-          document.getElementById('dl-button').onclick = () => {
-            const dataUrl = 'data:,' + JSON.stringify(data, null, 2);
-            const a = document.createElement('a');
-            a.href = dataUrl;
-            a.download = 'benchmark_data.json';
-            a.click();
-          };
+      <div class="bench-group">
+        <div class="bench-name">FP32 dot product — baseline attention score</div>
+        <div class="bench-desc">
+          Raw floating-point dot product between two vectors. This is the ground-truth speed for computing
+          one attention score (<code>q · k / √d_k</code>) — the fundamental operation behind memory retrieval.
+          This is the baseline that INT8 quantization aims to beat.
+        </div>
+        <div class="bench-params">Varies: dim 64, 128, 256, 512</div>
+      </div>
 
-          // Prepare data points for charts
-          return Object.keys(data.entries).map(name => ({
-            name,
-            dataSet: collectBenchesPerTestCase(data.entries[name]),
-          }));
-        }
+      <div class="bench-group">
+        <div class="bench-name">INT8 dot product — NEON-accelerated attention score</div>
+        <div class="bench-desc">
+          Same dot product but using INT8 scalar quantization with ARM NEON SIMD instructions.
+          The speedup over FP32 (typically 5–9x) is the payoff for quantizing keys in the SLB cache.
+          This is the inner loop of every hot-path retrieval — thousands of these per query.
+        </div>
+        <div class="bench-params">Varies: dim 64, 128, 256, 512</div>
+      </div>
 
-        function renderAllChars(dataSets) {
+      <div class="bench-group">
+        <div class="bench-name">SLB query — hot-path INT8 cache lookup (top-5)</div>
+        <div class="bench-desc">
+          End-to-end Semantic Lookaside Buffer query: scan all cached entries using INT8 dot products,
+          rank by attention score, return the top 5 most relevant cells. This is the <em>fastest possible
+          retrieval path</em> — recently accessed cells are served entirely from this LRU cache without
+          touching disk or the graph index.
+        </div>
+        <div class="bench-params">Varies: 256, 1024, 4096 entries · dim=128</div>
+      </div>
+    </div>
 
-          function renderGraph(parent, name, dataset) {
-            const canvas = document.createElement('canvas');
-            canvas.className = 'benchmark-chart';
-            parent.appendChild(canvas);
+    <!-- Organization Layer -->
+    <div class="section">
+      <div class="section-title">Organization Layer — How fast can we index and recover?</div>
 
-            const color = toolColors[dataset.length > 0 ? dataset[0].tool : '_'];
-            const data = {
-              labels: dataset.map(d => d.commit.id.slice(0, 7)),
-              datasets: [
-                {
-                  label: name,
-                  data: dataset.map(d => d.bench.value),
-                  borderColor: color,
-                  backgroundColor: color + '60', // Add alpha for #rrggbbaa
-                }
-              ],
-            };
-            const options = {
-              scales: {
-                xAxes: [
-                  {
-                    scaleLabel: {
-                      display: true,
-                      labelString: 'commit',
-                    },
-                  }
-                ],
-                yAxes: [
-                  {
-                    scaleLabel: {
-                      display: true,
-                      labelString: dataset.length > 0 ? dataset[0].bench.unit : '',
-                    },
-                    ticks: {
-                      beginAtZero: true,
-                    }
-                  }
-                ],
-              },
-              tooltips: {
-                callbacks: {
-                  afterTitle: items => {
-                    const {index} = items[0];
-                    const data = dataset[index];
-                    return '\n' + data.commit.message + '\n\n' + data.commit.timestamp + ' committed by @' + data.commit.committer.username + '\n';
-                  },
-                  label: item => {
-                    let label = item.value;
-                    const { range, unit } = dataset[item.index].bench;
-                    label += ' ' + unit;
-                    if (range) {
-                      label += ' (' + range + ')';
-                    }
-                    return label;
-                  },
-                  afterLabel: item => {
-                    const { extra } = dataset[item.index].bench;
-                    return extra ? '\n' + extra : '';
-                  }
-                }
-              },
-              onClick: (_mouseEvent, activeElems) => {
-                if (activeElems.length === 0) {
-                  return;
-                }
-                // XXX: Undocumented. How can we know the index?
-                const index = activeElems[0]._index;
-                const url = dataset[index].commit.url;
-                window.open(url, '_blank');
-              },
-            };
+      <div class="bench-group">
+        <div class="bench-name">Vamana index build — DiskANN-style graph construction</div>
+        <div class="bench-desc">
+          Build the approximate nearest neighbor graph from scratch. This is an offline operation
+          that runs when the cell count crosses a threshold (~10K). The graph enables sub-linear
+          query time — without it, every query scans all cells. Build cost is O(n²) for medoid
+          selection plus O(n × beam_width) for edge wiring.
+        </div>
+        <div class="bench-params">Varies: 100, 500, 1000 nodes · dim=32 · max_degree=16</div>
+      </div>
 
-            new Chart(canvas, {
-              type: 'line',
-              data,
-              options,
-            });
-          }
+      <div class="bench-group">
+        <div class="bench-name">Vamana query — greedy beam search over 1K-node graph</div>
+        <div class="bench-desc">
+          A single approximate nearest neighbor query: start at the medoid, greedily expand
+          the best candidates through graph edges, return the top 10 results. This is the
+          cold-path retrieval for agents with large memory pools where brute-force scanning
+          is too slow.
+        </div>
+        <div class="bench-params">1K nodes · dim=32 · top-10</div>
+      </div>
 
-          function renderBenchSet(name, benchSet, main) {
-            const setElem = document.createElement('div');
-            setElem.className = 'benchmark-set';
-            main.appendChild(setElem);
+      <div class="bench-group">
+        <div class="bench-name">WAL append — fsync'd causal edge writes</div>
+        <div class="bench-desc">
+          Write one causal relationship ("cell A caused cell B") to the write-ahead log with
+          <code>fsync</code> durability. Every <code>mem_write</code> with a <code>parent_cell_id</code> pays this cost.
+          The WAL ensures the causal graph survives crashes — if the engine dies mid-write,
+          the edge is recovered on restart.
+        </div>
+        <div class="bench-params">Varies: 100, 1000 edges per batch</div>
+      </div>
 
-            const nameElem = document.createElement('h1');
-            nameElem.className = 'benchmark-title';
-            nameElem.textContent = name;
-            setElem.appendChild(nameElem);
+      <div class="bench-group">
+        <div class="bench-name">WAL replay — crash recovery: read 1K edges from disk</div>
+        <div class="bench-desc">
+          On engine startup, the WAL is replayed to reconstruct the causal graph. This measures
+          how long it takes to read 1,000 edge records from the log and rebuild the in-memory
+          <code>TraceGraph</code>. Faster replay = faster crash recovery = less downtime.
+        </div>
+        <div class="bench-params">1K edges</div>
+      </div>
+    </div>
 
-            const graphsElem = document.createElement('div');
-            graphsElem.className = 'benchmark-graphs';
-            setElem.appendChild(graphsElem);
+    <!-- Engine Layer -->
+    <div class="section">
+      <div class="section-title">Engine — End-to-end: what does a real operation cost?</div>
 
-            for (const [benchName, benches] of benchSet.entries()) {
-              renderGraph(graphsElem, benchName, benches)
-            }
-          }
+      <div class="bench-group">
+        <div class="bench-name">Engine mem_write — single cell persist with fsync</div>
+        <div class="bench-desc">
+          The full write pipeline that an inference hook calls: assign a cell ID → build the
+          <code>MemoryCell</code> → Q4-compress key and value → append to segment with fsync → insert into
+          the retriever index → update governance scores. This is the end-to-end cost of
+          "remember this KV pair." Dominated by fsync — batch writes amortize it.
+        </div>
+        <div class="bench-params">dim=64 · single cell</div>
+      </div>
 
-          const main = document.getElementById('main');
-          for (const {name, dataSet} of dataSets) {
-            renderBenchSet(name, dataSet, main);
-          }
-        }
+      <div class="bench-group">
+        <div class="bench-name">Engine mem_read — full pipeline: SLB → retriever → governance</div>
+        <div class="bench-desc">
+          The full read pipeline that an inference hook calls: check the SLB cache → fall back to
+          brute-force retriever → apply recency decay → boost governance scores → return the top 5
+          most relevant cells. This is the end-to-end cost of "what do I remember about this query?"
+          — the number that determines whether memory retrieval fits within an inference budget.
+        </div>
+        <div class="bench-params">1K cells · dim=64 · top-5</div>
+      </div>
+    </div>
 
-        renderAllChars(init()); // Start
-      })();
-    </script>
-  </body>
+    <!-- Embedded charts -->
+    <div class="section">
+      <div class="section-title">Historical Trends</div>
+      <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.5rem;">
+        Each data point is one push to <code>main</code>. Hover for exact values. A spike means a regression.
+      </p>
+      <iframe src="data/index.html" title="Benchmark trend charts"></iframe>
+    </div>
+  </div>
+</body>
 </html>
