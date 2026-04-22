@@ -292,20 +292,6 @@ impl Engine {
 
         let mut results = Vec::with_capacity(k);
         for rr in candidates {
-            // Owner filter (needed for Vamana results which don't filter internally).
-            if let Some(filter_owner) = owner_filter {
-                if let Some(gov) = self.governance.get(&rr.cell_id) {
-                    let _ = gov; // governance exists
-                }
-                // Read cell to check owner.
-                match self.pool.get(rr.cell_id) {
-                    Ok(ref cell) if cell.owner != filter_owner => continue,
-                    Err(TardigradeError::CellNotFound(_)) => continue,
-                    Err(e) => return Err(e),
-                    _ => {}
-                }
-            }
-
             let decay_factor = self
                 .governance
                 .get(&rr.cell_id)
@@ -316,8 +302,16 @@ impl Engine {
             let tier =
                 self.governance.get(&rr.cell_id).map_or(Tier::Draft, |g| g.tier_sm.current());
 
+            // Single pool.get() — also handles owner filtering to avoid a double read.
             match self.pool.get(rr.cell_id) {
                 Ok(cell) => {
+                    // Owner filter (needed for Vamana results which don't filter internally).
+                    if let Some(filter_owner) = owner_filter {
+                        if cell.owner != filter_owner {
+                            continue;
+                        }
+                    }
+
                     if let Some(gov) = self.governance.get_mut(&rr.cell_id) {
                         gov.scorer.on_access();
                         gov.tier_sm.evaluate(gov.scorer.importance());
