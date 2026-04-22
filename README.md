@@ -12,12 +12,22 @@ TardigradeDB is not a traditional database with tables and indexes, nor a vector
 
 Current agent memory systems (Mem0, Letta, Zep) rely on text retrieval — tokenize, embed, search, detokenize. This creates a lossy round-trip through representations the model never asked for. TardigradeDB eliminates that entirely by persisting the model's own internal state and restoring it directly into the attention stack.
 
-**Key results:**
+**Measured performance** (Apple M-series, release mode, criterion):
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| INT8 dot product (NEON) | **5.3ns** | dim=128, 8.5x faster than FP32 |
+| Q4 quantize + dequantize | **292ns** | dim=128, full round-trip |
+| Engine `mem_read` | **119μs** | 1K cells, dim=64, full pipeline |
+| SLB query (256 entries) | **3.8μs** | INT8, dim=128 |
+| Block pool random read | **20μs** | from 10K cells on disk |
+| Engine `mem_write` | **8.2ms** | single cell with fsync |
+| Batch write (amortized) | **~80μs/cell** | 100-cell batch, single fsync |
+
+**Architectural targets** (from spec, not yet all measured):
 - **91–135x** prefill reduction via latent-space retrieval (MemArt)
-- **Sub-5μs** cache-hit retrieval via the Semantic Lookaside Buffer (SLB)
-- **Up to 4.7x** TTFT reduction through cross-agent KV cache reuse (RelayCaching)
 - **4x** more agent contexts in fixed device memory via Q4 quantization
-- **750ns** P99 read latency under 16-thread contention
+- **Up to 4.7x** TTFT reduction through cross-agent KV cache reuse (RelayCaching)
 
 ## Architecture (Aeon)
 
