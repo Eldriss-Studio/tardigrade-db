@@ -1,63 +1,132 @@
-//! Top-level engine — the unified entry point for `TardigradeDB`.
+//! The brain of `TardigradeDB` — a unified facade that turns five independent
+//! subsystems into a single, coherent memory for autonomous AI agents.
 //!
-//! `tdb-engine` exposes a single [`Engine`] struct that coordinates the four
-//! architectural layers behind two operations: `MEM.WRITE` and `MEM.READ`.
-//! Everything else — quantization, indexing, importance scoring, tier transitions —
-//! happens automatically as a side effect of those two calls.
+//! # Why does this crate exist?
 //!
-//! # System Overview
+//! An LLM agent that can reason over its own history needs four things to happen
+//! on every interaction: **persist** the current KV cache, **retrieve** relevant
+//! past context, **organize** causal relationships between memories, and **govern**
+//! which memories survive over time. Each of these is handled by a separate crate
+//! in `TardigradeDB` — but no agent should need to coordinate them manually.
 //!
-//! ```text
-//!                       ┌──────────────────────────┐
-//!    inference pass ──► │   Engine (Facade)        │ ◄── query key
-//!                       │                          │
-//!                       │  mem_write(owner, layer, │
-//!                       │    key, value, salience) │
-//!                       │  mem_read(query, k,      │
-//!                       │    owner_filter)         │
-//!                       └──────────┬───────────────┘
-//!                                  │ coordinates
-//!                    ┌─────────────┼──────────────────┐
-//!                    ▼             ▼                  ▼
-//!              BlockPool    BruteForceRetriever   ImportanceScorer
-//!              (tdb-storage) (tdb-retrieval)    + TierStateMachine
-//!                                               (tdb-governance)
-//! ```
+//! `tdb-engine` is the **Facade** that hides that complexity. It exposes two
+//! primary operations — [`mem_write`] and [`mem_read`] — and everything else
+//! (quantization, indexing, importance scoring, tier promotion, WAL logging,
+//! causal edge tracking) happens as automatic side effects.
 //!
-//! # Write Path — `mem_write`
+//! # What happens when you write
+//!
+//! A single call to [`mem_write`] triggers a cascade across all four layers:
 //!
 //! ```text
-//! mem_write(owner, layer, key, value, salience)
-//!   1. Assign a monotone CellId
-//!   2. Build a MemoryCell with current timestamp
-//!   3. BlockPool::append  → Q4-compress and fsync to segment file
-//!   4. BruteForceRetriever::insert  → index key for latent-space queries
-//!   5. ImportanceScorer::new(salience) + on_update (+5)
-//!   6. TierStateMachine::evaluate  → may immediately promote to Validated/Core
+//! mem_write(owner, layer, key, value, salience, parent)
+//!   │
+//!   ├─ Governance:  ImportanceScorer::new(salience) + on_update(+5)
+//!   │               TierStateMachine::evaluate → Draft / Validated / Core
+//!   │
+//!   ├─ Storage:     BlockPool::append → Q4-compress key+value, fsync to segment
+//!   │               (on-disk metadata includes importance + tier for crash recovery)
+//!   │
+//!   ├─ Retrieval:   BruteForceRetriever::insert → index key for latent-space queries
+//!   │               SLB::insert → cache key in INT8 for sub-5μs hot-path lookups
+//!   │
+//!   ├─ Index:       if Vamana active → insert_online (graph ANN)
+//!   │               if cell_count ≥ threshold → lazy-activate Vamana
+//!   │
+//!   └─ Trace:       if parent_cell_id provided →
+//!                     WAL::append(AddEdge) → fsync (Observer pattern)
+//!                     TraceGraph::add_edge(child → parent, CausedBy)
 //! ```
 //!
-//! # Read Path — `mem_read`
+//! Governance is computed **before** persistence so the on-disk metadata matches
+//! the in-memory state — this is required for correct Memento-pattern recovery
+//! when the engine reopens.
+//!
+//! # What happens when you read
+//!
+//! A single call to [`mem_read`] runs a three-stage retrieval chain
+//! (**Chain of Responsibility** pattern), merging results across stages:
 //!
 //! ```text
 //! mem_read(query_key, k, owner_filter)
-//!   1. BruteForceRetriever::query(k*2)  → raw attention scores
-//!   2. recency_decay(days_since_update)  → down-weight stale cells
-//!   3. adjusted_score = raw_score × recency_factor
-//!   4. BlockPool::get  → dequantize cell from disk
-//!   5. ImportanceScorer::on_access (+3)  → boost accessed cells
-//!   6. TierStateMachine::evaluate  → potential promotion
-//!   7. Return top-k by adjusted score
+//!   │
+//!   ├─ Stage 1: SLB (hot path)
+//!   │  INT8 quantized keys, NEON SDOT / AVX2
+//!   │  Sub-5μs per query at 4096 entries
+//!   │  Exploits conversational locality — recent cells are cached
+//!   │
+//!   ├─ Stage 2: Vamana (warm path, if active)
+//!   │  DiskANN-style graph with robust pruning
+//!   │  Multi-seed greedy beam search
+//!   │  Activated when cell count crosses threshold
+//!   │
+//!   └─ Stage 3: BruteForce (cold path)
+//!      Exhaustive scaled dot-product: score = (q · k) / √d_k
+//!      Exact results, owner-filtered per-agent partitions
+//!
+//!   Then for each result:
+//!     → recency_decay(Δt) multiplier (21-day half-life)
+//!     → BlockPool::get → dequantize full cell from disk
+//!     → ImportanceScorer::on_access(+3) → potential tier promotion
+//!     → SLB::insert → cache for future hot-path hits
 //! ```
 //!
-//! # Current Limitations (Phase 1)
+//! Results are deduplicated by `CellId`, sorted by decay-adjusted score, and
+//! truncated to k.
 //!
-//! The engine is **partially ephemeral**: cells are durable on disk (via `BlockPool`),
-//! but the retrieval index and governance state are rebuilt in-memory from scratch
-//! on each `Engine::open`. A recovery pass that scans the `BlockPool` and rehydrates
-//! the `BruteForceRetriever` and `HashMap<CellId, CellGovernance>` is planned for
-//! Phase 2 (see the `TODO` in [`engine::Engine::open`]).
+//! # Crash recovery (Memento pattern)
 //!
-//! # Usage
+//! On [`Engine::open`], the engine rebuilds all in-memory derived state from
+//! durable sources:
+//!
+//! ```text
+//! Engine::open(dir)
+//!   ├─ BlockPool::open → scan segments, rebuild CellId → offset index
+//!   ├─ For each persisted cell:
+//!   │    BruteForceRetriever::insert(key)
+//!   │    ImportanceScorer::new(persisted_importance)
+//!   │    TierStateMachine::with_tier(persisted_tier)
+//!   ├─ WAL::replay → rebuild TraceGraph from logged edges
+//!   └─ next_id = max(persisted_ids) + 1
+//! ```
+//!
+//! This means the engine can crash at any point and recover all state that was
+//! durably committed (fsync'd). In-flight writes that didn't complete fsync
+//! are discarded — the partial record detection in segment scanning handles this.
+//!
+//! # Causal memory (Trace graph)
+//!
+//! When a cell is written with `parent_cell_id = Some(parent)`, the engine
+//! records a directed `CausedBy` edge in the Trace graph, durably logged via
+//! the WAL before being applied in memory. This enables causal chain queries:
+//!
+//! ```text
+//! trace_ancestors(cell_c) → [cell_b, cell_a]
+//! ```
+//!
+//! If cell C was caused by B, and B was caused by A, the engine traverses
+//! the causal graph transitively.
+//!
+//! # Synaptic bank (`LoRA` adapters)
+//!
+//! Beyond episodic KV memory, the engine also persists per-agent **`LoRA` adapters**
+//! via [`store_synapsis`] / [`load_synapsis`]. These encode stable preferences and
+//! patterns as low-rank weight deltas applied to the base model at runtime —
+//! the "slow memory" complement to the fast episodic KV cache.
+//!
+//! # Python bridge
+//!
+//! The `tdb-python` crate wraps this engine via `PyO3`. From Python:
+//!
+//! ```python
+//! import tardigrade_db as tdb
+//! engine = tdb.Engine("/tmp/tardigrade")
+//! cell_id = engine.mem_write(owner=42, layer=12, key=np_key, value=np_val, salience=80.0, parent_cell_id=None)
+//! results = engine.mem_read(query_key=np_query, k=5, owner=None)
+//! ancestors = engine.trace_ancestors(cell_id)
+//! ```
+//!
+//! # Usage (Rust)
 //!
 //! ```rust,no_run
 //! use tdb_engine::engine::Engine;
@@ -65,7 +134,7 @@
 //! let dir = std::path::Path::new("/tmp/tardigrade");
 //! let mut engine = Engine::open(dir).unwrap();
 //!
-//! // Capture a KV pair from layer 12.
+//! // Capture a KV pair from transformer layer 12.
 //! let cell_id = engine.mem_write(
 //!     /* owner */ 42,
 //!     /* layer */ 12,
@@ -75,15 +144,27 @@
 //!     /* parent */ None,
 //! ).unwrap();
 //!
-//! // Retrieve the most relevant cell for a query key.
+//! // Retrieve the most relevant cells for a query key.
 //! let results = engine.mem_read(&[0.1f32; 128], /* k */ 5, None).unwrap();
 //! if let Some(top) = results.first() {
-//!     println!("top cell: id={} score={:.3} tier={:?}", top.cell.id, top.score, top.tier);
+//!     println!("cell {} score={:.3} tier={:?}", top.cell.id, top.score, top.tier);
 //! }
+//!
+//! // Query causal ancestors.
+//! let ancestors = engine.trace_ancestors(cell_id);
+//!
+//! // Close and reopen — all state is recovered from disk.
+//! drop(engine);
+//! let engine2 = Engine::open(dir).unwrap();
+//! assert_eq!(engine2.cell_count(), 1);
 //! ```
 //!
 //! [`Engine`]: engine::Engine
-//! [`engine::Engine::open`]: engine::Engine::open
+//! [`Engine::open`]: engine::Engine::open
+//! [`mem_write`]: engine::Engine::mem_write
+//! [`mem_read`]: engine::Engine::mem_read
+//! [`store_synapsis`]: engine::Engine::store_synapsis
+//! [`load_synapsis`]: engine::Engine::load_synapsis
 
 #![deny(unsafe_code)]
 
