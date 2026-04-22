@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ADD_EDGE_RECORD_SIZE","ENTRY_TYPE_ADD_EDGE"],"enum":["WalEntry"],"struct":["Wal"]};

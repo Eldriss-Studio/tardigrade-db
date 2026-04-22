@@ -1,0 +1,61 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Adaptive Knowledge Lifecycle (AKL) — autonomous memory management for `TardigradeDB`."><title>tdb_governance - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="tdb_governance" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tdb_governance</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tdb_governance/index.html">tdb_<wbr>governance</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#importance-score-ι" title="Importance Score (ι)">Importance Score (ι)</a></li><li><a href="#tier-state-machine" title="Tier State Machine">Tier State Machine</a></li><li><a href="#recency-decay" title="Recency Decay">Recency Decay</a></li><li><a href="#usage" title="Usage">Usage</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>tdb_<wbr>governance</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tdb_governance/lib.rs.html#1-96">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Adaptive Knowledge Lifecycle (AKL) — autonomous memory management for <code>TardigradeDB</code>.</p>
+<p><code>tdb-governance</code> implements the self-curating layer of the Aeon architecture.
+It answers the question: <em>given unlimited memory cells accumulating over time,
+which ones should be kept, promoted, demoted, or evicted — and when?</em></p>
+<p>No application code manages cell lifecycle. The AKL does it automatically based
+on observed access patterns and elapsed time.</p>
+<h2 id="importance-score-ι"><a class="doc-anchor" href="#importance-score-ι">§</a>Importance Score (ι)</h2>
+<p>Every cell carries an importance score ι ∈ [0.0, 100.0] managed by <a href="scoring/struct.ImportanceScorer.html" title="struct tdb_governance::scoring::ImportanceScorer"><code>ImportanceScorer</code></a>.</p>
+<div class="example-wrap"><pre class="language-text"><code>Event        │ Effect on ι
+─────────────┼──────────────────────────────────
+Read access  │ +3.0  (capped at 100.0)
+Write/update │ +5.0  (capped at 100.0)
+Each day     │ × 0.995  (≈ 0.5% decay per day)</code></pre></div>
+<p>The daily decay factor of 0.995 produces a <strong>half-life of approximately 138 days</strong>
+for a cell that is never accessed (ln(0.5) / ln(0.995) ≈ 138). A cell accessed
+daily stabilizes around ι ≈ 60 (3 / (1 - 0.995)).</p>
+<h2 id="tier-state-machine"><a class="doc-anchor" href="#tier-state-machine">§</a>Tier State Machine</h2>
+<p><a href="tiers/struct.TierStateMachine.html" title="struct tdb_governance::tiers::TierStateMachine"><code>TierStateMachine</code></a> maps ι to one of three maturity tiers, using <strong>hysteresis
+gaps</strong> to prevent oscillation when scores hover near a boundary:</p>
+<div class="example-wrap"><pre class="language-text"><code>┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│  DRAFT ──────(ι ≥ 65)──────► VALIDATED ──────(ι ≥ 85)──────► CORE
+│         ◄────(ι &lt; 35)────                ◄────(ι &lt; 60)────      │
+│                                                                 │
+│  Hysteresis gaps:  Draft↔Validated = 30 pts                    │
+│                    Validated↔Core  = 25 pts                    │
+└─────────────────────────────────────────────────────────────────┘</code></pre></div>
+<p>Skipping tiers is supported: a new cell with ι = 90 will transition
+<code>Draft → Validated → Core</code> in a single <a href="tiers/struct.TierStateMachine.html#method.evaluate" title="method tdb_governance::tiers::TierStateMachine::evaluate"><code>TierStateMachine::evaluate</code></a> call.</p>
+<h2 id="recency-decay"><a class="doc-anchor" href="#recency-decay">§</a>Recency Decay</h2>
+<p><a href="decay/fn.recency_decay.html" title="fn tdb_governance::decay::recency_decay"><code>recency_decay</code></a> computes an exponential multiplier applied during retrieval
+to down-weight cells that haven’t been touched recently:</p>
+<div class="example-wrap"><pre class="language-text"><code>r = exp(-Δt / τ),  τ = 30 days  (half-life ≈ 20.8 days)
+
+Δt = 0 days  →  r = 1.00  (fresh)
+Δt ≈ 21 days →  r ≈ 0.50  (half-weight)
+Δt = 30 days →  r ≈ 0.37  (one time-constant)
+Δt = 90 days →  r ≈ 0.05  (near-zero)</code></pre></div>
+<p>This is applied as a <strong>score multiplier</strong> at query time, not as a modification
+to the stored ι. It means a stale cell with a high importance score will still
+rank lower than a recently-accessed cell with a moderate score.</p>
+<h2 id="usage"><a class="doc-anchor" href="#usage">§</a>Usage</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tdb_governance::scoring::ImportanceScorer;
+<span class="kw">use </span>tdb_governance::tiers::TierStateMachine;
+<span class="kw">use </span>tdb_governance::decay::recency_decay;
+<span class="kw">use </span>tdb_core::Tier;
+
+<span class="kw">let </span><span class="kw-2">mut </span>scorer = ImportanceScorer::new(<span class="number">50.0</span>);
+scorer.on_access();   <span class="comment">// +3 → 53.0
+</span>scorer.on_update();   <span class="comment">// +5 → 58.0
+</span>scorer.apply_daily_decay(<span class="number">30</span>); <span class="comment">// ×0.995^30 ≈ ×0.861 → ~49.9
+
+</span><span class="kw">let </span><span class="kw-2">mut </span>tier = TierStateMachine::new(); <span class="comment">// starts at Draft
+</span>tier.evaluate(scorer.importance());    <span class="comment">// still Draft (&lt; 65)
+
+// Recency factor for a cell last updated 21 days ago.
+</span><span class="kw">let </span>r = recency_decay(<span class="number">21.0</span>);
+<span class="macro">assert!</span>(r &gt; <span class="number">0.49 </span>&amp;&amp; r &lt; <span class="number">0.51</span>); <span class="comment">// ≈ half-life
+
+// Final adjusted retrieval score:
+</span><span class="kw">let </span>adjusted = scorer.importance() * r;</code></pre></div></div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="decay/index.html" title="mod tdb_governance::decay">decay</a></dt><dd>Recency decay function for the AKL.</dd><dt><a class="mod" href="scoring/index.html" title="mod tdb_governance::scoring">scoring</a></dt><dd>Importance scoring (ι) for the Adaptive Knowledge Lifecycle.</dd><dt><a class="mod" href="tiers/index.html" title="mod tdb_governance::tiers">tiers</a></dt><dd>Maturity tier state machine with hysteresis.</dd></dl></section></div></main></body></html>

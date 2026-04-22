@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["error","memory_cell","synaptic_bank","types"]};

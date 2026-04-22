@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["Q4_GROUP_SIZE"],"fn":["quantize_value"],"struct":["Q4","QuantizedTensor"],"trait":["DequantizeStrategy","QuantizeStrategy"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["FILE_HEADER_SIZE","SEGMENT_MAGIC","SEGMENT_VERSION"],"fn":["compute_record_size","list_segments","read_bytes","read_f32","read_f32_vec","read_u16","read_u32","read_u64","read_u8","scan_segment","segment_path","write_cell_record","write_f32_slice"],"struct":["RecordLocation","Segment"]};

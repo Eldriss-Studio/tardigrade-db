@@ -1,0 +1,121 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="The brain of `TardigradeDB` — a unified facade that turns five independent subsystems into a single, coherent memory for autonomous AI agents."><title>tdb_engine - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="tdb_engine" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tdb_engine</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tdb_engine/index.html">tdb_<wbr>engine</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#why-does-this-crate-exist" title="Why does this crate exist?">Why does this crate exist?</a></li><li><a href="#what-happens-when-you-write" title="What happens when you write">What happens when you write</a></li><li><a href="#what-happens-when-you-read" title="What happens when you read">What happens when you read</a></li><li><a href="#crash-recovery-memento-pattern" title="Crash recovery (Memento pattern)">Crash recovery (Memento pattern)</a></li><li><a href="#causal-memory-trace-graph" title="Causal memory (Trace graph)">Causal memory (Trace graph)</a></li><li><a href="#synaptic-bank-lora-adapters" title="Synaptic bank (`LoRA` adapters)">Synaptic bank (<code>LoRA</code> adapters)</a></li><li><a href="#python-bridge" title="Python bridge">Python bridge</a></li><li><a href="#usage-rust" title="Usage (Rust)">Usage (Rust)</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>tdb_<wbr>engine</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tdb_engine/lib.rs.html#1-173">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The brain of <code>TardigradeDB</code> — a unified facade that turns five independent
+subsystems into a single, coherent memory for autonomous AI agents.</p>
+<h2 id="why-does-this-crate-exist"><a class="doc-anchor" href="#why-does-this-crate-exist">§</a>Why does this crate exist?</h2>
+<p>An LLM agent that can reason over its own history needs four things to happen
+on every interaction: <strong>persist</strong> the current KV cache, <strong>retrieve</strong> relevant
+past context, <strong>organize</strong> causal relationships between memories, and <strong>govern</strong>
+which memories survive over time. Each of these is handled by a separate crate
+in <code>TardigradeDB</code> — but no agent should need to coordinate them manually.</p>
+<p><code>tdb-engine</code> is the <strong>Facade</strong> that hides that complexity. It exposes two
+primary operations — <a href="engine/struct.Engine.html#method.mem_write" title="method tdb_engine::engine::Engine::mem_write"><code>mem_write</code></a> and <a href="engine/struct.Engine.html#method.mem_read" title="method tdb_engine::engine::Engine::mem_read"><code>mem_read</code></a> — and everything else
+(quantization, indexing, importance scoring, tier promotion, WAL logging,
+causal edge tracking) happens as automatic side effects.</p>
+<h2 id="what-happens-when-you-write"><a class="doc-anchor" href="#what-happens-when-you-write">§</a>What happens when you write</h2>
+<p>A single call to <a href="engine/struct.Engine.html#method.mem_write" title="method tdb_engine::engine::Engine::mem_write"><code>mem_write</code></a> triggers a cascade across all four layers:</p>
+<div class="example-wrap"><pre class="language-text"><code>mem_write(owner, layer, key, value, salience, parent)
+  │
+  ├─ Governance:  ImportanceScorer::new(salience) + on_update(+5)
+  │               TierStateMachine::evaluate → Draft / Validated / Core
+  │
+  ├─ Storage:     BlockPool::append → Q4-compress key+value, fsync to segment
+  │               (on-disk metadata includes importance + tier for crash recovery)
+  │
+  ├─ Retrieval:   BruteForceRetriever::insert → index key for latent-space queries
+  │               SLB::insert → cache key in INT8 for sub-5μs hot-path lookups
+  │
+  ├─ Index:       if Vamana active → insert_online (graph ANN)
+  │               if cell_count ≥ threshold → lazy-activate Vamana
+  │
+  └─ Trace:       if parent_cell_id provided →
+                    WAL::append(AddEdge) → fsync (Observer pattern)
+                    TraceGraph::add_edge(child → parent, CausedBy)</code></pre></div>
+<p>Governance is computed <strong>before</strong> persistence so the on-disk metadata matches
+the in-memory state — this is required for correct Memento-pattern recovery
+when the engine reopens.</p>
+<h2 id="what-happens-when-you-read"><a class="doc-anchor" href="#what-happens-when-you-read">§</a>What happens when you read</h2>
+<p>A single call to <a href="engine/struct.Engine.html#method.mem_read" title="method tdb_engine::engine::Engine::mem_read"><code>mem_read</code></a> runs a three-stage retrieval chain
+(<strong>Chain of Responsibility</strong> pattern), merging results across stages:</p>
+<div class="example-wrap"><pre class="language-text"><code>mem_read(query_key, k, owner_filter)
+  │
+  ├─ Stage 1: SLB (hot path)
+  │  INT8 quantized keys, NEON SDOT / AVX2
+  │  Sub-5μs per query at 4096 entries
+  │  Exploits conversational locality — recent cells are cached
+  │
+  ├─ Stage 2: Vamana (warm path, if active)
+  │  DiskANN-style graph with robust pruning
+  │  Multi-seed greedy beam search
+  │  Activated when cell count crosses threshold
+  │
+  └─ Stage 3: BruteForce (cold path)
+     Exhaustive scaled dot-product: score = (q · k) / √d_k
+     Exact results, owner-filtered per-agent partitions
+
+  Then for each result:
+    → recency_decay(Δt) multiplier (21-day half-life)
+    → BlockPool::get → dequantize full cell from disk
+    → ImportanceScorer::on_access(+3) → potential tier promotion
+    → SLB::insert → cache for future hot-path hits</code></pre></div>
+<p>Results are deduplicated by <code>CellId</code>, sorted by decay-adjusted score, and
+truncated to k.</p>
+<h2 id="crash-recovery-memento-pattern"><a class="doc-anchor" href="#crash-recovery-memento-pattern">§</a>Crash recovery (Memento pattern)</h2>
+<p>On <a href="engine/struct.Engine.html#method.open" title="associated function tdb_engine::engine::Engine::open"><code>Engine::open</code></a>, the engine rebuilds all in-memory derived state from
+durable sources:</p>
+<div class="example-wrap"><pre class="language-text"><code>Engine::open(dir)
+  ├─ BlockPool::open → scan segments, rebuild CellId → offset index
+  ├─ For each persisted cell:
+  │    BruteForceRetriever::insert(key)
+  │    ImportanceScorer::new(persisted_importance)
+  │    TierStateMachine::with_tier(persisted_tier)
+  ├─ WAL::replay → rebuild TraceGraph from logged edges
+  └─ next_id = max(persisted_ids) + 1</code></pre></div>
+<p>This means the engine can crash at any point and recover all state that was
+durably committed (fsync’d). In-flight writes that didn’t complete fsync
+are discarded — the partial record detection in segment scanning handles this.</p>
+<h2 id="causal-memory-trace-graph"><a class="doc-anchor" href="#causal-memory-trace-graph">§</a>Causal memory (Trace graph)</h2>
+<p>When a cell is written with <code>parent_cell_id = Some(parent)</code>, the engine
+records a directed <code>CausedBy</code> edge in the Trace graph, durably logged via
+the WAL before being applied in memory. This enables causal chain queries:</p>
+<div class="example-wrap"><pre class="language-text"><code>trace_ancestors(cell_c) → [cell_b, cell_a]</code></pre></div>
+<p>If cell C was caused by B, and B was caused by A, the engine traverses
+the causal graph transitively.</p>
+<h2 id="synaptic-bank-lora-adapters"><a class="doc-anchor" href="#synaptic-bank-lora-adapters">§</a>Synaptic bank (<code>LoRA</code> adapters)</h2>
+<p>Beyond episodic KV memory, the engine also persists per-agent <strong><code>LoRA</code> adapters</strong>
+via <a href="engine/struct.Engine.html#method.store_synapsis" title="method tdb_engine::engine::Engine::store_synapsis"><code>store_synapsis</code></a> / <a href="engine/struct.Engine.html#method.load_synapsis" title="method tdb_engine::engine::Engine::load_synapsis"><code>load_synapsis</code></a>. These encode stable preferences and
+patterns as low-rank weight deltas applied to the base model at runtime —
+the “slow memory” complement to the fast episodic KV cache.</p>
+<h2 id="python-bridge"><a class="doc-anchor" href="#python-bridge">§</a>Python bridge</h2>
+<p>The <code>tdb-python</code> crate wraps this engine via <code>PyO3</code>. From Python:</p>
+<div class="example-wrap"><pre class="language-python"><code>import tardigrade_db as tdb
+engine = tdb.Engine(&quot;/tmp/tardigrade&quot;)
+cell_id = engine.mem_write(owner=42, layer=12, key=np_key, value=np_val, salience=80.0, parent_cell_id=None)
+results = engine.mem_read(query_key=np_query, k=5, owner=None)
+ancestors = engine.trace_ancestors(cell_id)</code></pre></div><h2 id="usage-rust"><a class="doc-anchor" href="#usage-rust">§</a>Usage (Rust)</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tdb_engine::engine::Engine;
+
+<span class="kw">let </span>dir = std::path::Path::new(<span class="string">"/tmp/tardigrade"</span>);
+<span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::open(dir).unwrap();
+
+<span class="comment">// Capture a KV pair from transformer layer 12.
+</span><span class="kw">let </span>cell_id = engine.mem_write(
+    <span class="comment">/* owner */ </span><span class="number">42</span>,
+    <span class="comment">/* layer */ </span><span class="number">12</span>,
+    <span class="comment">/* key */ </span><span class="kw-2">&amp;</span>[<span class="number">0.1f32</span>; <span class="number">128</span>],
+    <span class="comment">/* value */ </span><span class="macro">vec!</span>[<span class="number">0.2f32</span>; <span class="number">128</span>],
+    <span class="comment">/* salience */ </span><span class="number">60.0</span>,
+    <span class="comment">/* parent */ </span><span class="prelude-val">None</span>,
+).unwrap();
+
+<span class="comment">// Retrieve the most relevant cells for a query key.
+</span><span class="kw">let </span>results = engine.mem_read(<span class="kw-2">&amp;</span>[<span class="number">0.1f32</span>; <span class="number">128</span>], <span class="comment">/* k */ </span><span class="number">5</span>, <span class="prelude-val">None</span>).unwrap();
+<span class="kw">if let </span><span class="prelude-val">Some</span>(top) = results.first() {
+    <span class="macro">println!</span>(<span class="string">"cell {} score={:.3} tier={:?}"</span>, top.cell.id, top.score, top.tier);
+}
+
+<span class="comment">// Query causal ancestors.
+</span><span class="kw">let </span>ancestors = engine.trace_ancestors(cell_id);
+
+<span class="comment">// Close and reopen — all state is recovered from disk.
+</span>drop(engine);
+<span class="kw">let </span>engine2 = Engine::open(dir).unwrap();
+<span class="macro">assert_eq!</span>(engine2.cell_count(), <span class="number">1</span>);</code></pre></div></div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="batch_cache/index.html" title="mod tdb_engine::batch_cache">batch_<wbr>cache</a></dt><dd><code>BatchQuantizedKVCache</code> — handles concurrent Q4 inference over multiple agents.</dd><dt><a class="mod" href="engine/index.html" title="mod tdb_engine::engine">engine</a></dt><dd>Top-level engine: Facade over storage, retrieval, governance, and organization layers.</dd><dt><a class="mod" href="scheduler/index.html" title="mod tdb_engine::scheduler">scheduler</a></dt><dd>Interleaved prefill/decode scheduler.</dd></dl></section></div></main></body></html>

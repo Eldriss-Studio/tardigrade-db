@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ACCESS_BOOST","DAILY_DECAY_FACTOR","MAX_IMPORTANCE","MIN_IMPORTANCE","UPDATE_BOOST"],"struct":["ImportanceScorer"]};

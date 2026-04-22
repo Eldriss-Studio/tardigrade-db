@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["dot"],"mod":["prune"],"struct":["VamanaIndex","VamanaNode"],"type":["VamanaResult"]};

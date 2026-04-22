@@ -1,0 +1,76 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Organization layer for `TardigradeDB`: ANN graph, causal graph, and write-ahead log."><title>tdb_index - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="tdb_index" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tdb_index</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tdb_index/index.html">tdb_<wbr>index</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#vamana-graph--vector-index" title="Vamana Graph — Vector Index">Vamana Graph — Vector Index</a></li><li><a href="#trace-graph--causal-index" title="Trace Graph — Causal Index">Trace Graph — Causal Index</a></li><li><a href="#write-ahead-log--crash-recovery" title="Write-Ahead Log — Crash Recovery">Write-Ahead Log — Crash Recovery</a></li><li><a href="#usage" title="Usage">Usage</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>tdb_<wbr>index</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tdb_index/lib.rs.html#1-108">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Organization layer for <code>TardigradeDB</code>: ANN graph, causal graph, and write-ahead log.</p>
+<p><code>tdb-index</code> implements the <strong>neuro-symbolic dual topology</strong> described in the Aeon
+architecture: two complementary data structures that organize memory cells, plus a
+WAL for crash recovery of the causal graph.</p>
+<h2 id="vamana-graph--vector-index"><a class="doc-anchor" href="#vamana-graph--vector-index">§</a>Vamana Graph — Vector Index</h2>
+<p><a href="vamana/struct.VamanaIndex.html" title="struct tdb_index::vamana::VamanaIndex"><code>VamanaIndex</code></a> is a <strong>DiskANN-style single-layer graph</strong> for approximate nearest
+neighbor (ANN) search. It is the cold-path index used when the per-agent cell count
+grows beyond the brute-force threshold (~10K) handled by <code>tdb-retrieval</code>.</p>
+<div class="example-wrap"><pre class="language-text"><code>Insert phase:                         Query phase:
+┌───────┐  insert(id, vec)            query(q, k=5)
+│       │ ──────────────────►         │
+│ nodes │   add node to list          ▼ greedy beam search
+│       │                        seed at medoid
+└───────┘  build()               expand best candidates
+            │                    explore neighbor edges
+            ▼                    return top-k by score
+   connect each node to
+   its R nearest neighbors</code></pre></div>
+<p><strong>Key design choices vs. HNSW:</strong></p>
+<ul>
+<li>Single layer (no multi-layer hierarchy) → simpler build, faster cold-start</li>
+<li>Medoid seeding → avoids pathological cases when queries are far from the centroid</li>
+<li>Page-clustered insertions (future) → <code>DiskANN</code>’s disk-locality trick for <code>NVMe</code> I/O</li>
+</ul>
+<p>Configuration:</p>
+<ul>
+<li><code>max_degree</code> (R): out-degree per node. Higher = better recall, more memory.</li>
+<li><code>search_list_size</code> (L) is set automatically to <code>max(k, R) * 2</code> during queries.</li>
+</ul>
+<h2 id="trace-graph--causal-index"><a class="doc-anchor" href="#trace-graph--causal-index">§</a>Trace Graph — Causal Index</h2>
+<p><a href="trace/struct.TraceGraph.html" title="struct tdb_index::trace::TraceGraph"><code>TraceGraph</code></a> is a <strong>directed episodic graph</strong> where nodes are <a href="../tdb_core/types/type.CellId.html" title="type tdb_core::types::CellId"><code>CellId</code></a>s and
+edges represent causal relationships between stored memories:</p>
+<div class="example-wrap"><pre class="language-text"><code>  cell_A ──[CausedBy]──► cell_B ──[CausedBy]──► cell_C
+  cell_A ──[Supports]──► cell_D
+  cell_E ──[Contradicts]► cell_A</code></pre></div>
+<p>Edge types: <code>CausedBy</code>, <code>Follows</code>, <code>Supports</code>, <code>Contradicts</code>.</p>
+<p>The graph supports transitive ancestor queries (<code>ancestors(node, EdgeType)</code>),
+which an agent can use to reconstruct the causal chain that led to any stored memory.</p>
+<h2 id="write-ahead-log--crash-recovery"><a class="doc-anchor" href="#write-ahead-log--crash-recovery">§</a>Write-Ahead Log — Crash Recovery</h2>
+<p><a href="wal/struct.Wal.html" title="struct tdb_index::wal::Wal"><code>Wal</code></a> is an append-only binary log that records every <a href="trace/struct.TraceGraph.html" title="struct tdb_index::trace::TraceGraph"><code>TraceGraph</code></a> mutation
+before it is applied. On restart, mutations are replayed from the WAL before the
+in-memory graph is used.</p>
+<div class="example-wrap"><pre class="language-text"><code>Graph mutation requested
+       │
+       ▼
+  WAL.append(entry)   ← fsync to disk FIRST
+       │
+       ▼
+  TraceGraph.add_edge(...)   ← then apply in memory
+       │
+       ▼
+  (periodic) WAL.checkpoint()  ← truncate WAL after snapshot</code></pre></div>
+<p>WAL record format (little-endian): <code>type(1) | src(8) | dst(8) | edge_type(1) | timestamp(8)</code>
+= 26 bytes per record. Fixed-size records allow O(1) position arithmetic during replay.</p>
+<h2 id="usage"><a class="doc-anchor" href="#usage">§</a>Usage</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tdb_index::vamana::VamanaIndex;
+<span class="kw">use </span>tdb_index::trace::{TraceGraph, EdgeType};
+<span class="kw">use </span>tdb_index::wal::Wal;
+
+<span class="comment">// Build a vector index for cold-path ANN retrieval.
+</span><span class="kw">let </span><span class="kw-2">mut </span>idx = VamanaIndex::new(<span class="comment">/* dim */ </span><span class="number">128</span>, <span class="comment">/* max_degree */ </span><span class="number">32</span>);
+idx.insert(<span class="number">0</span>, <span class="kw-2">&amp;</span>[<span class="number">0.5f32</span>; <span class="number">128</span>]);
+idx.insert(<span class="number">1</span>, <span class="kw-2">&amp;</span>[<span class="number">0.1f32</span>; <span class="number">128</span>]);
+idx.build(); <span class="comment">// O(n²) — call after all inserts
+</span><span class="kw">let </span>results = idx.query(<span class="kw-2">&amp;</span>[<span class="number">0.5f32</span>; <span class="number">128</span>], <span class="comment">/* k */ </span><span class="number">1</span>);
+<span class="macro">assert_eq!</span>(results[<span class="number">0</span>].<span class="number">0</span>, <span class="number">0</span>);
+
+<span class="comment">// Record a causal edge between two cells (WAL-backed).
+</span><span class="kw">let </span>dir = std::path::Path::new(<span class="string">"/tmp/tdb-wal"</span>);
+<span class="kw">let </span><span class="kw-2">mut </span>wal = Wal::open(dir).unwrap();
+<span class="kw">let </span><span class="kw-2">mut </span>graph = TraceGraph::new();
+<span class="kw">let </span>entry = tdb_index::wal::WalEntry::AddEdge {
+    src: <span class="number">0</span>, dst: <span class="number">1</span>, edge_type: EdgeType::CausedBy <span class="kw">as </span>u8, timestamp: <span class="number">1000</span>,
+};
+wal.append(<span class="kw-2">&amp;</span>entry).unwrap();        <span class="comment">// durable FIRST
+</span>graph.add_edge(<span class="number">0</span>, <span class="number">1</span>, EdgeType::CausedBy, <span class="number">1000</span>); <span class="comment">// then in memory</span></code></pre></div></div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="trace/index.html" title="mod tdb_index::trace">trace</a></dt><dd>Episodic causal graph (Trace).</dd><dt><a class="mod" href="vamana/index.html" title="mod tdb_index::vamana">vamana</a></dt><dd>Vamana graph index (<code>DiskANN</code>-style, NOT HNSW).</dd><dt><a class="mod" href="wal/index.html" title="mod tdb_index::wal">wal</a></dt><dd>Write-Ahead Log for crash-recoverable graph mutations.</dd></dl></section></div></main></body></html>

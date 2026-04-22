@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["decay","scoring","tiers"]};
