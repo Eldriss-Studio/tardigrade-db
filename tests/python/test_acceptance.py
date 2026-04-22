@@ -16,7 +16,7 @@ def test_python_write_read_round_trip(engine):
     key = np.sin(np.arange(64, dtype=np.float32) * 0.1)
     value = np.cos(np.arange(64, dtype=np.float32) * 0.2)
 
-    cell_id = engine.mem_write(42, 12, key, value, 50.0)
+    cell_id = engine.mem_write(42, 12, key, value, 50.0, None)
     assert cell_id == 0
 
     results = engine.mem_read(key, 1, None)
@@ -38,7 +38,7 @@ def test_mem_read_topk_from_python(engine):
         key = np.full(dim, 0.01, dtype=np.float32)
         key[i % dim] = 1.0
         value = np.zeros(dim, dtype=np.float32)
-        engine.mem_write(1, 0, key, value, 50.0)
+        engine.mem_write(1, 0, key, value, 50.0, None)
 
     # Query for cell #10's pattern.
     query = np.full(dim, 0.01, dtype=np.float32)
@@ -57,12 +57,12 @@ def test_owner_filtering_from_python(engine):
     # Owner 1 cells.
     for i in range(10):
         key = np.full(dim, float(i), dtype=np.float32)
-        engine.mem_write(1, 0, key, np.zeros(dim, dtype=np.float32), 50.0)
+        engine.mem_write(1, 0, key, np.zeros(dim, dtype=np.float32), 50.0, None)
 
     # Owner 2 cells.
     for i in range(10, 20):
         key = np.full(dim, float(i), dtype=np.float32)
-        engine.mem_write(2, 0, key, np.zeros(dim, dtype=np.float32), 50.0)
+        engine.mem_write(2, 0, key, np.zeros(dim, dtype=np.float32), 50.0, None)
 
     query = np.full(dim, 5.0, dtype=np.float32)
     results = engine.mem_read(query, 5, 1)  # owner=1
@@ -75,7 +75,7 @@ def test_governance_from_python(engine):
     """ATDD Test 4: Tier promotion via reads observed from Python."""
     dim = 32
     key = np.ones(dim, dtype=np.float32)
-    cell_id = engine.mem_write(1, 0, key, np.zeros(dim, dtype=np.float32), 50.0)
+    cell_id = engine.mem_write(1, 0, key, np.zeros(dim, dtype=np.float32), 50.0, None)
 
     # Initial: 50 + 5 (write) = 55 → Draft.
     assert engine.cell_tier(cell_id) == 0  # Draft
@@ -92,7 +92,7 @@ def test_decay_from_python(engine):
     """ATDD Test 5: Decay and demotion observable from Python."""
     dim = 32
     key = np.ones(dim, dtype=np.float32)
-    cell_id = engine.mem_write(1, 0, key, np.zeros(dim, dtype=np.float32), 90.0)
+    cell_id = engine.mem_write(1, 0, key, np.zeros(dim, dtype=np.float32), 90.0, None)
 
     # Initial: 90 + 5 = 95 → Core.
     assert engine.cell_tier(cell_id) == 2  # Core

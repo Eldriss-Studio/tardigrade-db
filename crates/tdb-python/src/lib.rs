@@ -77,6 +77,18 @@ impl Engine {
     ///
     /// Returns:
     ///     The assigned cell ID.
+    /// Write key/value vectors to the engine.
+    ///
+    /// Args:
+    ///     owner: Agent/user ID.
+    ///     layer: Transformer layer index.
+    ///     key: Key vector (numpy float32 array).
+    ///     value: Value vector (numpy float32 array).
+    ///     salience: Initial importance score hint (0-100).
+    ///     parent_cell_id: Optional causal parent cell ID for trace graph.
+    ///
+    /// Returns:
+    ///     The assigned cell ID.
     fn mem_write(
         &mut self,
         owner: u64,
@@ -84,13 +96,14 @@ impl Engine {
         key: PyReadonlyArray1<'_, f32>,
         value: PyReadonlyArray1<'_, f32>,
         salience: f32,
+        parent_cell_id: Option<u64>,
     ) -> PyResult<u64> {
         let key_slice = key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let value_vec =
             value.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?.to_vec();
 
         self.inner
-            .mem_write(owner, layer, key_slice, value_vec, salience)
+            .mem_write(owner, layer, key_slice, value_vec, salience, parent_cell_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -148,6 +161,16 @@ impl Engine {
     /// Total number of cells in the engine.
     fn cell_count(&self) -> usize {
         self.inner.cell_count()
+    }
+
+    /// Get transitive ancestors of a cell following causal edges.
+    fn trace_ancestors(&self, cell_id: u64) -> Vec<u64> {
+        self.inner.trace_ancestors(cell_id)
+    }
+
+    /// Whether the Vamana ANN index is active.
+    fn has_vamana(&self) -> bool {
+        self.inner.has_vamana()
     }
 
     /// Simulate passage of time for governance decay (testing utility).

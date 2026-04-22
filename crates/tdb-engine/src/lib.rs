@@ -72,6 +72,7 @@
 //!     /* key */ &[0.1f32; 128],
 //!     /* value */ vec![0.2f32; 128],
 //!     /* salience */ 60.0,
+//!     /* parent */ None,
 //! ).unwrap();
 //!
 //! // Retrieve the most relevant cell for a query key.
