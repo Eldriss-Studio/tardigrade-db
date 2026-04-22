@@ -85,7 +85,7 @@ impl Engine {
     ///     key: Key vector (numpy float32 array).
     ///     value: Value vector (numpy float32 array).
     ///     salience: Initial importance score hint (0-100).
-    ///     parent_cell_id: Optional causal parent cell ID for trace graph.
+    ///     `parent_cell_id`: Optional causal parent cell ID for trace graph.
     ///
     /// Returns:
     ///     The assigned cell ID.
