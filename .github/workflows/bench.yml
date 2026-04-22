@@ -24,7 +24,13 @@ jobs:
         run: cargo bench --workspace --exclude tdb-python --no-run
 
       - name: Run criterion benchmarks
-        run: cargo bench --workspace --exclude tdb-python -- --output-format bencher | tee bench-output.txt
+        run: |
+          cargo bench -p tdb-storage --bench quantization -- --output-format bencher | tee bench-output.txt
+          cargo bench -p tdb-storage --bench block_pool -- --output-format bencher | tee -a bench-output.txt
+          cargo bench -p tdb-retrieval --bench retrieval -- --output-format bencher | tee -a bench-output.txt
+          cargo bench -p tdb-index --bench vamana -- --output-format bencher | tee -a bench-output.txt
+          cargo bench -p tdb-index --bench wal -- --output-format bencher | tee -a bench-output.txt
+          cargo bench -p tdb-engine --bench engine -- --output-format bencher | tee -a bench-output.txt
 
       - name: Publish to GitHub Pages
         uses: benchmark-action/github-action-benchmark@v1
