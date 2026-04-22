@@ -1,11 +1,9 @@
 name: Benchmarks
 
 on:
-  push:
-    branches: [main]
   schedule:
-    - cron: "0 3 * * *"
-  workflow_dispatch:
+    - cron: "0 3 * * 1"  # weekly Monday 3am UTC
+  workflow_dispatch:       # manual: gh workflow run bench.yml
 
 permissions:
   contents: write
@@ -18,7 +16,6 @@ jobs:
   criterion:
     name: Criterion Trend Publish
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
