@@ -128,3 +128,47 @@ fn test_core_survives_pressure() {
     draft_tier.evaluate(draft_importance);
     assert_eq!(draft_tier.current(), Tier::Draft);
 }
+
+// ── Release-Mode Evals ───────────────────────────────────────────────────────
+
+/// Eval 5 (Category A): Verify the ~21-day recency decay half-life claim.
+///
+/// The docs state "~21-day half-life" for recency decay (τ=30 days).
+/// Exact: exp(-21/30) = exp(-0.7) ≈ 0.4966.
+#[test]
+#[ignore = "release-mode eval: just eval-spec"]
+fn eval_spec_recency_half_life() {
+    // Verify decay at ~21 days is within 5% of 0.5.
+    let r_21 = recency_decay(21.0);
+    let expected = (-21.0f64 / 30.0).exp() as f32; // 0.4966
+    assert!(
+        (r_21 - 0.5).abs() < 0.03,
+        "decay(21 days) = {r_21:.4}, expected ≈0.5 (actual exact = {expected:.4})"
+    );
+
+    // Verify decay at τ=30 days equals exp(-1) ≈ 0.3679.
+    let r_30 = recency_decay(30.0);
+    let exp_minus_1 = (-1.0f64).exp() as f32;
+    assert!(
+        (r_30 - exp_minus_1).abs() < 0.001,
+        "decay(30 days) = {r_30:.4}, expected ≈{exp_minus_1:.4}"
+    );
+
+    // Verify the daily importance decay constant is 0.995.
+    let mut scorer = ImportanceScorer::new(100.0);
+    scorer.apply_daily_decay(1);
+    assert!(
+        (scorer.importance() - 99.5).abs() < 0.01,
+        "After 1 day: ι={:.4}, expected 99.5 (decay factor 0.995)",
+        scorer.importance()
+    );
+
+    // Verify importance half-life ≈ 138 days (ln(0.5)/ln(0.995)).
+    let mut scorer = ImportanceScorer::new(100.0);
+    scorer.apply_daily_decay(138);
+    let hl_importance = scorer.importance();
+    assert!(
+        (hl_importance - 50.0).abs() < 2.0,
+        "After 138 days: ι={hl_importance:.2}, expected ≈50.0 (importance half-life)"
+    );
+}

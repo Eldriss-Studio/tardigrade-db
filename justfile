@@ -39,6 +39,20 @@ test-ci:
 test-crate crate:
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo nextest run -p {{crate}}
 
+# === Evals ===
+
+# Run all release-mode evals (spec + aspirational)
+eval:
+    RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --release --workspace --exclude tdb-python -- --ignored eval_ 2>&1
+
+# Run only must-pass spec evals (Category A)
+eval-spec:
+    RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --release --workspace --exclude tdb-python -- --ignored eval_spec_ 2>&1
+
+# Run only aspirational evals (Category B+C, may print warnings)
+eval-aspirational:
+    RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --release --workspace --exclude tdb-python -- --ignored eval_aspir_ 2>&1
+
 # === Benchmarks ===
 
 # Run all benchmarks with native CPU optimizations

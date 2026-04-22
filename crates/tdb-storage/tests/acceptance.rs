@@ -236,6 +236,33 @@ fn test_synaptic_persist_across_reopen() {
     assert_eq!(loaded[0].id, 0);
 }
 
+// ── Release-Mode Evals ───────────────────────────────────────────────────────
+
+/// Eval 2 (Category A): Q4 compression ratio across typical KV-cache dimensions.
+///
+/// README claims "4x more agent contexts via Q4 quantization". The actual ratio
+/// depends on group overhead. This eval verifies ≥3.5x across real dimensions.
+#[test]
+#[ignore = "release-mode eval: just eval-spec"]
+fn eval_spec_q4_compression_ratio() {
+    use tdb_storage::quantization::{Q4, QuantizeStrategy};
+
+    for dim in [128, 256, 512, 768] {
+        let values: Vec<f32> = (0..dim).map(|i| ((i as f32) * 0.1).sin()).collect();
+
+        let quantized = Q4::quantize(&values);
+        let original_bytes = values.len() * 4; // f32 = 4 bytes
+        let compressed_bytes = quantized.data.len() + quantized.scales.len() * 4;
+        let ratio = original_bytes as f64 / compressed_bytes as f64;
+
+        assert!(
+            ratio >= 3.5,
+            "Q4 compression ratio {ratio:.2}x < 3.5x at dim={dim} \
+             ({original_bytes}B → {compressed_bytes}B)"
+        );
+    }
+}
+
 // ── Phase 13: Batch Write (Write-Behind Buffer pattern) ───────────────────
 
 /// ATDD Test 9: Write 100 cells via batch. All readable. Faster than individual writes.

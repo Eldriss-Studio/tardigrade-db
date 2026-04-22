@@ -382,3 +382,98 @@ fn test_insert_online_duplicate_panics() {
     index.insert_online(0, &[1.0, 0.0, 0.0, 0.0]);
     index.insert_online(0, &[0.0, 1.0, 0.0, 0.0]); // should panic
 }
+
+// ── Eval Helpers ─────────────────────────────────────────────────────────────
+
+struct Lcg(u64);
+
+impl Lcg {
+    fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 =
+            self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        self.0
+    }
+
+    fn next_f32(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
+}
+
+fn box_muller_idx(rng: &mut Lcg) -> (f32, f32) {
+    let u1 = rng.next_f32().max(1e-10);
+    let u2 = rng.next_f32();
+    let r = (-2.0 * u1.ln()).sqrt();
+    let theta = std::f32::consts::TAU * u2;
+    (r * theta.cos(), r * theta.sin())
+}
+
+fn generate_gaussian_vectors(n: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
+    let mut rng = Lcg::new(seed);
+    (0..n).map(|_| (0..dim).map(|_| box_muller_idx(&mut rng).0).collect()).collect()
+}
+
+fn eval_log(msg: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{msg}");
+}
+
+// ── Release-Mode Evals ───────────────────────────────────────────────────────
+
+/// Eval 4 (Category A): Vamana recall@10 at 10K nodes with Gaussian vectors.
+///
+/// Current 1K test uses dominant-dimension vectors which are easy to index.
+/// This eval uses 10x scale with Gaussian vectors (harder distribution).
+#[test]
+#[ignore = "release-mode eval: just eval-spec"]
+fn eval_spec_vamana_recall_10k() {
+    let dim = 32;
+    let n = 10_000;
+    let max_degree = 16;
+    let k = 10;
+
+    let vectors = generate_gaussian_vectors(n, dim, 42);
+
+    let mut index = VamanaIndex::new(dim, max_degree);
+    let build_start = std::time::Instant::now();
+    for (i, v) in vectors.iter().enumerate() {
+        index.insert(i as CellId, v);
+    }
+    index.build();
+    let build_time = build_start.elapsed();
+    eval_log(&format!("Vamana 10K build: {build_time:?}"));
+
+    // 100 random queries from the same distribution.
+    let queries = generate_gaussian_vectors(100, dim, 99);
+
+    let mut total_recall = 0.0;
+    for query in &queries {
+        // Exact brute-force top-k.
+        let mut exact: Vec<(CellId, f32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let dot: f32 = query.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
+                (i as CellId, dot)
+            })
+            .collect();
+        exact.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        let exact_top: std::collections::HashSet<CellId> =
+            exact.iter().take(k).map(|(id, _)| *id).collect();
+
+        let approx = index.query(query, k);
+        let approx_top: std::collections::HashSet<CellId> =
+            approx.iter().map(|(id, _)| *id).collect();
+
+        let overlap = exact_top.intersection(&approx_top).count();
+        total_recall += overlap as f64 / k as f64;
+    }
+
+    let avg_recall = total_recall / 100.0;
+    eval_log(&format!("Vamana 10K Gaussian recall@{k}: {avg_recall:.3}"));
+
+    assert!(avg_recall >= 0.70, "Vamana recall@{k} = {avg_recall:.3} < 0.70 at 10K Gaussian nodes");
+}
