@@ -128,6 +128,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build docs
+        env:
+          RUSTDOCFLAGS: -Dwarnings --html-in-header docs/rustdoc-header.html
         run: cargo doc --workspace --no-deps --document-private-items --exclude tdb-python
       - name: Add redirect to tdb_engine
         run: echo '<meta http-equiv="refresh" content="0; url=tdb_engine/index.html">' > target/doc/index.html
