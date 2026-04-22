@@ -122,17 +122,120 @@ Five jobs run on every push and PR:
 | **MSRV** | Verifies build on Rust 1.85 |
 | **Documentation** | Rustdoc build with `-D warnings`, deployed to GitHub Pages on main |
 
+## Quick Start
+
+```bash
+git clone https://github.com/Eldriss-Studio/tardigrade-db.git
+cd tardigrade-db
+
+# Build Rust workspace
+cargo build --workspace
+
+# Run all 107 Rust tests
+cargo test --workspace --exclude tdb-python
+
+# Set up Python environment
+python3 -m venv .venv && source .venv/bin/activate
+pip install maturin numpy pytest
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
+
+# Run 10 Python tests
+pytest tests/python/ -v
+
+# Run the GPT-2 end-to-end demo
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install transformers
+python examples/e2e_demo.py
+```
+
+## End-to-End Demo Results
+
+The `examples/e2e_demo.py` script proves TardigradeDB works with a real LLM:
+
+```
+[1] Loading GPT-2 model...
+    Model: 12 layers, d_model=768
+
+[3] Capture: 'The capital of France is'
+    Written 12 cells (12 total)
+
+[4] Retrieve: 'What is the main city of France'
+    Layer 0: 5 cells (best=942.7470)
+    Layer 1: 5 cells (best=1518.0767)
+    Layer 2: 5 cells (best=10148.2637)
+
+[5] Governance:
+    Cell 0: importance=100.0, tier=Core
+    Cell 1: importance=100.0, tier=Core
+
+[6] Persistence:
+    Before=12, After=12
+
+SUCCESS
+```
+
+Two semantically related prompts find each other through **latent-space attention scoring** — the same dot product the transformer uses internally. No embedding model, no text search, no cosine similarity.
+
+## Testing
+
+### Rust (107 tests)
+
+```bash
+cargo test --workspace --exclude tdb-python           # all tests
+cargo clippy --workspace --exclude tdb-python -- -D warnings  # pedantic lint
+cargo fmt --all -- --check                            # format check
+cargo test -p tdb-storage                             # single crate
+cargo test test_rebuild_retriever                     # single test
+```
+
+### Python (10 tests)
+
+```bash
+source .venv/bin/activate
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
+pytest tests/python/ -v
+```
+
+### Benchmarks (criterion)
+
+```bash
+cargo bench --workspace --exclude tdb-python          # all benchmarks
+cargo bench -p tdb-retrieval                          # SLB + SIMD dot product
+cargo bench -p tdb-index                              # Vamana build + WAL throughput
+cargo bench -p tdb-engine                             # end-to-end write/read
+```
+
+### Test coverage by layer
+
+| Layer | Crate | Tests | Coverage |
+|-------|-------|-------|----------|
+| Core types | `tdb-core` | 6 | Builder, SynapticBank dimensions, tier defaults |
+| Storage | `tdb-storage` | 11 | Q4 round-trip, segment rollover, persistence, SynapticStore |
+| Retrieval | `tdb-retrieval` | 17 | NEON INT8 dot product, SLB eviction, brute-force, owner filter |
+| Organization | `tdb-index` | 18 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
+| Governance | `tdb-governance` | 25 | Importance scoring, tier hysteresis, recency decay, sweep |
+| Engine | `tdb-engine` | 22 | End-to-end write/read, state rebuild, SLB chain, Vamana activation, WAL replay, throughput |
+| Docs | doctests | 8 | Crate-level usage examples |
+| Python | pytest | 10 | PyO3 bindings, hook ABC, HF adapter, WriteDecision |
+
 ## Project Status
 
-**Active development.** The core architecture is implemented across all four layers. Current focus is hardening the storage layer for production use.
+**All 11 implementation phases complete.** 117 tests passing, GPT-2 demo working.
 
-| Phase | Status |
-|-------|--------|
-| Phase 0 — Scaffold | Complete |
-| Phase 1 — Storage (block pool, quantization, segments) | Complete |
-| Phase 2 — Retrieval (SLB, SIMD dot-product, INT8 quantization) | Complete |
-| Phase 3 — Organization (Vamana index, Trace graph, WAL) | Complete |
-| Phase 4 — Storage hardening & integration | Next |
+| Phase | What | Tests |
+|-------|------|-------|
+| 0 — Scaffold | Cargo workspace, CI, core types | 4 |
+| 1 — Storage | Q4 quantization, segments, block pool | +9 |
+| 2 — Retrieval | NEON SIMD, INT8, SLB, brute-force | +17 |
+| 3 — Organization | Vamana graph, Trace, WAL | +13 |
+| 4 — Governance | AKL scoring, tiers, decay | +25 |
+| 5 — Integration | Engine facade, PyO3 Python bridge | +10 |
+| 6 — State Rebuild | Memento pattern on open | +5 |
+| 7 — Wire Components | SLB→Vamana→BruteForce chain, Trace+WAL | +5 |
+| 8 — Benchmarks | Criterion across all subsystems | +5 |
+| 9 — Incremental Vamana | DiskANN robust pruning | +5 |
+| 10 — LLM Hook | Python ABC + HuggingFace adapter | +5 |
+| 11 — SynapticBank | LoRA adapter persistence | +4 |
 
 See `docs/technical/tdd.md` for the full technical design document and `docs/technical/spec.md` for the condensed specification.
 

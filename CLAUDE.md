@@ -6,18 +6,80 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** Phase 0 complete (scaffold). Phase 1 (storage) next.
+**Status:** All 11 implementation phases complete. 117 tests (107 Rust + 10 Python), GPT-2 end-to-end demo working.
 
 ## Build & Test
 
+### Prerequisites
+
 ```bash
-cargo build --workspace          # build all crates
-cargo test --workspace           # run all tests
-cargo clippy --workspace -- -D warnings  # lint
-cargo fmt --all -- --check       # format check
-cargo test -p tdb-core           # test a single crate
-cargo test test_name             # run a single test by name
+# Rust (1.85+, edition 2024)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Python (3.13+ recommended, 3.14 works with ABI3 compat)
+python3 -m venv .venv && source .venv/bin/activate
+pip install maturin numpy pytest
+
+# Optional: for the GPT-2 end-to-end demo
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install transformers
 ```
+
+### Rust tests (107 tests)
+
+```bash
+cargo build --workspace                              # build all crates
+cargo test --workspace --exclude tdb-python           # run all Rust tests
+cargo clippy --workspace --exclude tdb-python -- -D warnings  # lint (pedantic)
+cargo fmt --all -- --check                            # format check
+cargo test -p tdb-core                                # test a single crate
+cargo test -p tdb-engine --test acceptance            # run engine acceptance tests only
+cargo test test_rebuild_retriever                     # run a single test by name
+```
+
+Note: `tdb-python` is excluded from `cargo test/clippy` because PyO3 needs `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` on Python 3.14.
+
+### Python tests (10 tests)
+
+```bash
+source .venv/bin/activate
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
+pytest tests/python/ -v
+```
+
+### Benchmarks
+
+```bash
+cargo bench --workspace --exclude tdb-python          # run all criterion benchmarks
+cargo bench -p tdb-retrieval                          # SLB + dot product benchmarks
+cargo bench -p tdb-index                              # Vamana build + WAL benchmarks
+cargo bench -p tdb-engine                             # end-to-end write/read benchmarks
+```
+
+### End-to-end demo (GPT-2)
+
+```bash
+source .venv/bin/activate
+python examples/e2e_demo.py
+```
+
+Captures KV cache from GPT-2 inference on *"The capital of France is"*, then retrieves semantically related cells when querying with *"What is the main city of France"* — proving latent-space retrieval works with a real model.
+
+### Test breakdown by phase
+
+| Phase | Crate | Tests | What's covered |
+|-------|-------|-------|----------------|
+| 1 | tdb-storage | 8 | Q4 quantization round-trip, segment rollover, persistence, fidelity |
+| 2 | tdb-retrieval | 17 | NEON INT8 dot product, SLB LRU eviction, brute-force retrieval, owner filter |
+| 3 | tdb-index | 13 | Vamana recall, trace causal chains, WAL crash recovery, concurrent R/W |
+| 4 | tdb-governance | 25 | Importance scoring, tier hysteresis, recency decay, sweep eviction |
+| 5-8 | tdb-engine | 21 | Write/read round-trip, governance integration, state rebuild on reopen, SLB chain, Vamana activation, trace WAL replay, throughput baselines |
+| 9 | tdb-index | 5 | Incremental Vamana, robust prune diversity, batch parity |
+| 0 | tdb-core | 6 | Builder defaults, SynapticBank dimensions |
+| 11 | tdb-storage | 3 | SynapticStore round-trip, multiple owners, persistence |
+| — | tdb-engine | 1 | Engine synapsis API |
+| — | doctests | 8 | Crate-level usage examples |
+| — | Python | 10 | PyO3 bindings, hook ABC, HF adapter, WriteDecision, MemoryCellHandle |
 
 ## Crate Structure
 
