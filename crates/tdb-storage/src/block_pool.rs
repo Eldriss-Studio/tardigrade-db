@@ -74,6 +74,30 @@ impl BlockPool {
         Ok(cell.id)
     }
 
+    /// Append multiple cells in a single write + single fsync (Write-Behind Buffer).
+    ///
+    /// All cells are written to the active segment and durably committed with
+    /// one `sync_data()` call. Returns the cell IDs.
+    pub fn append_batch(&mut self, cells: &[MemoryCell]) -> Result<Vec<CellId>> {
+        if cells.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.ensure_active_segment_has_capacity()?;
+
+        let active = self.active_segment_mut();
+        let seg_id = active.id();
+        let offsets = active.append_batch(cells)?;
+
+        let mut ids = Vec::with_capacity(cells.len());
+        for (cell, byte_offset) in cells.iter().zip(offsets) {
+            self.index.insert(cell.id, RecordLocation { segment_id: seg_id, byte_offset });
+            ids.push(cell.id);
+        }
+
+        Ok(ids)
+    }
+
     /// Retrieve a memory cell by its ID.
     pub fn get(&self, cell_id: CellId) -> Result<MemoryCell> {
         let loc = self.index.get(&cell_id).ok_or(TardigradeError::CellNotFound(cell_id))?;

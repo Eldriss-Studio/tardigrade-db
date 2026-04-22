@@ -1,5 +1,5 @@
 use tdb_core::Tier;
-use tdb_core::memory_cell::MemoryCellBuilder;
+use tdb_core::memory_cell::{MemoryCell, MemoryCellBuilder};
 use tdb_storage::block_pool::BlockPool;
 use tdb_storage::quantization::{DequantizeStrategy, Q4, QuantizeStrategy};
 
@@ -234,4 +234,95 @@ fn test_synaptic_persist_across_reopen() {
     let loaded = store.load_by_owner(42).unwrap();
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].id, 0);
+}
+
+// ── Phase 13: Batch Write (Write-Behind Buffer pattern) ───────────────────
+
+/// ATDD Test 9: Write 100 cells via batch. All readable. Faster than individual writes.
+#[test]
+fn test_batch_write_100_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open(dir.path()).unwrap();
+
+    let cells: Vec<MemoryCell> = (0..100)
+        .map(|i| {
+            MemoryCellBuilder::new(i, 1, 0, vec![i as f32; 32], vec![0.0; 32])
+                .importance(50.0)
+                .build()
+        })
+        .collect();
+
+    // Batch write — single fsync for all 100 cells.
+    let ids = pool.append_batch(&cells).unwrap();
+    assert_eq!(ids.len(), 100);
+
+    // All cells readable.
+    for i in 0..100u64 {
+        let cell = pool.get(i).unwrap();
+        assert_eq!(cell.id, i);
+    }
+}
+
+/// ATDD Test 10: Batch write persists across restart.
+#[test]
+fn test_batch_write_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+
+    {
+        let mut pool = BlockPool::open(dir.path()).unwrap();
+        let cells: Vec<MemoryCell> = (0..50)
+            .map(|i| {
+                MemoryCellBuilder::new(i, 1, 0, vec![i as f32; 16], vec![0.0; 16])
+                    .importance(50.0)
+                    .build()
+            })
+            .collect();
+        pool.append_batch(&cells).unwrap();
+    }
+
+    let pool = BlockPool::open(dir.path()).unwrap();
+    assert_eq!(pool.cell_count(), 50);
+    let cell = pool.get(25).unwrap();
+    assert_eq!(cell.id, 25);
+}
+
+/// ATDD Test 11: Batch write is measurably faster than individual writes.
+#[test]
+fn test_batch_faster_than_individual() {
+    let dir_individual = tempfile::tempdir().unwrap();
+    let dir_batch = tempfile::tempdir().unwrap();
+    let n = 50u64;
+
+    let cells: Vec<MemoryCell> = (0..n)
+        .map(|i| {
+            MemoryCellBuilder::new(i, 1, 0, vec![i as f32; 32], vec![0.0; 32])
+                .importance(50.0)
+                .build()
+        })
+        .collect();
+
+    // Individual writes.
+    let start_ind = std::time::Instant::now();
+    {
+        let mut pool = BlockPool::open(dir_individual.path()).unwrap();
+        for cell in &cells {
+            pool.append(cell).unwrap();
+        }
+    }
+    let time_ind = start_ind.elapsed();
+
+    // Batch write.
+    let start_batch = std::time::Instant::now();
+    {
+        let mut pool = BlockPool::open(dir_batch.path()).unwrap();
+        pool.append_batch(&cells).unwrap();
+    }
+    let time_batch = start_batch.elapsed();
+
+    // Batch should be at least 2x faster (typically 10-50x due to single fsync).
+    let speedup = time_ind.as_secs_f64() / time_batch.as_secs_f64();
+    assert!(
+        speedup > 2.0,
+        "Batch ({time_batch:?}) should be ≥2x faster than individual ({time_ind:?}). Speedup: {speedup:.1}x"
+    );
 }

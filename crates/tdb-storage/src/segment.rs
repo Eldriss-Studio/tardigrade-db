@@ -91,56 +91,42 @@ impl Segment {
 
     /// Append a `MemoryCell` (quantized to Q4) and return its byte offset.
     pub fn append(&mut self, cell: &MemoryCell) -> io::Result<u64> {
-        let offset = self.size;
+        let file = OpenOptions::new().append(true).open(&self.path)?;
+        let mut w = BufWriter::new(file);
 
-        let key_q = Q4::quantize(&cell.key);
-        let val_q = Q4::quantize(&cell.value);
+        let offset = self.size;
+        let record_bytes = write_cell_record(&mut w, cell)?;
+        self.size = offset + 4 + record_bytes as u64;
+
+        let inner = w.into_inner().map_err(std::io::IntoInnerError::into_error)?;
+        inner.sync_data()?;
+        Ok(offset)
+    }
+
+    /// Append multiple cells in a single write + single fsync (Write-Behind Buffer).
+    ///
+    /// Returns a `Vec` of (`byte_offset`, `record_size`) for each cell written.
+    /// All cells are durably committed after the single `sync_data()` call.
+    pub fn append_batch(&mut self, cells: &[MemoryCell]) -> io::Result<Vec<u64>> {
+        if cells.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let file = OpenOptions::new().append(true).open(&self.path)?;
         let mut w = BufWriter::new(file);
 
-        let record_bytes = compute_record_size(&key_q, &val_q, cell.pos_encoding.len());
-        let record_len: u32 = record_bytes.try_into().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("record size {record_bytes} exceeds u32::MAX"),
-            )
-        })?;
-        w.write_all(&record_len.to_le_bytes())?;
+        let mut offsets = Vec::with_capacity(cells.len());
+        for cell in cells {
+            let offset = self.size;
+            let record_bytes = write_cell_record(&mut w, cell)?;
+            self.size = offset + 4 + record_bytes as u64;
+            offsets.push(offset);
+        }
 
-        // Fixed fields.
-        w.write_all(&cell.id.to_le_bytes())?;
-        w.write_all(&cell.owner.to_le_bytes())?;
-        w.write_all(&cell.layer.to_le_bytes())?;
-        w.write_all(&(cell.key.len() as u32).to_le_bytes())?;
-        w.write_all(&(cell.value.len() as u32).to_le_bytes())?;
-        w.write_all(&(cell.pos_encoding.len() as u32).to_le_bytes())?;
-        w.write_all(&cell.token_span.0.to_le_bytes())?;
-        w.write_all(&cell.token_span.1.to_le_bytes())?;
-        w.write_all(&cell.meta.created_at.to_le_bytes())?;
-        w.write_all(&cell.meta.updated_at.to_le_bytes())?;
-        w.write_all(&cell.meta.importance.to_le_bytes())?;
-        w.write_all(&cell.meta.tags.to_le_bytes())?;
-        w.write_all(&[cell.meta.tier as u8])?;
-
-        // Quantized key.
-        w.write_all(&(key_q.scales.len() as u32).to_le_bytes())?;
-        w.write_all(&(key_q.data.len() as u32).to_le_bytes())?;
-        // Quantized value.
-        w.write_all(&(val_q.scales.len() as u32).to_le_bytes())?;
-        w.write_all(&(val_q.data.len() as u32).to_le_bytes())?;
-
-        // Variable-length data.
-        write_f32_slice(&mut w, &key_q.scales)?;
-        w.write_all(&key_q.data)?;
-        write_f32_slice(&mut w, &val_q.scales)?;
-        w.write_all(&val_q.data)?;
-        write_f32_slice(&mut w, &cell.pos_encoding)?;
-
+        // Single fsync for all cells — this is the key optimization.
         let inner = w.into_inner().map_err(std::io::IntoInnerError::into_error)?;
         inner.sync_data()?;
-        self.size = offset + 4 + record_bytes as u64; // 4 bytes for record_len prefix
-        Ok(offset)
+        Ok(offsets)
     }
 
     /// Read a `MemoryCell` from a specific byte offset.
@@ -295,6 +281,55 @@ fn compute_record_size(key_q: &QuantizedTensor, val_q: &QuantizedTensor, pos_len
         + val_q.data.len()
         + pos_len * 4;
     fixed + variable
+}
+
+// --- Write helpers ---
+
+/// Serialize a single `MemoryCell` to a writer (Q4 quantized).
+/// Returns the record body size (excluding the 4-byte `record_len` prefix).
+fn write_cell_record(w: &mut impl Write, cell: &MemoryCell) -> io::Result<u64> {
+    let key_q = Q4::quantize(&cell.key);
+    let val_q = Q4::quantize(&cell.value);
+
+    let record_bytes = compute_record_size(&key_q, &val_q, cell.pos_encoding.len());
+    let record_len: u32 = record_bytes.try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("record size {record_bytes} exceeds u32::MAX"),
+        )
+    })?;
+    w.write_all(&record_len.to_le_bytes())?;
+
+    // Fixed fields.
+    w.write_all(&cell.id.to_le_bytes())?;
+    w.write_all(&cell.owner.to_le_bytes())?;
+    w.write_all(&cell.layer.to_le_bytes())?;
+    w.write_all(&(cell.key.len() as u32).to_le_bytes())?;
+    w.write_all(&(cell.value.len() as u32).to_le_bytes())?;
+    w.write_all(&(cell.pos_encoding.len() as u32).to_le_bytes())?;
+    w.write_all(&cell.token_span.0.to_le_bytes())?;
+    w.write_all(&cell.token_span.1.to_le_bytes())?;
+    w.write_all(&cell.meta.created_at.to_le_bytes())?;
+    w.write_all(&cell.meta.updated_at.to_le_bytes())?;
+    w.write_all(&cell.meta.importance.to_le_bytes())?;
+    w.write_all(&cell.meta.tags.to_le_bytes())?;
+    w.write_all(&[cell.meta.tier as u8])?;
+
+    // Quantized key.
+    w.write_all(&(key_q.scales.len() as u32).to_le_bytes())?;
+    w.write_all(&(key_q.data.len() as u32).to_le_bytes())?;
+    // Quantized value.
+    w.write_all(&(val_q.scales.len() as u32).to_le_bytes())?;
+    w.write_all(&(val_q.data.len() as u32).to_le_bytes())?;
+
+    // Variable-length data.
+    write_f32_slice(w, &key_q.scales)?;
+    w.write_all(&key_q.data)?;
+    write_f32_slice(w, &val_q.scales)?;
+    w.write_all(&val_q.data)?;
+    write_f32_slice(w, &cell.pos_encoding)?;
+
+    Ok(record_bytes as u64)
 }
 
 // --- I/O helpers (little-endian) ---
