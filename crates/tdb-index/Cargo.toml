@@ -13,5 +13,14 @@ workspace = true
 tdb-core = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
+
+[[bench]]
+name = "vamana"
+harness = false
+
+[[bench]]
+name = "wal"
+harness = false

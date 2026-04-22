@@ -17,4 +17,9 @@ tdb-index = { workspace = true }
 tdb-governance = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 tempfile = { workspace = true }
+
+[[bench]]
+name = "engine"
+harness = false
