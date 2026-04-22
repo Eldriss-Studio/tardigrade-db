@@ -3,6 +3,9 @@ name: Benchmarks
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,9 +15,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  benchmark:
-    name: Run & Publish Benchmarks
+  criterion:
+    name: Criterion Trend Publish
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -24,15 +28,9 @@ jobs:
         run: cargo bench --workspace --exclude tdb-python --no-run
 
       - name: Run criterion benchmarks
-        run: |
-          cargo bench -p tdb-storage --bench quantization -- --output-format bencher | tee bench-output.txt
-          cargo bench -p tdb-storage --bench block_pool -- --output-format bencher | tee -a bench-output.txt
-          cargo bench -p tdb-retrieval --bench retrieval -- --output-format bencher | tee -a bench-output.txt
-          cargo bench -p tdb-index --bench vamana -- --output-format bencher | tee -a bench-output.txt
-          cargo bench -p tdb-index --bench wal -- --output-format bencher | tee -a bench-output.txt
-          cargo bench -p tdb-engine --bench engine -- --output-format bencher | tee -a bench-output.txt
+        run: cargo bench --workspace --exclude tdb-python -- --output-format bencher | tee bench-output.txt
 
-      - name: Publish to GitHub Pages
+      - name: Publish criterion trend to GitHub Pages
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: TardigradeDB Performance
@@ -43,4 +41,95 @@ jobs:
           comment-on-alert: true
           alert-threshold: "150%"
           fail-on-alert: false
-          benchmark-data-dir-path: dev/bench
+          benchmark-data-dir-path: dev/bench/data
+
+  full-bench-v1:
+    name: Bench V1 Full Matrix
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime deps
+        run: python -m pip install --upgrade pip
+
+      - name: Run full benchmark matrix
+        env:
+          LOCOMO_DATA_PATH: ${{ vars.LOCOMO_DATA_PATH }}
+          LONGMEMEVAL_DATA_PATH: ${{ vars.LONGMEMEVAL_DATA_PATH }}
+          MEM0_BASE_URL: ${{ vars.MEM0_BASE_URL }}
+          MEM0_API_KEY: ${{ secrets.MEM0_API_KEY }}
+          LETTA_BASE_URL: ${{ vars.LETTA_BASE_URL }}
+          LETTA_API_KEY: ${{ secrets.LETTA_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          PYTHONPATH=python python -m tdb_bench run \
+            --mode full \
+            --config python/tdb_bench/config/default.json \
+            --output target/bench-v1/full-run.json
+          PYTHONPATH=python python -m tdb_bench report \
+            --input target/bench-v1/full-run.json \
+            --format md \
+            --output target/bench-v1/full-report.md
+          PYTHONPATH=python python -m tdb_bench report \
+            --input target/bench-v1/full-run.json \
+            --format json \
+            --output target/bench-v1/full-report.json
+
+      - name: Checkout gh-pages for baseline comparison
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: gh-pages
+
+      - name: Compare against previous baseline when available
+        run: |
+          mkdir -p target/bench-v1
+          if [ -f gh-pages/dev/bench-v1/latest-full-run.json ]; then
+            PYTHONPATH=python python -m tdb_bench compare \
+              --baseline gh-pages/dev/bench-v1/latest-full-run.json \
+              --candidate target/bench-v1/full-run.json \
+              --format md \
+              --output target/bench-v1/full-compare.md
+          else
+            cat > target/bench-v1/full-compare.md <<'EOF'
+            # Benchmark Comparison
+
+            No previous baseline found in `gh-pages/dev/bench-v1/latest-full-run.json`.
+            EOF
+          fi
+
+      - name: Upload full benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-v1-full
+          path: target/bench-v1
+
+      - name: Publish v1 benchmark summaries to gh-pages
+        run: |
+          if [ ! -d gh-pages ]; then
+            mkdir -p gh-pages
+            git -C gh-pages init
+            git -C gh-pages checkout -b gh-pages
+          fi
+
+          mkdir -p gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}
+          cp target/bench-v1/full-run.json gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/run.json
+          cp target/bench-v1/full-report.md gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/report.md
+          cp target/bench-v1/full-report.json gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/report.json
+          cp target/bench-v1/full-compare.md gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/compare.md
+
+          cp target/bench-v1/full-run.json gh-pages/dev/bench-v1/latest-full-run.json
+          cp target/bench-v1/full-report.md gh-pages/dev/bench-v1/latest-full-report.md
+          cp target/bench-v1/full-compare.md gh-pages/dev/bench-v1/latest-full-compare.md
+
+          git -C gh-pages config user.name "github-actions[bot]"
+          git -C gh-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C gh-pages add dev/bench-v1
+          git -C gh-pages commit -m "bench-v1 nightly ${GITHUB_RUN_ID}" || true
+          git -C gh-pages push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git HEAD:gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

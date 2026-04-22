@@ -131,6 +131,8 @@ jobs:
         run: cargo doc --workspace --no-deps --document-private-items --exclude tdb-python
       - name: Add redirect to tdb_engine
         run: echo '<meta http-equiv="refresh" content="0; url=tdb_engine/index.html">' > target/doc/index.html
+      - name: Include benchmark guide page
+        run: mkdir -p target/doc/dev/bench && cp docs/bench/index.html target/doc/dev/bench/index.html
       - name: Deploy to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4
         with:
