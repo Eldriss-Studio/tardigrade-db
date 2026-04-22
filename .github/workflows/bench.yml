@@ -20,8 +20,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      - name: Build benchmarks
+        run: cargo bench --workspace --exclude tdb-python --no-run
+
       - name: Run criterion benchmarks
-        run: cargo bench --workspace --exclude tdb-python -- --output-format bencher 2>&1 | tee bench-output.txt
+        run: cargo bench --workspace --exclude tdb-python -- --output-format bencher | tee bench-output.txt
 
       - name: Publish to GitHub Pages
         uses: benchmark-action/github-action-benchmark@v1
