@@ -1,0 +1,36 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tardigrade-db"
+version = "0.1.0"
+description = "LLM-native database kernel — persistent KV cache memory for autonomous AI agents"
+readme = "../../README.md"
+license = "MIT"
+requires-python = ">=3.10"
+keywords = ["llm", "kv-cache", "agent-memory", "database", "transformers"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+torch = ["torch>=2.0"]
+transformers = ["torch>=2.0", "transformers>=4.30"]
+
+[project.urls]
+Repository = "https://github.com/Eldriss-Studio/tardigrade-db"
+Documentation = "https://eldriss-studio.github.io/tardigrade-db"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+manifest-path = "Cargo.toml"
+module-name = "tardigrade_db"

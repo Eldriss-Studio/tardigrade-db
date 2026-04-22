@@ -186,6 +186,7 @@ impl Engine {
 /// `TardigradeDB` — LLM-native database kernel for persistent KV cache memory.
 #[pymodule]
 fn tardigrade_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<Engine>()?;
     m.add_class::<ReadResult>()?;
     Ok(())
