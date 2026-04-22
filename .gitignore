@@ -4,6 +4,7 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
+/assets
 
 # CUDA build artifacts
 cuda/build/
@@ -20,3 +21,4 @@ dist/
 # Fuzzing artifacts (corpus and crash inputs are regenerated)
 **/fuzz/corpus/
 **/fuzz/artifacts/
+
