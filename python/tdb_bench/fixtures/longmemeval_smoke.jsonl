@@ -1,0 +1,3 @@
+{"id":"lme-1","dataset":"longmemeval","context":"Customer prefers weekly status emails.","question":"How often does the customer want updates?","ground_truth":"weekly"}
+{"id":"lme-2","dataset":"longmemeval","context":"Server maintenance window is Sunday 02:00 UTC.","question":"When is maintenance?","ground_truth":"Sunday 02:00 UTC"}
+{"id":"lme-3","dataset":"longmemeval","context":"Ticket #8842 was resolved by clearing cache.","question":"How was ticket #8842 resolved?","ground_truth":"clearing cache"}

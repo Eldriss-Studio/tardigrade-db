@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "profiles": {
+    "smoke": {
+      "seed": 7,
+      "timeout_seconds": 5,
+      "datasets": [
+        {
+          "name": "locomo",
+          "revision": "locomo-fixture-v1",
+          "path": "python/tdb_bench/fixtures/locomo_smoke.jsonl",
+          "max_items": 3
+        },
+        {
+          "name": "longmemeval",
+          "revision": "longmemeval-fixture-v1",
+          "path": "python/tdb_bench/fixtures/longmemeval_smoke.jsonl",
+          "max_items": 3
+        }
+      ],
+      "systems": ["tardigrade", "mem0_oss", "letta"],
+      "evaluator": {
+        "mode": "llm_gated",
+        "answerer_model": "gpt-4.1-mini",
+        "judge_model": "gpt-4.1-mini"
+      },
+      "top_k": 3,
+      "prompts": {
+        "answer": "Answer concisely using retrieved evidence.",
+        "judge": "Score factual correctness and evidence relevance only."
+      }
+    },
+    "full": {
+      "seed": 42,
+      "timeout_seconds": 20,
+      "datasets": [
+        {
+          "name": "locomo",
+          "revision": "${LOCOMO_DATA_REV}",
+          "path": "${LOCOMO_DATA_PATH}",
+          "max_items": null
+        },
+        {
+          "name": "longmemeval",
+          "revision": "${LONGMEMEVAL_DATA_REV}",
+          "path": "${LONGMEMEVAL_DATA_PATH}",
+          "max_items": null
+        }
+      ],
+      "systems": ["tardigrade", "mem0_oss", "letta"],
+      "evaluator": {
+        "mode": "llm_gated",
+        "answerer_model": "gpt-4.1-mini",
+        "judge_model": "gpt-4.1-mini"
+      },
+      "top_k": 5,
+      "prompts": {
+        "answer": "Answer concisely using retrieved evidence.",
+        "judge": "Score factual correctness and evidence relevance only."
+      }
+    }
+  }
+}

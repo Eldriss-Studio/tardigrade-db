@@ -1,0 +1,3 @@
+{"id":"locomo-1","dataset":"locomo","context":"Alice moved to Berlin in 2021.","question":"Where did Alice move?","ground_truth":"Berlin"}
+{"id":"locomo-2","dataset":"locomo","context":"Bob's favorite language is Rust.","question":"What is Bob's favorite language?","ground_truth":"Rust"}
+{"id":"locomo-3","dataset":"locomo","context":"The project codename is Tardigrade.","question":"What is the project codename?","ground_truth":"Tardigrade"}

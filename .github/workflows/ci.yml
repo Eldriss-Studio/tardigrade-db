@@ -82,6 +82,101 @@ jobs:
       - name: Check MSRV
         run: cargo check --workspace
 
+  bench-smoke:
+    name: Bench V1 Smoke Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Start Letta service
+        run: docker compose -f benchmarks/docker-compose.external.yml up -d letta
+
+      - name: Wait for Letta readiness
+        run: |
+          for _ in $(seq 1 45); do
+            if curl -fsS http://localhost:8283/openapi.json > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Letta did not become ready within timeout" >&2
+          exit 1
+
+      - name: Run smoke benchmark profile
+        continue-on-error: true
+        env:
+          LETTA_BASE_URL: http://localhost:8283
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p target/bench-v1
+          PYTHONPATH=python python -m tdb_bench run \
+            --mode smoke \
+            --system tardigrade \
+            --system letta \
+            --config python/tdb_bench/config/default.json \
+            --output target/bench-v1/smoke-run.json
+          PYTHONPATH=python python -m tdb_bench report \
+            --input target/bench-v1/smoke-run.json \
+            --format md \
+            --output target/bench-v1/smoke-report.md
+          PYTHONPATH=python python -m tdb_bench report \
+            --input target/bench-v1/smoke-run.json \
+            --format json \
+            --output target/bench-v1/smoke-report.json
+
+      - name: Ensure smoke artifact placeholders
+        if: always()
+        run: |
+          mkdir -p target/bench-v1
+          if [ ! -f target/bench-v1/smoke-report.json ]; then
+            cat > target/bench-v1/smoke-report.json <<'EOF'
+            {
+              "run_validity": {
+                "state": "invalid",
+                "reason": "missing_smoke_report_json"
+              },
+              "status_summary": {
+                "failed": 1
+              }
+            }
+            EOF
+          fi
+          if [ ! -f target/bench-v1/smoke-report.md ]; then
+            cat > target/bench-v1/smoke-report.md <<'EOF'
+            # Benchmark Report
+
+            - run_validity: `invalid`
+            - run_validity_reason: `missing_smoke_report_md`
+            EOF
+          fi
+
+      - name: Enforce smoke benchmark quality gates
+        if: always()
+        run: |
+          PYTHONPATH=python python -m tdb_bench.ci_gate \
+            --input target/bench-v1/smoke-report.json \
+            --warn-non-ok-ratio 0.05 \
+            --fail-non-ok-ratio 0.20
+
+      - name: Upload smoke benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-v1-smoke
+          if-no-files-found: warn
+          path: |
+            target/bench-v1/smoke-run.json
+            target/bench-v1/smoke-report.md
+            target/bench-v1/smoke-report.json
+
+      - name: Tear down Letta service
+        if: always()
+        run: docker compose -f benchmarks/docker-compose.external.yml down -v || true
+
   doc:
     name: Documentation
     runs-on: ubuntu-latest

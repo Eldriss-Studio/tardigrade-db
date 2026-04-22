@@ -90,20 +90,22 @@ just test
 Run `just` to see all available recipes:
 
 ```
-Quality:     fmt, fmt-fix, lint, deny, typos
-Testing:     test, test-ci, test-crate <name>
-Benchmarks:  bench, bench-crate <name>
-Coverage:    coverage, coverage-lcov
-Build:       build, release, doc
-Fuzz:        fuzz <target>
-CI-local:    ci
+Quality:        fmt, fmt-fix, lint, deny, typos
+Testing:        test, test-ci, test-crate <name>
+Benchmarks:     bench, bench-crate <name>, bench-v1-smoke, bench-v1-full
+Coverage:       coverage, coverage-lcov
+Build:          build, release, doc
+Fuzz:           fuzz <target>
+CI-local:       ci
 ```
 
 ### Common workflows
 
 ```bash
 just ci                  # Run full CI locally (fmt + lint + typos + test + deny + doc)
-just bench               # Run criterion benchmarks with native CPU opts
+just bench               # Run criterion benchmarks (workspace, excludes tdb-python)
+just bench-v1-smoke      # Run benchmark harness smoke profile + reports
+just bench-v1-full       # Run benchmark harness full profile + reports
 just coverage            # Generate HTML coverage report
 just fuzz fuzz_q4_round_trip  # Fuzz Q4 quantization (requires nightly)
 ```
@@ -214,6 +216,39 @@ cargo bench --workspace --exclude tdb-python          # all benchmarks
 cargo bench -p tdb-retrieval                          # SLB + SIMD dot product
 cargo bench -p tdb-index                              # Vamana build + WAL throughput
 cargo bench -p tdb-engine                             # end-to-end write/read
+```
+
+### Benchmarks (v1 harness)
+
+```bash
+# Run comparable smoke benchmark matrix (Tardigrade + Mem0 + Letta)
+PYTHONPATH=python python -m tdb_bench run \
+  --mode smoke \
+  --repeat 3 \
+  --config python/tdb_bench/config/default.json \
+  --output target/bench-v1/smoke-run.json
+
+# Full LoCoMo + LongMemEval run requires pinned dataset paths
+export LOCOMO_DATA_PATH=/abs/path/to/locomo_phase1.jsonl
+export LONGMEMEVAL_DATA_PATH=/abs/path/to/longmemeval_phase1.jsonl
+PYTHONPATH=python python -m tdb_bench run \
+  --mode full \
+  --repeat 3 \
+  --config python/tdb_bench/config/default.json \
+  --output target/bench-v1/full-run.json
+
+# Generate reports
+PYTHONPATH=python python -m tdb_bench report \
+  --input target/bench-v1/smoke-run.json \
+  --format md \
+  --output target/bench-v1/smoke-report.md
+
+# Compare two runs
+PYTHONPATH=python python -m tdb_bench compare \
+  --baseline target/bench-v1/smoke-run.json \
+  --candidate target/bench-v1/full-run.json \
+  --format md \
+  --output target/bench-v1/compare.md
 ```
 
 ### Test coverage by layer

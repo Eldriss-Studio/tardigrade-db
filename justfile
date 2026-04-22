@@ -57,11 +57,35 @@ eval-aspirational:
 
 # Run all benchmarks with native CPU optimizations
 bench:
-    RUSTFLAGS="-C target-cpu=native" cargo bench --workspace
+    RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo bench --workspace --exclude tdb-python
 
 # Run benchmarks for a specific crate
 bench-crate crate:
-    RUSTFLAGS="-C target-cpu=native" cargo bench -p {{crate}}
+    RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo bench -p {{crate}}
+
+# Run benchmark harness smoke profile (<=10m target)
+bench-v1-smoke:
+    PYTHONPATH=python .venv/bin/python -m tdb_bench run --mode smoke --config python/tdb_bench/config/default.json --output target/bench-v1/smoke-run.json
+    PYTHONPATH=python .venv/bin/python -m tdb_bench report --input target/bench-v1/smoke-run.json --format md --output target/bench-v1/smoke-report.md
+    PYTHONPATH=python .venv/bin/python -m tdb_bench report --input target/bench-v1/smoke-run.json --format json --output target/bench-v1/smoke-report.json
+
+# Run benchmark harness smoke profile with 3 replicates for confidence stats
+bench-v1-smoke-r3:
+    PYTHONPATH=python .venv/bin/python -m tdb_bench run --mode smoke --repeat 3 --config python/tdb_bench/config/default.json --output target/bench-v1/smoke-run-r3.json
+    PYTHONPATH=python .venv/bin/python -m tdb_bench report --input target/bench-v1/smoke-run-r3.json --format md --output target/bench-v1/smoke-report-r3.md
+    PYTHONPATH=python .venv/bin/python -m tdb_bench report --input target/bench-v1/smoke-run-r3.json --format json --output target/bench-v1/smoke-report-r3.json
+
+# Run benchmark harness full profile
+bench-v1-full:
+    PYTHONPATH=python .venv/bin/python -m tdb_bench run --mode full --config python/tdb_bench/config/default.json --output target/bench-v1/full-run.json
+    PYTHONPATH=python .venv/bin/python -m tdb_bench report --input target/bench-v1/full-run.json --format md --output target/bench-v1/full-report.md
+    PYTHONPATH=python .venv/bin/python -m tdb_bench report --input target/bench-v1/full-run.json --format json --output target/bench-v1/full-report.json
+
+# Run benchmark harness full profile with 3 replicates for confidence stats
+bench-v1-full-r3:
+    PYTHONPATH=python .venv/bin/python -m tdb_bench run --mode full --repeat 3 --config python/tdb_bench/config/default.json --output target/bench-v1/full-run-r3.json
+    PYTHONPATH=python .venv/bin/python -m tdb_bench report --input target/bench-v1/full-run-r3.json --format md --output target/bench-v1/full-report-r3.md
+    PYTHONPATH=python .venv/bin/python -m tdb_bench report --input target/bench-v1/full-run-r3.json --format json --output target/bench-v1/full-report-r3.json
 
 # === Coverage ===
 

@@ -106,9 +106,11 @@ jobs:
           fi
 
       - name: Upload full benchmark artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bench-v1-full
+          if-no-files-found: warn
           path: target/bench-v1
 
       - name: Publish v1 benchmark summaries to gh-pages

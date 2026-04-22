@@ -1,0 +1,108 @@
+# Reproducible external-memory benchmark stack.
+# Uses publicly accessible images and pinned local patches where upstream is broken.
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: tdb-bench-qdrant
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/6333 && echo ok'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mem0_db:
+    image: ankane/pgvector:v0.5.1
+    container_name: tdb-bench-mem0-db
+    environment:
+      - POSTGRES_USER=${MEM0_PG_USER:-mem0}
+      - POSTGRES_PASSWORD=${MEM0_PG_PASSWORD:-mem0}
+      - POSTGRES_DB=${MEM0_PG_DB:-mem0}
+    ports:
+      - "${MEM0_PG_PORT:-55432}:5432"
+    volumes:
+      - mem0_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MEM0_PG_USER:-mem0}"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  mem0_neo4j:
+    image: neo4j:5.26-community
+    container_name: tdb-bench-mem0-neo4j
+    environment:
+      - NEO4J_AUTH=${MEM0_NEO4J_AUTH:-neo4j/mem0graph}
+    ports:
+      - "${MEM0_NEO4J_HTTP_PORT:-17474}:7474"
+      - "${MEM0_NEO4J_BOLT_PORT:-17687}:7687"
+    volumes:
+      - mem0_neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${MEM0_NEO4J_PASSWORD:-mem0graph} \"RETURN 1;\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  mem0:
+    build:
+      context: ./mem0
+    image: ${MEM0_IMAGE:-tdb-bench-mem0:local}
+    container_name: tdb-bench-mem0
+    depends_on:
+      mem0_db:
+        condition: service_healthy
+      mem0_neo4j:
+        condition: service_healthy
+    ports:
+      - "${MEM0_PORT:-8888}:8000"
+    environment:
+      - POSTGRES_HOST=mem0_db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${MEM0_PG_DB:-mem0}
+      - POSTGRES_USER=${MEM0_PG_USER:-mem0}
+      - POSTGRES_PASSWORD=${MEM0_PG_PASSWORD:-mem0}
+      - NEO4J_URI=bolt://mem0_neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=${MEM0_NEO4J_PASSWORD:-mem0graph}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - HISTORY_DB_PATH=/app/history/history.db
+    volumes:
+      - mem0_history:/app/history
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 45s
+
+  letta:
+    image: ${LETTA_IMAGE:-letta/letta:latest}
+    container_name: tdb-bench-letta
+    ports:
+      - "${LETTA_API_PORT:-8283}:8283"
+    environment:
+      - LETTA_DEBUG=false
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - letta_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8283/openapi.json')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  qdrant_data:
+  mem0_pgdata:
+  mem0_neo4j_data:
+  mem0_history:
+  letta_data:
