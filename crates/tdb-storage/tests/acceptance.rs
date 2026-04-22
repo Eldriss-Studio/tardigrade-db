@@ -153,7 +153,7 @@ use half::f16;
 use tdb_core::synaptic_bank::SynapticBankEntry;
 use tdb_storage::synaptic_store::SynapticStore;
 
-/// ATDD Test 6: Store a SynapticBankEntry, load by owner, verify round-trip.
+/// ATDD Test 6: Store a `SynapticBankEntry`, load by owner, verify round-trip.
 #[test]
 fn test_synaptic_store_round_trip() {
     let dir = tempfile::tempdir().unwrap();
@@ -182,7 +182,7 @@ fn test_synaptic_store_round_trip() {
     assert_eq!(loaded[0].scale, f16::from_f32(0.1));
 }
 
-/// ATDD Test 7: Store for owners 1,2,1. load_by_owner(1) returns 2, (2) returns 1.
+/// ATDD Test 7: Store for owners 1,2,1. `load_by_owner(1)` returns 2, (2) returns 1.
 #[test]
 fn test_synaptic_multiple_owners() {
     let dir = tempfile::tempdir().unwrap();

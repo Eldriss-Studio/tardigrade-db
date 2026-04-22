@@ -81,7 +81,7 @@ mod tests {
         let node = vec![1.0, 0.0];
         let vecs: Vec<Vec<f32>> =
             (0..10).map(|i| vec![(i as f32 * 0.1).cos(), (i as f32 * 0.1).sin()]).collect();
-        let all: Vec<&[f32]> = vecs.iter().map(|v| v.as_slice()).collect();
+        let all: Vec<&[f32]> = vecs.iter().map(Vec::as_slice).collect();
         let indices: Vec<usize> = (0..10).collect();
 
         let selected = robust_prune(&node, &indices, &all, 1.2, 4);
@@ -102,14 +102,14 @@ mod tests {
         // Cluster A: strongly [1,0]-aligned. Cluster B: strongly [0,1]-aligned.
         // Intra-cluster dot products are very high (~1.0), so α=1.0 will prune
         // duplicates within the same cluster.
-        let vecs = vec![
+        let vecs: Vec<Vec<f32>> = vec![
             vec![1.0, 0.0],  // cluster A
             vec![0.99, 0.0], // cluster A (very similar to A0)
             vec![0.98, 0.0], // cluster A
             vec![0.0, 1.0],  // cluster B
             vec![0.0, 0.99], // cluster B (very similar to B0)
         ];
-        let all: Vec<&[f32]> = vecs.iter().map(|v| v.as_slice()).collect();
+        let all: Vec<&[f32]> = vecs.iter().map(Vec::as_slice).collect();
         let indices: Vec<usize> = (0..5).collect();
 
         // α=1.0: prune if dot(candidate, selected) > dot(candidate, node)

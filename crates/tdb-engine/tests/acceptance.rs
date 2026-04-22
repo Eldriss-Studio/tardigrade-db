@@ -188,7 +188,7 @@ fn test_next_id_monotonic_after_reopen() {
     assert!(new_id >= 5, "New cell ID {new_id} collides with persisted IDs 0..5");
 }
 
-/// ATDD Test 9: Write 1000 cells, drop, reopen. cell_count == 1000.
+/// ATDD Test 9: Write 1000 cells, drop, reopen. `cell_count` == 1000.
 /// `mem_read` for a specific key returns the correct cell.
 #[test]
 fn test_rebuild_large_pool() {
@@ -323,7 +323,7 @@ fn test_wal_replay_recovers_trace() {
     );
 }
 
-/// ATDD Test 14: Query when SLB is empty — falls through to BruteForce.
+/// ATDD Test 14: Query when SLB is empty — falls through to `BruteForce`.
 /// Engine should still return correct results.
 #[test]
 fn test_retrieval_chain_fallback() {

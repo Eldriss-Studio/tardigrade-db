@@ -292,7 +292,7 @@ fn test_incremental_recall_at_1k() {
     );
 }
 
-/// ATDD Test 8: Given 20 clustered candidates, robust_prune with R=8 should produce
+/// ATDD Test 8: Given 20 clustered candidates, `robust_prune` with R=8 should produce
 /// angularly diverse neighbors (no two with dot product > 0.99).
 #[test]
 fn test_robust_prune_angular_diversity() {
@@ -316,7 +316,7 @@ fn test_robust_prune_angular_diversity() {
     }
 
     let candidate_indices: Vec<usize> = (0..20).collect();
-    let all_vecs: Vec<&[f32]> = candidate_vecs.iter().map(|v| v.as_slice()).collect();
+    let all_vecs: Vec<&[f32]> = candidate_vecs.iter().map(Vec::as_slice).collect();
 
     let selected = robust_prune(&node_vec, &candidate_indices, &all_vecs, 1.2, 8);
 
@@ -374,7 +374,7 @@ fn test_incremental_vs_batch_parity() {
     );
 }
 
-/// ATDD Test 10: Duplicate CellId via insert_online should panic.
+/// ATDD Test 10: Duplicate `CellId` via `insert_online` should panic.
 #[test]
 #[should_panic(expected = "duplicate CellId")]
 fn test_insert_online_duplicate_panics() {
