@@ -49,6 +49,9 @@ jobs:
       - name: Run tests
         run: cargo nextest run --workspace --profile ci
 
+      - name: Run doctests
+        run: cargo test --doc --workspace --exclude tdb-python
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -107,15 +110,3 @@ jobs:
         id: deploy
         uses: actions/deploy-pages@v4
 
-  doc-check:
-    name: Doc Check (PR)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    env:
-      RUSTDOCFLAGS: -Dwarnings
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Build docs
-        run: cargo doc --workspace --no-deps --document-private-items --exclude tdb-python

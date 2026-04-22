@@ -92,7 +92,7 @@ CI-local:    ci
 ### Common workflows
 
 ```bash
-just ci                  # Run full CI locally (fmt + lint + typos + test + deny)
+just ci                  # Run full CI locally (fmt + lint + typos + test + deny + doc)
 just bench               # Run criterion benchmarks with native CPU opts
 just coverage            # Generate HTML coverage report
 just fuzz fuzz_q4_round_trip  # Fuzz Q4 quantization (requires nightly)
@@ -100,7 +100,7 @@ just fuzz fuzz_q4_round_trip  # Fuzz Q4 quantization (requires nightly)
 
 ### Pre-commit hooks
 
-Lefthook runs automatically on commit (fmt + clippy + typos) and push (full CI: fmt + lint + typos + test + deny). Install with `lefthook install` or `just setup`.
+Lefthook runs automatically on commit (fmt + clippy + typos) and push (full CI: fmt + lint + typos + test + deny + doc). Install with `lefthook install` or `just setup`.
 
 ### API Documentation
 
@@ -131,8 +131,9 @@ cd tardigrade-db
 # Build Rust workspace
 cargo build --workspace
 
-# Run all 107 Rust tests
-cargo test --workspace --exclude tdb-python
+# Run all Rust tests (101 unit/acceptance + 6 doctests)
+cargo nextest run --workspace --exclude tdb-python
+cargo test --doc --workspace --exclude tdb-python
 
 # Set up Python environment
 python3 -m venv .venv && source .venv/bin/activate
@@ -181,11 +182,11 @@ Two semantically related prompts find each other through **latent-space attentio
 ### Rust (107 tests)
 
 ```bash
-cargo test --workspace --exclude tdb-python           # all tests
-cargo clippy --workspace --exclude tdb-python -- -D warnings  # pedantic lint
+cargo nextest run --workspace --exclude tdb-python    # all unit/acceptance tests
+cargo test --doc --workspace --exclude tdb-python     # all doctests
+cargo clippy --workspace --all-targets -- -D warnings # pedantic lint
 cargo fmt --all -- --check                            # format check
-cargo test -p tdb-storage                             # single crate
-cargo test test_rebuild_retriever                     # single test
+just test-crate tdb-storage                           # single crate
 ```
 
 ### Python (10 tests)
