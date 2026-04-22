@@ -103,7 +103,7 @@ jobs:
       - name: Add redirect to tdb_engine
         run: echo '<meta http-equiv="refresh" content="0; url=tdb_engine/index.html">' > target/doc/index.html
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: target/doc
       - name: Deploy to GitHub Pages
