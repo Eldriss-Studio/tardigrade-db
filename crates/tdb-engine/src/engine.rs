@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use tdb_core::error::{Result, TardigradeError};
 use tdb_core::memory_cell::{MemoryCell, MemoryCellBuilder};
+use tdb_core::synaptic_bank::SynapticBankEntry;
 use tdb_core::{CellId, OwnerId, Tier};
 use tdb_governance::decay::recency_decay;
 use tdb_governance::scoring::ImportanceScorer;
@@ -26,6 +27,7 @@ use tdb_index::wal::{Wal, WalEntry};
 use tdb_retrieval::attention::{BruteForceRetriever, RetrievalResult};
 use tdb_retrieval::slb::SemanticLookasideBuffer;
 use tdb_storage::block_pool::BlockPool;
+use tdb_storage::synaptic_store::SynapticStore;
 
 /// Default SLB capacity.
 const DEFAULT_SLB_CAPACITY: usize = 4096;
@@ -61,6 +63,7 @@ pub struct Engine {
     vamana: Option<VamanaIndex>,
     trace: TraceGraph,
     wal: Wal,
+    synaptic_store: SynapticStore,
     governance: HashMap<CellId, CellGovernance>,
     next_id: CellId,
     dir: PathBuf,
@@ -94,6 +97,10 @@ impl Engine {
             Some(size) => BlockPool::open_with_segment_size(dir, size)?,
             None => BlockPool::open(dir)?,
         };
+
+        // Open or create the SynapticStore (Repository for LoRA adapters).
+        let synaptic_store =
+            SynapticStore::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
 
         // Open or create the WAL for trace graph durability.
         let wal = Wal::open(dir).map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
@@ -147,6 +154,7 @@ impl Engine {
             vamana: None,
             trace,
             wal,
+            synaptic_store,
             governance,
             next_id,
             dir: dir.to_path_buf(),
@@ -375,6 +383,16 @@ impl Engine {
                 gov.tier_sm.evaluate(gov.scorer.importance());
             }
         }
+    }
+
+    /// Store a `SynapticBankEntry` (`LoRA` adapter) for an agent/user.
+    pub fn store_synapsis(&mut self, entry: &SynapticBankEntry) -> Result<()> {
+        self.synaptic_store.append(entry).map_err(|e| TardigradeError::Io { source: e })
+    }
+
+    /// Load all `SynapticBankEntry` records for a given owner.
+    pub fn load_synapsis(&self, owner: OwnerId) -> Result<Vec<SynapticBankEntry>> {
+        self.synaptic_store.load_by_owner(owner).map_err(|e| TardigradeError::Io { source: e })
     }
 
     /// Build and activate the Vamana index from all existing keys.

@@ -18,6 +18,7 @@ tdb-governance = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+half = { workspace = true }
 tempfile = { workspace = true }
 
 [[bench]]

@@ -506,3 +506,33 @@ fn test_engine_read_throughput_baseline() {
         "Engine read 100 queries took {elapsed:?} (expected <30s)"
     );
 }
+
+// ── Phase 11: SynapticBank via Engine (Repository pattern) ────────────────
+
+/// ATDD Test 21: Engine store + load synapsis round-trip.
+#[test]
+fn test_engine_synapsis_api() {
+    use half::f16;
+    use tdb_core::synaptic_bank::SynapticBankEntry;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let entry = SynapticBankEntry::new(
+        0,
+        42,
+        vec![f16::from_f32(1.0); 8],
+        vec![f16::from_f32(0.5); 8],
+        f16::from_f32(0.1),
+        2,
+        4,
+    );
+    engine.store_synapsis(&entry).unwrap();
+
+    let loaded = engine.load_synapsis(42).unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].id, 0);
+    assert_eq!(loaded[0].owner, 42);
+    assert_eq!(loaded[0].rank, 2);
+    assert_eq!(loaded[0].d_model, 4);
+}

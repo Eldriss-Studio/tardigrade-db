@@ -146,3 +146,92 @@ fn test_quantization_fidelity() {
         assert!(val.is_finite(), "Restored value at index {i} is not finite");
     }
 }
+
+// ── Phase 11: SynapticBank Persistence (Repository pattern) ───────────────
+
+use half::f16;
+use tdb_core::synaptic_bank::SynapticBankEntry;
+use tdb_storage::synaptic_store::SynapticStore;
+
+/// ATDD Test 6: Store a SynapticBankEntry, load by owner, verify round-trip.
+#[test]
+fn test_synaptic_store_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = SynapticStore::open(dir.path()).unwrap();
+
+    let entry = SynapticBankEntry::new(
+        0,
+        42,
+        vec![f16::from_f32(1.0); 512], // rank=4, d_model=128 → 512 elements
+        vec![f16::from_f32(0.5); 512],
+        f16::from_f32(0.1),
+        4,
+        128,
+    );
+
+    store.append(&entry).unwrap();
+
+    let loaded = store.load_by_owner(42).unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].id, 0);
+    assert_eq!(loaded[0].owner, 42);
+    assert_eq!(loaded[0].rank, 4);
+    assert_eq!(loaded[0].d_model, 128);
+    assert_eq!(loaded[0].lora_a.len(), 512);
+    assert_eq!(loaded[0].lora_b.len(), 512);
+    assert_eq!(loaded[0].scale, f16::from_f32(0.1));
+}
+
+/// ATDD Test 7: Store for owners 1,2,1. load_by_owner(1) returns 2, (2) returns 1.
+#[test]
+fn test_synaptic_multiple_owners() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = SynapticStore::open(dir.path()).unwrap();
+
+    for (id, owner) in [(0, 1u64), (1, 2), (2, 1)] {
+        let entry = SynapticBankEntry::new(
+            id,
+            owner,
+            vec![f16::from_f32(1.0); 8],
+            vec![f16::from_f32(0.5); 8],
+            f16::from_f32(0.1),
+            2,
+            4,
+        );
+        store.append(&entry).unwrap();
+    }
+
+    let owner1 = store.load_by_owner(1).unwrap();
+    assert_eq!(owner1.len(), 2);
+
+    let owner2 = store.load_by_owner(2).unwrap();
+    assert_eq!(owner2.len(), 1);
+
+    let owner999 = store.load_by_owner(999).unwrap();
+    assert!(owner999.is_empty());
+}
+
+/// ATDD Test 8: Store entry, drop store, reopen. Load still works.
+#[test]
+fn test_synaptic_persist_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+
+    {
+        let mut store = SynapticStore::open(dir.path()).unwrap();
+        let entry = SynapticBankEntry::new(
+            0,
+            42,
+            vec![f16::from_f32(1.0); 8],
+            vec![f16::from_f32(0.5); 8],
+            f16::from_f32(0.1),
+            2,
+            4,
+        );
+        store.append(&entry).unwrap();
+    }
+
+    let store = SynapticStore::open(dir.path()).unwrap();
+    let loaded = store.load_by_owner(42).unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].id, 0);
+}
