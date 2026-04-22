@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 # tdb-python does not inherit workspace pedantic lints — PyO3 #[pymethods]
 # require pass-by-value for Python-facing args (PyReadonlyArray1 etc.),
