@@ -22,5 +22,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 tdb-engine = { workspace = true }
-pyo3 = "0.24"
+pyo3 = "0.28"
 numpy = "0.24"
