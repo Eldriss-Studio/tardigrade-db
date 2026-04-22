@@ -1,0 +1,37 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  deployments: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Run & Publish Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run criterion benchmarks
+        run: cargo bench --workspace --exclude tdb-python -- --output-format bencher 2>&1 | tee bench-output.txt
+
+      - name: Publish to GitHub Pages
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: TardigradeDB Performance
+          tool: cargo
+          output-file-path: bench-output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          comment-on-alert: true
+          alert-threshold: "150%"
+          fail-on-alert: false
+          benchmark-data-dir-path: dev/bench

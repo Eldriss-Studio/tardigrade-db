@@ -7,13 +7,16 @@ fn bench_append(c: &mut Criterion) {
     let mut pool = BlockPool::open(dir.path()).unwrap();
     let mut id = 0u64;
 
-    c.bench_function("block_pool_append", |b| {
-        b.iter(|| {
-            let cell = MemoryCellBuilder::new(id, 1, 0, vec![1.0; 128], vec![2.0; 128]).build();
-            pool.append(&cell).unwrap();
-            id += 1;
-        });
-    });
+    c.bench_function(
+        "Block pool append — Q4-compress and fsync one cell to segment (dim=128)",
+        |b| {
+            b.iter(|| {
+                let cell = MemoryCellBuilder::new(id, 1, 0, vec![1.0; 128], vec![2.0; 128]).build();
+                pool.append(&cell).unwrap();
+                id += 1;
+            });
+        },
+    );
 }
 
 fn bench_random_read(c: &mut Criterion) {
@@ -27,12 +30,15 @@ fn bench_random_read(c: &mut Criterion) {
     }
 
     let mut idx = 0u64;
-    c.bench_function("block_pool_random_read_10k", |b| {
-        b.iter(|| {
-            pool.get(idx % 10_000).unwrap();
-            idx = idx.wrapping_add(7); // pseudo-random stride
-        });
-    });
+    c.bench_function(
+        "Block pool random read — dequantize one cell from 10K on disk (dim=128)",
+        |b| {
+            b.iter(|| {
+                pool.get(idx % 10_000).unwrap();
+                idx = idx.wrapping_add(7); // pseudo-random stride
+            });
+        },
+    );
 }
 
 criterion_group!(benches, bench_append, bench_random_read);

@@ -2,10 +2,10 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use tdb_index::wal::{Wal, WalEntry};
 
 fn bench_wal_append(c: &mut Criterion) {
-    let mut group = c.benchmark_group("wal_append");
+    let mut group = c.benchmark_group("WAL append — fsync'd causal edge writes");
 
     for count in [100, 1000] {
-        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |bench, &count| {
+        group.bench_with_input(BenchmarkId::new("edges", count), &count, |bench, &count| {
             bench.iter(|| {
                 let dir = tempfile::tempdir().unwrap();
                 let mut wal = Wal::open(dir.path()).unwrap();
@@ -32,7 +32,7 @@ fn bench_wal_replay(c: &mut Criterion) {
             .unwrap();
     }
 
-    c.bench_function("wal_replay_1k", |bench| {
+    c.bench_function("WAL replay — crash recovery: read 1K edges from disk", |bench| {
         bench.iter(|| {
             let wal = Wal::open(dir.path()).unwrap();
             let entries = wal.replay().unwrap();

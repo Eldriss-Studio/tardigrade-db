@@ -2,10 +2,10 @@ use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_ma
 use tdb_storage::quantization::{DequantizeStrategy, Q4, QuantizeStrategy};
 
 fn bench_q4_quantize(c: &mut Criterion) {
-    let mut group = c.benchmark_group("q4_quantize");
+    let mut group = c.benchmark_group("Q4 quantize — compress f32 → 4-bit (GGML Q4_0)");
     for size in [64, 128, 256, 512, 1024] {
         let data: Vec<f32> = (0..size).map(|i| (i as f32 * 0.01).sin()).collect();
-        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+        group.bench_with_input(BenchmarkId::new("floats", size), &data, |b, data| {
             b.iter(|| Q4::quantize(black_box(data)));
         });
     }
@@ -13,11 +13,11 @@ fn bench_q4_quantize(c: &mut Criterion) {
 }
 
 fn bench_q4_dequantize(c: &mut Criterion) {
-    let mut group = c.benchmark_group("q4_dequantize");
+    let mut group = c.benchmark_group("Q4 dequantize — decompress 4-bit → f32");
     for size in [64, 128, 256, 512, 1024] {
         let data: Vec<f32> = (0..size).map(|i| (i as f32 * 0.01).sin()).collect();
         let quantized = Q4::quantize(&data);
-        group.bench_with_input(BenchmarkId::from_parameter(size), &quantized, |b, q| {
+        group.bench_with_input(BenchmarkId::new("floats", size), &quantized, |b, q| {
             b.iter(|| Q4::dequantize(black_box(q)));
         });
     }
@@ -25,10 +25,10 @@ fn bench_q4_dequantize(c: &mut Criterion) {
 }
 
 fn bench_q4_round_trip(c: &mut Criterion) {
-    let mut group = c.benchmark_group("q4_round_trip");
+    let mut group = c.benchmark_group("Q4 round-trip — quantize + dequantize end-to-end");
     for size in [128, 256, 512] {
         let data: Vec<f32> = (0..size).map(|i| (i as f32 * 0.01).sin()).collect();
-        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+        group.bench_with_input(BenchmarkId::new("floats", size), &data, |b, data| {
             b.iter(|| {
                 let q = Q4::quantize(black_box(data));
                 Q4::dequantize(&q)

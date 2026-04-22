@@ -2,7 +2,8 @@ use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_ma
 use tdb_index::vamana::VamanaIndex;
 
 fn bench_vamana_build(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vamana_build");
+    let mut group =
+        c.benchmark_group("Vamana index build — DiskANN-style graph construction (dim=32)");
     group.sample_size(10); // Build is expensive, fewer samples.
 
     for n in [100, 500, 1000] {
@@ -15,7 +16,7 @@ fn bench_vamana_build(c: &mut Criterion) {
             })
             .collect();
 
-        group.bench_with_input(BenchmarkId::from_parameter(n), &vectors, |bench, vectors| {
+        group.bench_with_input(BenchmarkId::new("nodes", n), &vectors, |bench, vectors| {
             bench.iter(|| {
                 let mut index = VamanaIndex::new(dim, 16);
                 for (i, vec) in vectors.iter().enumerate() {
@@ -47,9 +48,12 @@ fn bench_vamana_query(c: &mut Criterion) {
 
     let query = &vectors[500];
 
-    c.bench_function("vamana_query_1k", |bench| {
-        bench.iter(|| index.query(black_box(query), 10));
-    });
+    c.bench_function(
+        "Vamana query — greedy beam search over 1K-node graph (dim=32, top-10)",
+        |bench| {
+            bench.iter(|| index.query(black_box(query), 10));
+        },
+    );
 }
 
 criterion_group!(benches, bench_vamana_build, bench_vamana_query);
