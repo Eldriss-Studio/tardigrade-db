@@ -95,11 +95,20 @@ jobs:
         run: |
           mkdir -p target/bench-v1
           if [ -f gh-pages/dev/bench-v1/latest-full-run.json ]; then
-            PYTHONPATH=python python -m tdb_bench compare \
+            if PYTHONPATH=python python -m tdb_bench compare \
               --baseline gh-pages/dev/bench-v1/latest-full-run.json \
               --candidate target/bench-v1/full-run.json \
               --format md \
-              --output target/bench-v1/full-compare.md
+              --output target/bench-v1/full-compare.md; then
+              echo "compare generated"
+            else
+              cat > target/bench-v1/full-compare.md <<'EOF'
+              # Benchmark Comparison
+
+              Baseline comparison unavailable for this run.
+              The previous `latest-full-run.json` is not compatible with the current comparison schema yet.
+              EOF
+            fi
           else
             cat > target/bench-v1/full-compare.md <<'EOF'
             # Benchmark Comparison
@@ -117,6 +126,7 @@ jobs:
           path: target/bench-v1
 
       - name: Publish v1 benchmark summaries to gh-pages
+        if: always()
         run: |
           if [ ! -d gh-pages ]; then
             mkdir -p gh-pages
@@ -125,14 +135,21 @@ jobs:
           fi
 
           mkdir -p gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}
-          cp target/bench-v1/full-run.json gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/run.json
-          cp target/bench-v1/full-report.md gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/report.md
-          cp target/bench-v1/full-report.json gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/report.json
-          cp target/bench-v1/full-compare.md gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/compare.md
-
-          cp target/bench-v1/full-run.json gh-pages/dev/bench-v1/latest-full-run.json
-          cp target/bench-v1/full-report.md gh-pages/dev/bench-v1/latest-full-report.md
-          cp target/bench-v1/full-compare.md gh-pages/dev/bench-v1/latest-full-compare.md
+          if [ -f target/bench-v1/full-run.json ]; then
+            cp target/bench-v1/full-run.json gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/run.json
+            cp target/bench-v1/full-run.json gh-pages/dev/bench-v1/latest-full-run.json
+          fi
+          if [ -f target/bench-v1/full-report.md ]; then
+            cp target/bench-v1/full-report.md gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/report.md
+            cp target/bench-v1/full-report.md gh-pages/dev/bench-v1/latest-full-report.md
+          fi
+          if [ -f target/bench-v1/full-report.json ]; then
+            cp target/bench-v1/full-report.json gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/report.json
+          fi
+          if [ -f target/bench-v1/full-compare.md ]; then
+            cp target/bench-v1/full-compare.md gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/compare.md
+            cp target/bench-v1/full-compare.md gh-pages/dev/bench-v1/latest-full-compare.md
+          fi
 
           git -C gh-pages config user.name "github-actions[bot]"
           git -C gh-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
