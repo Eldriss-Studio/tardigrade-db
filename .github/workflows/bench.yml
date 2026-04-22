@@ -156,7 +156,7 @@ jobs:
 
       - name: Ensure benchmark latest files exist
         run: |
-          if [ ! -d gh-pages ]; then
+          if [ ! -d gh-pages/.git ]; then
             mkdir -p gh-pages
             git -C gh-pages init
             git -C gh-pages checkout -b gh-pages
@@ -165,32 +165,32 @@ jobs:
           mkdir -p gh-pages/dev/bench-v1
 
           if [ ! -f gh-pages/dev/bench-v1/latest-full-report.md ]; then
-            cat > gh-pages/dev/bench-v1/latest-full-report.md <<'EOF'
-            # Benchmark Report
-
-            No full benchmark result has been published yet.
-            Trigger the **Benchmarks** workflow (`bench.yml`) manually or wait for the scheduled run.
-            EOF
+            printf '%s\n' \
+              '# Benchmark Report' \
+              '' \
+              'No full benchmark result has been published yet.' \
+              'Trigger the **Benchmarks** workflow (`bench.yml`) manually or wait for the scheduled run.' \
+              > gh-pages/dev/bench-v1/latest-full-report.md
           fi
 
           if [ ! -f gh-pages/dev/bench-v1/latest-full-run.json ]; then
-            cat > gh-pages/dev/bench-v1/latest-full-run.json <<'EOF'
-            {
-              "run_validity": {
-                "state": "invalid",
-                "reason": "no_full_benchmark_published_yet"
-              },
-              "status_summary": {}
-            }
-            EOF
+            printf '%s\n' \
+              '{' \
+              '  "run_validity": {' \
+              '    "state": "invalid",' \
+              '    "reason": "no_full_benchmark_published_yet"' \
+              '  },' \
+              '  "status_summary": {}' \
+              '}' \
+              > gh-pages/dev/bench-v1/latest-full-run.json
           fi
 
           if [ ! -f gh-pages/dev/bench-v1/latest-full-compare.md ]; then
-            cat > gh-pages/dev/bench-v1/latest-full-compare.md <<'EOF'
-            # Benchmark Comparison
-
-            No full benchmark comparison has been published yet.
-            EOF
+            printf '%s\n' \
+              '# Benchmark Comparison' \
+              '' \
+              'No full benchmark comparison has been published yet.' \
+              > gh-pages/dev/bench-v1/latest-full-compare.md
           fi
 
           git -C gh-pages config user.name "github-actions[bot]"
