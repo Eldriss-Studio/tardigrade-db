@@ -218,24 +218,84 @@ cargo bench -p tdb-engine                             # end-to-end write/read
 | Docs | doctests | 8 | Crate-level usage examples |
 | Python | pytest | 10 | PyO3 bindings, hook ABC, HF adapter, WriteDecision |
 
-## Project Status
+## What We Built
 
-**All 11 implementation phases complete.** 117 tests passing, GPT-2 demo working.
+**All 11 implementation phases complete.** 117 tests passing, GPT-2 end-to-end demo working.
 
-| Phase | What | Tests |
-|-------|------|-------|
-| 0 — Scaffold | Cargo workspace, CI, core types | 4 |
-| 1 — Storage | Q4 quantization, segments, block pool | +9 |
-| 2 — Retrieval | NEON SIMD, INT8, SLB, brute-force | +17 |
-| 3 — Organization | Vamana graph, Trace, WAL | +13 |
-| 4 — Governance | AKL scoring, tiers, decay | +25 |
-| 5 — Integration | Engine facade, PyO3 Python bridge | +10 |
-| 6 — State Rebuild | Memento pattern on open | +5 |
-| 7 — Wire Components | SLB→Vamana→BruteForce chain, Trace+WAL | +5 |
-| 8 — Benchmarks | Criterion across all subsystems | +5 |
-| 9 — Incremental Vamana | DiskANN robust pruning | +5 |
-| 10 — LLM Hook | Python ABC + HuggingFace adapter | +5 |
-| 11 — SynapticBank | LoRA adapter persistence | +4 |
+### Storage Layer — Custom from scratch, not a wrapper
+
+- **Q4 group-wise 4-bit quantization** — Same scheme as llama.cpp's Q4_0. 4x compression vs FP32 with MSE < 0.01 on typical activations. Implemented as a Strategy pattern (`Quantizer` trait) so Q8/FP16 variants slot in without changing the storage layer.
+- **Append-only segment files** — 256MB segments with binary length-prefixed records. Magic/version header validation. `sync_data()` on every write for crash durability. Partial record detection on recovery (truncated writes are silently discarded, not propagated).
+- **Segment scanning recovery** — On open, segments are scanned to rebuild the `CellId → (segment, offset)` index. O(n) in cell count, not cell size — only the record header is read during recovery.
+- **SynapticStore** — Parallel repository for LoRA adapters (FP16), same binary conventions as the cell block pool.
+
+### Retrieval Layer — Latent-space attention, not text search
+
+- **NEON SIMD INT8 dot product** — ARM aarch64 intrinsics (`vmull_s8` → `vpadalq_s16` → `vaddvq_s32`) with scalar fallback for x86. <1% relative error vs FP32 reference.
+- **Semantic Lookaside Buffer (SLB)** — Fixed-capacity LRU cache storing keys in symmetric INT8 quantization. Exploits conversational locality — recently accessed cells are served at SIMD speed.
+- **Brute-force attention scoring** — Exhaustive `score = (q · k) / √d_k` over all indexed keys. Validated by the MemArt paper: at per-agent scale (<10K blocks), brute-force SIMD matmul outperforms ANN indexes.
+- **Three-stage retrieval chain** — SLB (hot, INT8) → Vamana (warm, graph ANN) → BruteForce (cold, exact). Chain of Responsibility pattern with deduplication by CellId.
+
+### Organization Layer — Graph index + causal memory + crash recovery
+
+- **Vamana graph index** — DiskANN-style single-layer graph with multi-seed greedy beam search. Robust pruning (angular diversity via α parameter) produces navigable graphs. Supports both batch build and incremental `insert_online`. Lazy activation: built only when cell count crosses a configurable threshold.
+- **Trace causal graph** — Directed edges (CausedBy, Follows, Contradicts, Supports) with BFS transitive ancestor traversal. When a cell is written with a parent, the causal edge is recorded.
+- **Write-Ahead Log** — Every Trace mutation is WAL-logged (with fsync) before being applied in memory. On engine open, WAL is replayed to rebuild the graph. Lenient crash recovery: partial records are discarded, not propagated.
+
+### Governance Layer — Self-curating memory
+
+- **Importance scoring (ι)** — Bounded [0, 100]. +3 on read access, +5 on write. Daily decay factor 0.995.
+- **Maturity tiers with hysteresis** — Draft → Validated (ι ≥ 65, demote < 35) → Core (ι ≥ 85, demote < 60). The 30-point hysteresis gaps prevent oscillation near boundaries. Skip-tier promotion/demotion for large importance jumps.
+- **Recency decay** — `r = exp(-Δt/30)` applied as a retrieval score multiplier. ~21-day half-life. Cells unused for a month have their relevance halved.
+
+### Engine — Facade that ties it all together
+
+- **Memento-pattern state rebuild** — On `Engine::open`, all in-memory state (retriever index, governance scores/tiers, ID counter) is reconstructed from durable sources (segments + WAL). The engine can crash at any point and recover.
+- **Governance computed before persistence** — On-disk importance and tier match the in-memory state, ensuring correct rebuild.
+- **Python bridge (PyO3)** — `tardigrade_db.Engine` class with `mem_write`, `mem_read`, `trace_ancestors`, `store_synapsis`, `load_synapsis`. Numpy arrays in, lists out.
+- **Inference hook framework** — `TardigradeHook` ABC (Template Method pattern) with `HuggingFaceHook` reference implementation. Norm-based salience heuristic, automatic KV capture/retrieval.
+
+### Proven with GPT-2
+
+The end-to-end demo captures hidden states from GPT-2 inference on *"The capital of France is"*, persists them, then retrieves them when querying with *"What is the main city of France"* — proving that semantically related prompts find each other through latent-space attention scoring.
+
+---
+
+## Roadmap
+
+### Done
+
+- [x] Custom binary storage with Q4 quantization and crash-safe segments
+- [x] NEON SIMD INT8 dot product (ARM) with scalar fallback
+- [x] Semantic Lookaside Buffer (LRU, INT8 quantized)
+- [x] Brute-force latent-space attention retrieval
+- [x] Vamana graph index with DiskANN robust pruning (batch + incremental)
+- [x] Trace causal graph with WAL durability
+- [x] Adaptive Knowledge Lifecycle (importance, tiers, decay)
+- [x] Engine facade with Memento-pattern crash recovery
+- [x] PyO3 Python bindings with numpy interop
+- [x] HuggingFace inference hook (ABC + reference implementation)
+- [x] SynapticBank (LoRA adapter) persistence
+- [x] Criterion benchmarks across all subsystems
+- [x] GPT-2 end-to-end demo
+- [x] 117 tests (107 Rust + 10 Python)
+
+### Next up
+
+- [ ] **Real KV cache injection** — `torch.nn.Module` wrapper that modifies attention KV cache in-place with retrieved cells. Currently we capture and retrieve, but don't inject back into the model.
+- [ ] **Batch write / group commit** — Buffer N writes, single fsync. Current per-write fsync (~5ms) limits throughput to ~200 writes/sec.
+- [ ] **PyPI packaging** — `pip install tardigrade-db` via maturin publish.
+- [ ] **Release-mode benchmark numbers** — Run `cargo bench`, publish actual performance data vs. spec targets.
+- [ ] **Background governance sweep** — Tokio timer task for autonomous AKL decay/eviction instead of manual `advance_days()`.
+
+### Future
+
+- [ ] **vLLM / SGLang integration** — Adapter that hooks into their paged KV cache manager for production serving.
+- [ ] **CUDA GPU DMA kernels** — Direct NVMe→GPU transfers via cuFile/GDS for GPU-resident inference.
+- [ ] **Disk-aware Vamana** — PageANN-style page-node alignment for billion-scale cold storage on NVMe.
+- [ ] **Multi-model dimension support** — Handle different models (different d_k) in one engine instance.
+- [ ] **RelayCaching** — Cross-agent KV cache reuse for multi-agent handoffs.
+- [ ] **Decoupled position encoding** — Safe injection of historical KV blocks with position ID remapping.
 
 See `docs/technical/tdd.md` for the full technical design document and `docs/technical/spec.md` for the condensed specification.
 
