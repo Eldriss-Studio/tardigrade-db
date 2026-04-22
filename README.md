@@ -120,6 +120,10 @@ Rustdoc is built and deployed to GitHub Pages on every push to `main`:
 
 **[eldriss-studio.github.io/tardigrade-db](https://eldriss-studio.github.io/tardigrade-db)**
 
+Benchmark result pages:
+- Criterion dashboard: **[.../dev/bench/index.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench/index.html)**
+- Benchmark v1 narrative + latest links: **[.../dev/bench-v1/index.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html)**
+
 To build locally: `just doc` (output in `target/doc/`).
 
 ### CI

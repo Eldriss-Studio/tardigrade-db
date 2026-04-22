@@ -133,25 +133,24 @@ jobs:
         run: |
           mkdir -p target/bench-v1
           if [ ! -f target/bench-v1/smoke-report.json ]; then
-            cat > target/bench-v1/smoke-report.json <<'EOF'
-            {
-              "run_validity": {
-                "state": "invalid",
-                "reason": "missing_smoke_report_json"
-              },
-              "status_summary": {
-                "failed": 1
-              }
-            }
-            EOF
+            printf '%s\n' \
+              '{' \
+              '  "run_validity": {' \
+              '    "state": "invalid",' \
+              '    "reason": "missing_smoke_report_json"' \
+              '  },' \
+              '  "status_summary": {' \
+              '    "failed": 1' \
+              '  }' \
+              '}' > target/bench-v1/smoke-report.json
           fi
           if [ ! -f target/bench-v1/smoke-report.md ]; then
-            cat > target/bench-v1/smoke-report.md <<'EOF'
-            # Benchmark Report
-
-            - run_validity: `invalid`
-            - run_validity_reason: `missing_smoke_report_md`
-            EOF
+            printf '%s\n' \
+              '# Benchmark Report' \
+              '' \
+              '- run_validity: `invalid`' \
+              '- run_validity_reason: `missing_smoke_report_md`' \
+              > target/bench-v1/smoke-report.md
           fi
 
       - name: Enforce smoke benchmark quality gates
@@ -196,7 +195,10 @@ jobs:
       - name: Add redirect to tdb_engine
         run: echo '<meta http-equiv="refresh" content="0; url=tdb_engine/index.html">' > target/doc/index.html
       - name: Include benchmark guide page
-        run: mkdir -p target/doc/dev/bench && cp docs/bench/index.html target/doc/dev/bench/index.html
+        run: |
+          mkdir -p target/doc/dev/bench target/doc/dev/bench-v1
+          cp docs/bench/index.html target/doc/dev/bench/index.html
+          cp docs/bench/v1.html target/doc/dev/bench-v1/index.html
       - name: Deploy to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4
         with:

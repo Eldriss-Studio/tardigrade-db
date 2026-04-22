@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TardigradeDB — Benchmark V1 Narrative</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --good: #3fb950;
+      --warn: #d29922;
+      --bad: #f85149;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .wrap {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.8rem;
+    }
+    .sub {
+      color: var(--muted);
+      margin: 0.4rem 0 1.5rem;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+      margin: 0.9rem 0;
+    }
+    h2 {
+      margin: 1.4rem 0 0.6rem;
+      font-size: 1.1rem;
+      color: var(--accent);
+    }
+    ul { margin: 0.4rem 0 0.4rem 1.2rem; }
+    code {
+      background: #11151c;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.05rem 0.3rem;
+      font-size: 0.9em;
+    }
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 0.1rem 0.55rem;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      border: 1px solid var(--border);
+    }
+    .good { color: var(--good); border-color: var(--good); }
+    .warn { color: var(--warn); border-color: var(--warn); }
+    .bad { color: var(--bad); border-color: var(--bad); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.6rem;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 0.5rem 0.3rem;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; font-size: 0.92rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Benchmark V1 Narrative</h1>
+    <p class="sub">
+      Transparent, comparable memory benchmark results for TardigradeDB vs external systems.
+      This page explains what the files mean and how to interpret them safely.
+    </p>
+
+    <div class="panel">
+      <strong>Latest files:</strong>
+      <ul>
+        <li><a href="../bench-v1/latest-full-report.md">Latest full report (Markdown)</a></li>
+        <li><a href="../bench-v1/latest-full-run.json">Latest full run (JSON raw data)</a></li>
+        <li><a href="../bench-v1/latest-full-compare.md">Latest full comparison vs previous baseline</a></li>
+      </ul>
+      <strong>Per-run snapshots:</strong>
+      <code>dev/bench-v1/runs/&lt;run_id&gt;/</code> in GitHub Pages.
+    </div>
+
+    <h2>What This Benchmark Measures</h2>
+    <div class="panel">
+      <ul>
+        <li><strong>Quality:</strong> correctness score over dataset items.</li>
+        <li><strong>Reliability:</strong> how many items are <code>ok</code>, <code>skipped</code>, or <code>failed</code>.</li>
+        <li><strong>Fairness:</strong> shared evaluator config (judge/answerer/top-k/prompts) across systems per run.</li>
+        <li><strong>Transparency:</strong> raw per-item evidence, judgments, and manifest metadata are retained in JSON.</li>
+      </ul>
+    </div>
+
+    <h2>How To Interpret <code>run_validity</code></h2>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Meaning</th>
+            <th>How to use result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge good">comparable</span></td>
+            <td>All systems produced successful outputs for the evaluated items.</td>
+            <td>Safe to compare score/latency head-to-head.</td>
+          </tr>
+          <tr>
+            <td><span class="badge warn">degraded</span></td>
+            <td>At least one system had partial skips/failures.</td>
+            <td>Use with caution; include reliability caveat in any claim.</td>
+          </tr>
+          <tr>
+            <td><span class="badge bad">invalid</span></td>
+            <td>At least one system had no successful results.</td>
+            <td>Do not claim quality winner; treat as infra or compatibility failure.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>CI Publication Model</h2>
+    <div class="panel">
+      <ul>
+        <li><strong>PR CI:</strong> smoke profile (10-minute cap) with quality gates and artifact upload.</li>
+        <li><strong>Scheduled benchmark workflow:</strong> full matrix artifacts + GitHub Pages publish.</li>
+        <li><strong>Quality gate policy:</strong> fail on <code>run_validity=invalid</code> or high non-ok ratio.</li>
+      </ul>
+    </div>
+
+    <h2>Known Limits</h2>
+    <div class="panel">
+      <ul>
+        <li>When no API key is available, evaluator falls back to deterministic lexical scoring.</li>
+        <li>External services may be unavailable; those outcomes are explicit (<code>skipped</code>/<code>failed</code>), never dropped.</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
+
