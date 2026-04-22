@@ -8,6 +8,12 @@ TardigradeDB is not a traditional database with tables and indexes, nor a vector
 
 > *From "storage as a service" to "storage as cognition."*
 
+## Quick Links
+
+- Experiments log: [docs/experiments/README.md](docs/experiments/README.md)
+- Benchmark narrative: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html)
+- Observed benchmark results so far: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.md](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.md)
+
 ## Why TardigradeDB?
 
 Current agent memory systems (Mem0, Letta, Zep) rely on text retrieval — tokenize, embed, search, detokenize. This creates a lossy round-trip through representations the model never asked for. TardigradeDB eliminates that entirely by persisting the model's own internal state and restoring it directly into the attention stack.
