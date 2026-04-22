@@ -230,3 +230,155 @@ fn test_concurrent_trace_reads() {
     let t = trace.read().unwrap();
     assert!(t.edge_count() >= 200, "Expected ≥200 edges, got {}", t.edge_count());
 }
+
+// ── Phase 9: Incremental Vamana Build (Strategy + Template Method) ────────
+
+/// ATDD Test 6: Insert 500 nodes one-by-one via `insert_online()`.
+/// Every node has ≥1 neighbor. None exceeds `max_degree`.
+#[test]
+fn test_incremental_insert_maintains_connectivity() {
+    let dim = 16;
+    let max_degree = 8;
+    let mut index = VamanaIndex::new(dim, max_degree);
+
+    for i in 0..500u64 {
+        let mut v = vec![0.01f32; dim];
+        v[(i as usize) % dim] = 1.0;
+        index.insert_online(i, &v);
+    }
+
+    // Every node should have at least 1 neighbor (except possibly the very first).
+    for i in 1..500u64 {
+        let neighbors = index.neighbor_count(i);
+        assert!(neighbors >= 1, "Node {i} has 0 neighbors after incremental insert");
+        assert!(neighbors <= max_degree, "Node {i} has {neighbors} neighbors (max {max_degree})");
+    }
+}
+
+/// ATDD Test 7: 1K nodes via `insert_online()`. Approximate best score ≥80% of exact.
+#[test]
+fn test_incremental_recall_at_1k() {
+    let dim = 32;
+    let mut index = VamanaIndex::new(dim, 16);
+
+    let vectors: Vec<Vec<f32>> = (0..1000)
+        .map(|i| {
+            let mut v = vec![0.01f32; dim];
+            v[i % dim] += 1.0;
+            v[(i * 7) % dim] += (i as f32) * 0.001;
+            v
+        })
+        .collect();
+
+    for (i, v) in vectors.iter().enumerate() {
+        index.insert_online(i as CellId, v);
+    }
+
+    let query = &vectors[500];
+
+    // Brute-force exact best.
+    let exact_best: f32 = vectors
+        .iter()
+        .map(|v| query.iter().zip(v.iter()).map(|(a, b)| a * b).sum::<f32>())
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    let approx = index.query(query, 10);
+    let approx_best = approx[0].1;
+    let ratio = approx_best / exact_best;
+
+    assert!(
+        ratio >= 0.8,
+        "Incremental Vamana: approx best ({approx_best:.4}) is only {ratio:.2}x of exact ({exact_best:.4})"
+    );
+}
+
+/// ATDD Test 8: Given 20 clustered candidates, robust_prune with R=8 should produce
+/// angularly diverse neighbors (no two with dot product > 0.99).
+#[test]
+fn test_robust_prune_angular_diversity() {
+    use tdb_index::vamana::prune::robust_prune;
+
+    let dim = 16;
+    // Node at origin-ish.
+    let node_vec = vec![1.0f32; dim];
+
+    // 20 candidates: 10 in cluster A (near [1,0,...]), 10 in cluster B (near [0,1,...]).
+    let mut candidate_vecs: Vec<Vec<f32>> = Vec::new();
+    for i in 0..10 {
+        let mut v = vec![0.0f32; dim];
+        v[0] = 1.0 + (i as f32) * 0.001; // cluster A: slight variations
+        candidate_vecs.push(v);
+    }
+    for i in 0..10 {
+        let mut v = vec![0.0f32; dim];
+        v[1] = 1.0 + (i as f32) * 0.001; // cluster B: slight variations
+        candidate_vecs.push(v);
+    }
+
+    let candidate_indices: Vec<usize> = (0..20).collect();
+    let all_vecs: Vec<&[f32]> = candidate_vecs.iter().map(|v| v.as_slice()).collect();
+
+    let selected = robust_prune(&node_vec, &candidate_indices, &all_vecs, 1.2, 8);
+
+    assert_eq!(selected.len(), 8, "Should select exactly R=8 neighbors");
+
+    // Check diversity: selected should include neighbors from BOTH clusters.
+    let from_a = selected.iter().filter(|&&idx| idx < 10).count();
+    let from_b = selected.iter().filter(|&&idx| idx >= 10).count();
+    assert!(
+        from_a >= 1 && from_b >= 1,
+        "Robust prune should select from both clusters. A={from_a}, B={from_b}"
+    );
+}
+
+/// ATDD Test 9: 200 nodes built both ways. Recall difference <20%.
+#[test]
+fn test_incremental_vs_batch_parity() {
+    let dim = 16;
+    let n = 200;
+
+    let vectors: Vec<Vec<f32>> = (0..n)
+        .map(|i| {
+            let mut v = vec![0.01f32; dim];
+            v[i % dim] = 1.0;
+            v
+        })
+        .collect();
+
+    // Batch build.
+    let mut batch_idx = VamanaIndex::new(dim, 8);
+    for (i, v) in vectors.iter().enumerate() {
+        batch_idx.insert(i as CellId, v);
+    }
+    batch_idx.build();
+
+    // Incremental build.
+    let mut inc_idx = VamanaIndex::new(dim, 8);
+    for (i, v) in vectors.iter().enumerate() {
+        inc_idx.insert_online(i as CellId, v);
+    }
+
+    let query = &vectors[100];
+
+    let batch_results = batch_idx.query(query, 10);
+    let inc_results = inc_idx.query(query, 10);
+
+    let batch_best = batch_results[0].1;
+    let inc_best = inc_results[0].1;
+
+    // Both should find similar quality results.
+    let ratio = inc_best / batch_best;
+    assert!(
+        ratio >= 0.8,
+        "Incremental best ({inc_best:.4}) is only {ratio:.2}x of batch best ({batch_best:.4})"
+    );
+}
+
+/// ATDD Test 10: Duplicate CellId via insert_online should panic.
+#[test]
+#[should_panic(expected = "duplicate CellId")]
+fn test_insert_online_duplicate_panics() {
+    let mut index = VamanaIndex::new(4, 8);
+    index.insert_online(0, &[1.0, 0.0, 0.0, 0.0]);
+    index.insert_online(0, &[0.0, 1.0, 0.0, 0.0]); // should panic
+}

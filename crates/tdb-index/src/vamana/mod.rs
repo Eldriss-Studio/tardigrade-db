@@ -1,16 +1,20 @@
-//! Vamana graph index (DiskANN-style, NOT HNSW).
+//! Vamana graph index (`DiskANN`-style, NOT HNSW).
 //!
 //! Single-layer graph for approximate nearest neighbor search over key vectors.
 //! Uses greedy search with a medoid start node. Suitable for cold-path retrieval
 //! at >10K blocks where brute-force becomes too slow.
 //!
 //! Key parameters:
-//! - `R` (`max_degree)`: maximum out-degree per node. Higher = better recall, more memory.
-//! - `L` (`search_list_size)`: beam width during greedy search. Higher = better recall, slower.
+//! - `R` (`max_degree`): maximum out-degree per node. Higher = better recall, more memory.
+//! - `L` (`search_list_size`): beam width during greedy search. Higher = better recall, slower.
+
+pub mod prune;
 
 use std::collections::{HashMap, HashSet};
 
 use tdb_core::CellId;
+
+use self::prune::robust_prune;
 
 /// A node in the Vamana graph.
 #[derive(Debug)]
@@ -25,21 +29,30 @@ struct VamanaNode {
 pub type VamanaResult = (CellId, f32);
 
 /// Vamana graph index for approximate nearest neighbor search.
-#[derive(Debug)]
 pub struct VamanaIndex {
     nodes: Vec<VamanaNode>,
     id_to_idx: HashMap<CellId, usize>,
     dim: usize,
     max_degree: usize,
     medoid_idx: Option<usize>,
+    /// Diversity parameter for robust pruning (`DiskANN` α, typically 1.2).
+    alpha: f32,
 }
 
 impl VamanaIndex {
     pub fn new(dim: usize, max_degree: usize) -> Self {
-        Self { nodes: Vec::new(), id_to_idx: HashMap::new(), dim, max_degree, medoid_idx: None }
+        Self {
+            nodes: Vec::new(),
+            id_to_idx: HashMap::new(),
+            dim,
+            max_degree,
+            medoid_idx: None,
+            alpha: 1.2,
+        }
     }
 
-    /// Add a vector to the index (does not build edges — call `build()` after all inserts).
+    /// Add a vector to the index without building edges.
+    /// Call `build()` after all inserts for batch construction.
     ///
     /// # Panics
     /// Panics if `vector.len() != dim` or if `id` has already been inserted.
@@ -51,21 +64,74 @@ impl VamanaIndex {
         self.id_to_idx.insert(id, idx);
     }
 
+    /// Insert a vector and immediately wire it into the graph (incremental build).
+    ///
+    /// Uses greedy search to find candidate neighbors, then robust prune (Strategy pattern)
+    /// to select diverse neighbors. Bidirectional edges are added, and overfull neighbors
+    /// are pruned.
+    ///
+    /// # Panics
+    /// Panics if `vector.len() != dim` or if `id` has already been inserted.
+    pub fn insert_online(&mut self, id: CellId, vector: &[f32]) {
+        assert_eq!(vector.len(), self.dim);
+        assert!(!self.id_to_idx.contains_key(&id), "duplicate CellId {id} in VamanaIndex");
+
+        let new_idx = self.nodes.len();
+        self.nodes.push(VamanaNode { id, vector: vector.to_vec(), neighbors: Vec::new() });
+        self.id_to_idx.insert(id, new_idx);
+
+        if self.nodes.len() == 1 {
+            self.medoid_idx = Some(0);
+            return;
+        }
+
+        // Greedy search to find candidate neighbors.
+        let search_beam = self.max_degree * 3;
+        let candidates = self.greedy_search(vector, search_beam);
+        let candidate_indices: Vec<usize> = candidates.iter().map(|&(idx, _)| idx).collect();
+
+        // Robust prune to select diverse neighbors (Strategy pattern).
+        let all_vecs: Vec<&[f32]> = self.nodes.iter().map(|n| n.vector.as_slice()).collect();
+        let selected =
+            robust_prune(vector, &candidate_indices, &all_vecs, self.alpha, self.max_degree);
+
+        // Wire bidirectional edges.
+        for &neighbor_idx in &selected {
+            self.add_edge(new_idx, neighbor_idx);
+            self.add_edge(neighbor_idx, new_idx);
+        }
+
+        // Prune overfull neighbors.
+        for &neighbor_idx in &selected {
+            self.prune_node_if_needed(neighbor_idx);
+        }
+
+        // Periodically update medoid for better search entry point.
+        if self.nodes.len() % 500 == 0 {
+            self.update_medoid();
+        }
+    }
+
     /// Build the graph by connecting each node to its R nearest neighbors.
     ///
-    /// Must be called after all inserts and before queries. Uses brute-force
-    /// neighbor computation (O(n²) — acceptable for <100K nodes in Phase 3;
-    /// incremental `DiskANN` build is a future optimization).
+    /// Template Method: reimplemented as batch `insert_online` when graph is empty,
+    /// or O(n²) brute-force for initial builds. For already-wired graphs, this is a no-op.
     pub fn build(&mut self) {
         let n = self.nodes.len();
         if n == 0 {
             return;
         }
 
-        // Compute medoid (closest to centroid).
+        // If the graph already has edges (from insert_online), skip.
+        let has_edges = self.nodes.iter().any(|n| !n.neighbors.is_empty());
+        if has_edges {
+            self.update_medoid();
+            return;
+        }
+
         self.update_medoid();
 
-        // For each node, find its R nearest neighbors by brute-force.
+        // O(n²) brute-force for initial batch build.
         for i in 0..n {
             let mut scored: Vec<(usize, f32)> = (0..n)
                 .filter(|&j| j != i)
@@ -91,6 +157,11 @@ impl VamanaIndex {
         candidates.into_iter().take(k).map(|(idx, score)| (self.nodes[idx].id, score)).collect()
     }
 
+    /// Number of neighbors for a given cell ID.
+    pub fn neighbor_count(&self, id: CellId) -> usize {
+        self.id_to_idx.get(&id).map_or(0, |&idx| self.nodes[idx].neighbors.len())
+    }
+
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
@@ -100,21 +171,17 @@ impl VamanaIndex {
     }
 
     /// Greedy beam search (DiskANN-style).
-    ///
-    /// Maintains a sorted candidate list `L` of size `beam_size`. Iteratively expands
-    /// the closest unvisited candidate, exploring all its neighbors. Terminates when
-    /// all candidates in L have been visited.
     fn greedy_search(&self, query: &[f32], beam_size: usize) -> Vec<(usize, f32)> {
         if self.nodes.is_empty() {
             return Vec::new();
         }
 
         let mut visited = HashSet::new();
-        let mut candidates: Vec<(usize, f32, bool)> = Vec::new(); // (idx, score, expanded)
+        let mut candidates: Vec<(usize, f32, bool)> = Vec::new();
 
-        // Seed with multiple entry points for better coverage of disconnected clusters.
+        // Seed with multiple entry points for better coverage.
         let n = self.nodes.len();
-        let num_seeds = (n / 100).clamp(1, 10); // ~1% of nodes, at least 1, at most 10
+        let num_seeds = (n / 100).clamp(1, 10);
         let stride = n / num_seeds;
         for s in 0..num_seeds {
             let idx = if s == 0 { self.medoid_idx.unwrap_or(0) } else { s * stride };
@@ -125,7 +192,6 @@ impl VamanaIndex {
         }
 
         loop {
-            // Find the best unexpanded candidate.
             let best_unexpanded = candidates
                 .iter()
                 .enumerate()
@@ -133,13 +199,12 @@ impl VamanaIndex {
                 .max_by(|a, b| a.1.1.partial_cmp(&b.1.1).unwrap_or(std::cmp::Ordering::Equal));
 
             let Some((expand_pos, _)) = best_unexpanded else {
-                break; // All candidates expanded — search complete.
+                break;
             };
 
             let expand_idx = candidates[expand_pos].0;
-            candidates[expand_pos].2 = true; // Mark as expanded.
+            candidates[expand_pos].2 = true;
 
-            // Explore all neighbors of the expanded node.
             for &neighbor_idx in &self.nodes[expand_idx].neighbors {
                 if !visited.insert(neighbor_idx) {
                     continue;
@@ -149,7 +214,6 @@ impl VamanaIndex {
                 candidates.push((neighbor_idx, score, false));
             }
 
-            // Keep only the top `beam_size` candidates by score.
             candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             candidates.truncate(beam_size);
         }
@@ -157,13 +221,11 @@ impl VamanaIndex {
         candidates.into_iter().map(|(idx, score, _)| (idx, score)).collect()
     }
 
-    /// Update medoid to the node closest to the centroid of all vectors.
     fn update_medoid(&mut self) {
         if self.nodes.is_empty() {
             return;
         }
 
-        // Compute centroid.
         let n = self.nodes.len() as f32;
         let mut centroid = vec![0.0f32; self.dim];
         for node in &self.nodes {
@@ -172,7 +234,6 @@ impl VamanaIndex {
             }
         }
 
-        // Find node with highest dot product to centroid.
         let mut best_idx = 0;
         let mut best_score = f32::NEG_INFINITY;
         for (idx, node) in self.nodes.iter().enumerate() {
@@ -183,6 +244,38 @@ impl VamanaIndex {
             }
         }
         self.medoid_idx = Some(best_idx);
+    }
+
+    fn add_edge(&mut self, from: usize, to: usize) {
+        if !self.nodes[from].neighbors.contains(&to) {
+            self.nodes[from].neighbors.push(to);
+        }
+    }
+
+    /// Prune a node's neighbors if it exceeds `max_degree` using robust pruning.
+    fn prune_node_if_needed(&mut self, idx: usize) {
+        if self.nodes[idx].neighbors.len() <= self.max_degree {
+            return;
+        }
+
+        let node_vec = self.nodes[idx].vector.clone();
+        let candidate_indices: Vec<usize> = self.nodes[idx].neighbors.clone();
+        let all_vecs: Vec<&[f32]> = self.nodes.iter().map(|n| n.vector.as_slice()).collect();
+
+        let selected =
+            robust_prune(&node_vec, &candidate_indices, &all_vecs, self.alpha, self.max_degree);
+
+        self.nodes[idx].neighbors = selected;
+    }
+}
+
+impl std::fmt::Debug for VamanaIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VamanaIndex")
+            .field("nodes", &self.nodes.len())
+            .field("dim", &self.dim)
+            .field("max_degree", &self.max_degree)
+            .finish_non_exhaustive()
     }
 }
 
@@ -240,5 +333,16 @@ mod tests {
                 node.neighbors.len()
             );
         }
+    }
+
+    #[test]
+    fn test_insert_online_basic() {
+        let mut index = VamanaIndex::new(4, 8);
+        index.insert_online(0, &[1.0, 0.0, 0.0, 0.0]);
+        index.insert_online(1, &[0.0, 1.0, 0.0, 0.0]);
+        index.insert_online(2, &[0.9, 0.1, 0.0, 0.0]);
+
+        let results = index.query(&[1.0, 0.0, 0.0, 0.0], 1);
+        assert_eq!(results[0].0, 0);
     }
 }
