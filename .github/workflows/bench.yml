@@ -1,6 +1,8 @@
 name: Benchmarks
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: "0 3 * * 1"  # weekly Monday 3am UTC
   workflow_dispatch:       # manual: gh workflow run bench.yml
@@ -16,6 +18,7 @@ jobs:
   criterion:
     name: Criterion Trend Publish
     runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -135,6 +138,65 @@ jobs:
           git -C gh-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C gh-pages add dev/bench-v1
           git -C gh-pages commit -m "bench-v1 nightly ${GITHUB_RUN_ID}" || true
+          git -C gh-pages push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git HEAD:gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  bench-v1-pages-bootstrap:
+    name: Bench V1 Pages Bootstrap
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: gh-pages
+
+      - name: Ensure benchmark latest files exist
+        run: |
+          if [ ! -d gh-pages ]; then
+            mkdir -p gh-pages
+            git -C gh-pages init
+            git -C gh-pages checkout -b gh-pages
+          fi
+
+          mkdir -p gh-pages/dev/bench-v1
+
+          if [ ! -f gh-pages/dev/bench-v1/latest-full-report.md ]; then
+            cat > gh-pages/dev/bench-v1/latest-full-report.md <<'EOF'
+            # Benchmark Report
+
+            No full benchmark result has been published yet.
+            Trigger the **Benchmarks** workflow (`bench.yml`) manually or wait for the scheduled run.
+            EOF
+          fi
+
+          if [ ! -f gh-pages/dev/bench-v1/latest-full-run.json ]; then
+            cat > gh-pages/dev/bench-v1/latest-full-run.json <<'EOF'
+            {
+              "run_validity": {
+                "state": "invalid",
+                "reason": "no_full_benchmark_published_yet"
+              },
+              "status_summary": {}
+            }
+            EOF
+          fi
+
+          if [ ! -f gh-pages/dev/bench-v1/latest-full-compare.md ]; then
+            cat > gh-pages/dev/bench-v1/latest-full-compare.md <<'EOF'
+            # Benchmark Comparison
+
+            No full benchmark comparison has been published yet.
+            EOF
+          fi
+
+          git -C gh-pages config user.name "github-actions[bot]"
+          git -C gh-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C gh-pages add dev/bench-v1/latest-full-report.md dev/bench-v1/latest-full-run.json dev/bench-v1/latest-full-compare.md
+          git -C gh-pages commit -m "bench-v1 bootstrap latest files for ${GITHUB_SHA}" || true
           git -C gh-pages push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git HEAD:gh-pages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

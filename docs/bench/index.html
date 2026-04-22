@@ -23,6 +23,27 @@
       line-height: 1.6;
     }
     .container { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+    .topnav {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .topnav a {
+      display: inline-block;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: 999px;
+      padding: 0.25rem 0.65rem;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .topnav a:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
     h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
     .subtitle { color: var(--text-muted); margin-bottom: 2rem; font-size: 0.95rem; }
     .subtitle a { color: var(--accent); text-decoration: none; }
@@ -113,6 +134,13 @@
 </head>
 <body>
   <div class="container">
+    <nav class="topnav" aria-label="Benchmark navigation">
+      <a href="../bench/index.html">Criterion Dashboard</a>
+      <a href="../bench-v1/index.html">Benchmark V1 Narrative</a>
+      <a href="../../tdb_engine/index.html">API Docs</a>
+      <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+    </nav>
+
     <h1>TardigradeDB — Performance Dashboard</h1>
     <p class="subtitle">
       Criterion benchmarks tracked over time.
