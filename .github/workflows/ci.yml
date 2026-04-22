@@ -52,6 +52,39 @@ jobs:
       - name: Run doctests
         run: cargo test --doc --workspace --exclude tdb-python
 
+  bench-smoke:
+    name: Bench V1 Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+      - name: Run smoke benchmark
+        run: |
+          PYTHONPATH=python python -m tdb_bench run \
+            --mode smoke \
+            --config python/tdb_bench/config/default.json \
+            --output target/bench-v1/smoke-run.json
+      - name: Generate smoke reports
+        run: |
+          PYTHONPATH=python python -m tdb_bench report \
+            --input target/bench-v1/smoke-run.json \
+            --format md \
+            --output target/bench-v1/smoke-report.md
+          PYTHONPATH=python python -m tdb_bench report \
+            --input target/bench-v1/smoke-run.json \
+            --format json \
+            --output target/bench-v1/smoke-report.json
+      - name: Upload smoke artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-v1-smoke
+          path: target/bench-v1
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -86,14 +119,10 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
     env:
       RUSTDOCFLAGS: -Dwarnings
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -102,11 +131,9 @@ jobs:
         run: cargo doc --workspace --no-deps --document-private-items --exclude tdb-python
       - name: Add redirect to tdb_engine
         run: echo '<meta http-equiv="refresh" content="0; url=tdb_engine/index.html">' > target/doc/index.html
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Deploy to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: target/doc
-      - name: Deploy to GitHub Pages
-        id: deploy
-        uses: actions/deploy-pages@v4
-
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/doc
+          keep_files: true
