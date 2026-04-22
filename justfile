@@ -15,7 +15,7 @@ fmt-fix:
 
 # Run clippy lints
 lint:
-    cargo clippy --workspace --all-targets -- -D warnings
+    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo clippy --workspace --all-targets -- -D warnings
 
 # Run cargo-deny checks (license, advisory, bans)
 deny:
@@ -29,15 +29,15 @@ typos:
 
 # Run all tests
 test:
-    cargo nextest run --workspace
+    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo nextest run --workspace
 
 # Run tests with CI profile (retries, longer timeouts)
 test-ci:
-    cargo nextest run --workspace --profile ci
+    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo nextest run --workspace --profile ci
 
 # Run tests for a specific crate
 test-crate crate:
-    cargo nextest run -p {{crate}}
+    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo nextest run -p {{crate}}
 
 # === Benchmarks ===
 
@@ -91,5 +91,5 @@ setup:
 # === CI-local ===
 
 # Run the full CI check locally (same checks as GitHub CI)
-ci: fmt lint typos test deny
+ci: fmt lint typos test deny doc
     @echo "All CI checks passed."
