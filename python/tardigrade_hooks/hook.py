@@ -65,28 +65,28 @@ class TardigradeHook(ABC):
     """
 
     @abstractmethod
-    def on_generate(
-        self, layer: int, hidden_states: np.ndarray
-    ) -> WriteDecision:
+    def on_generate(self, layer: int, **kwargs) -> WriteDecision:
         """Called during forward pass to decide whether to persist KV.
 
         Args:
             layer: Transformer layer index.
-            hidden_states: Hidden states tensor (shape varies by model).
+            **kwargs: Model-specific tensors. Implementations receive either:
+                - hidden_states: Raw hidden states (legacy, HuggingFaceHook).
+                - past_key_values: Real KV cache (preferred, HuggingFaceKVHook).
 
         Returns:
             WriteDecision indicating whether to write, with salience and optional parent.
         """
 
     @abstractmethod
-    def on_prefill(
-        self, layer: int, query_states: np.ndarray
-    ) -> list[MemoryCellHandle]:
+    def on_prefill(self, layer: int, **kwargs) -> list[MemoryCellHandle]:
         """Called during prefill to inject retrieved KV into the attention cache.
 
         Args:
             layer: Transformer layer index.
-            query_states: Query projection tensor (shape varies by model).
+            **kwargs: Model-specific tensors. Implementations receive either:
+                - query_states: Raw hidden states (legacy).
+                - past_key_values: Real KV cache (preferred).
 
         Returns:
             List of MemoryCellHandle objects to inject as additional KV cache entries.

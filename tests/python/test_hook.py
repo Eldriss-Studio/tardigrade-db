@@ -27,7 +27,7 @@ def test_hook_abc_enforced():
     """Subclass TardigradeHook without implementing on_generate → TypeError."""
 
     class IncompleteHook(TardigradeHook):
-        def on_prefill(self, layer, query_states):
+        def on_prefill(self, layer, **kwargs):
             return []
 
         # Missing on_generate

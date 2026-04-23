@@ -116,6 +116,8 @@ class MemoryInjector(nn.Module):
         pads with zero-valued KV entries to maintain uniform cache depth
         (required by models like GPT-2).
 
+        Supports both legacy single-token handles and dual-store KV payloads.
+
         Public for testing — allows inspection of cache contents before forward.
 
         Returns:
@@ -127,31 +129,57 @@ class MemoryInjector(nn.Module):
         if not handles_by_layer:
             return None
 
-        # Find the max number of handles at any layer (= cache seq_len).
-        max_handles = max(len(h) for h in handles_by_layer.values())
+        # Detect if handles are dual-store (full KV payload) or legacy (single token).
+        kv_dim = self.num_heads * self.head_dim
+        sample_handle = next(iter(next(iter(handles_by_layer.values()))))
+        is_dual = len(sample_handle.value) > kv_dim
 
-        # Pad layers without handles using zero-valued entries.
-        # This ensures uniform cache depth across all layers.
-        d_model = self.num_heads * self.head_dim
-        zero_handle = MemoryCellHandle(
-            cell_id=0, owner=self.owner, layer=0, score=0.0,
-            key=np.zeros(d_model, dtype=np.float32),
-            value=np.zeros(d_model, dtype=np.float32),
-        )
+        if is_dual:
+            # Dual-store: each handle contains full per-token K+V.
+            # Figure out the seq length from the payload, then pad missing
+            # layers with zeros BEFORE building the cache for uniform depth.
+            payload_len = len(sample_handle.value)
+            tokens_per_handle = payload_len // (2 * kv_dim)
 
-        padded_by_layer: dict[int, list[MemoryCellHandle]] = {}
-        for layer_idx in range(self.num_layers):
-            layer_handles = handles_by_layer.get(layer_idx, [])
-            # Pad to max_handles length with zeros.
-            padding = [zero_handle] * (max_handles - len(layer_handles))
-            padded_by_layer[layer_idx] = layer_handles + padding
+            # Create zero-payload handles for missing layers.
+            zero_payload = np.zeros(payload_len, dtype=np.float32)
+            zero_key = np.zeros(kv_dim, dtype=np.float32)
+            zero_handle = MemoryCellHandle(
+                cell_id=0, owner=self.owner, layer=0, score=0.0,
+                key=zero_key, value=zero_payload,
+            )
 
-        cache = build_injection_cache(
-            handles_by_layer=padded_by_layer,
-            num_heads=self.num_heads,
-            head_dim=self.head_dim,
-            num_layers=self.num_layers,
-        )
+            padded: dict[int, list[MemoryCellHandle]] = {}
+            for layer_idx in range(self.num_layers):
+                padded[layer_idx] = handles_by_layer.get(layer_idx, [zero_handle])
+
+            cache = build_injection_cache(
+                handles_by_layer=padded,
+                num_heads=self.num_heads,
+                head_dim=self.head_dim,
+                num_layers=self.num_layers,
+            )
+        else:
+            # Legacy: single-token handles. Pad with zero handles for uniform depth.
+            max_handles = max(len(h) for h in handles_by_layer.values())
+            zero_handle = MemoryCellHandle(
+                cell_id=0, owner=self.owner, layer=0, score=0.0,
+                key=np.zeros(kv_dim, dtype=np.float32),
+                value=np.zeros(kv_dim, dtype=np.float32),
+            )
+
+            padded_by_layer: dict[int, list[MemoryCellHandle]] = {}
+            for layer_idx in range(self.num_layers):
+                layer_handles = handles_by_layer.get(layer_idx, [])
+                padding = [zero_handle] * (max_handles - len(layer_handles))
+                padded_by_layer[layer_idx] = layer_handles + padding
+
+            cache = build_injection_cache(
+                handles_by_layer=padded_by_layer,
+                num_heads=self.num_heads,
+                head_dim=self.head_dim,
+                num_layers=self.num_layers,
+            )
 
         return cache
 

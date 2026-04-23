@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All 11 implementation phases complete. 117 tests (107 Rust + 10 Python), GPT-2 end-to-end demo working.
+**Status:** All 11 implementation phases complete. 168 tests (117 Rust + 51 Python), GPT-2 end-to-end demo working. Real KV cache retrieval validated at 75% recall on Qwen3-0.6B.
 
 ## Build & Test
 

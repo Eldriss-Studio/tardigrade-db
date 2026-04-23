@@ -33,14 +33,16 @@ class HuggingFaceHook(TardigradeHook):
         self.k = k
         self.norm_threshold = norm_threshold
 
-    def on_generate(
-        self, layer: int, hidden_states: np.ndarray
-    ) -> WriteDecision:
+    def on_generate(self, layer: int, **kwargs) -> WriteDecision:
         """Decide whether to persist based on hidden state norm.
 
-        Higher norm → more salient → higher importance score.
+        Higher norm means more salient, higher importance score.
         The key is the mean hidden state across the sequence dimension.
         """
+        hidden_states = kwargs.get("hidden_states")
+        if hidden_states is None:
+            return WriteDecision(should_write=False)
+
         # Handle both 2D (seq, hidden) and 3D (batch, seq, hidden) inputs.
         if hidden_states.ndim == 3:
             # Take first batch element.
@@ -63,10 +65,12 @@ class HuggingFaceHook(TardigradeHook):
             value=mean_hidden,  # In a real implementation, value would be the V projection.
         )
 
-    def on_prefill(
-        self, layer: int, query_states: np.ndarray
-    ) -> list[MemoryCellHandle]:
+    def on_prefill(self, layer: int, **kwargs) -> list[MemoryCellHandle]:
         """Retrieve relevant KV from engine using mean query state."""
+        query_states = kwargs.get("query_states")
+        if query_states is None:
+            return []
+
         if query_states.ndim == 3:
             query_states = query_states[0]
 
