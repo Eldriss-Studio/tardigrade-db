@@ -86,20 +86,24 @@ def main():
 
     db_dir = Path(tempfile.mkdtemp(prefix="tardigrade_sonia_pt_pipeline_"))
     engine = tardigrade_db.Engine(str(db_dir))
-    hook = HuggingFaceKVHook(engine, owner=1, model_config=model.config)
+    hook = HuggingFaceKVHook(engine, owner=1, model_config=model.config, model=model)
 
-    # Store
+    # Store (K projections without RoPE, skip position 0)
     print(f"\n--- STORING {len(MEMORIES)} MEMORIES ---")
     for mem_idx, memory in enumerate(MEMORIES):
         inputs = tokenizer(memory, return_tensors="pt", truncation=True, max_length=256)
         with torch.no_grad():
-            out = model(**inputs, use_cache=True)
-        decision = hook.on_generate(layer=query_layer, past_key_values=out.past_key_values)
+            out = model(**inputs, use_cache=True, output_hidden_states=True)
+        decision = hook.on_generate(
+            layer=query_layer,
+            past_key_values=out.past_key_values,
+            model_hidden_states=out.hidden_states[query_layer],
+        )
         if decision.should_write:
             engine.mem_write(1, query_layer, decision.key, decision.value, decision.salience, None)
     print(f"  Cells: {engine.cell_count()}")
 
-    # Retrieve
+    # Retrieve (Q projections without RoPE, Q*K scoring)
     print(f"\n--- QUERYING ---")
     results_map = {}
     genuine_scores = []
@@ -108,8 +112,12 @@ def main():
     for query_text, expected_mems in SPECIFIC_QUERIES:
         inputs = tokenizer(query_text, return_tensors="pt", truncation=True, max_length=256)
         with torch.no_grad():
-            out = model(**inputs, use_cache=True)
-        handles = hook.on_prefill(layer=query_layer, past_key_values=out.past_key_values)
+            out = model(**inputs, use_cache=True, output_hidden_states=True)
+        handles = hook.on_prefill(
+            layer=query_layer,
+            past_key_values=out.past_key_values,
+            model_hidden_states=out.hidden_states[query_layer],
+        )
 
         retrieved = [h.cell_id for h in handles]
         hit = any(m in expected_mems for m in retrieved[:5])
@@ -130,8 +138,12 @@ def main():
     for query_text in NEGATIVE_QUERIES:
         inputs = tokenizer(query_text, return_tensors="pt", truncation=True, max_length=256)
         with torch.no_grad():
-            out = model(**inputs, use_cache=True)
-        handles = hook.on_prefill(layer=query_layer, past_key_values=out.past_key_values)
+            out = model(**inputs, use_cache=True, output_hidden_states=True)
+        handles = hook.on_prefill(
+            layer=query_layer,
+            past_key_values=out.past_key_values,
+            model_hidden_states=out.hidden_states[query_layer],
+        )
         if handles:
             negative_scores.append(handles[0].score)
 
