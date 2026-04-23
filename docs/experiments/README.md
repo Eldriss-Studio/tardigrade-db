@@ -25,23 +25,35 @@ Two independent Claude Sonnet agents — one generating experiential memories, o
 **Date:** April 22, 2026  
 **Status:** Complete — validated empirically
 
-External critique questioning whether cross-context KV injection works. [Validation test](kv-injection-results.md) proved:
+External critique questioning whether cross-context KV injection works. Three documents cover this:
+- **[Critique](kv-injection-critique.md)** — The original peer review concerns and analysis
+- **[Test design](kv-injection-validation-test.md)** — 6-condition experiment design with experiential memories
+- **[Results](kv-injection-results.md)** — Measured outcomes across 5 prompt pairs (30 measurements)
+
+Key findings from [validation results](kv-injection-results.md):
 - **Full per-token KV injection works** — 26x to 829x improvement over baseline, matching or exceeding Text RAG
-- **Mean-pooled injection is broken** — mathematical category error (hidden states ≠ K/V projection space)
+- **Mean-pooled injection is broken** — mathematical category error (hidden states ≠ K/V projection space, causes collapse to "?" token at 78-90%)
 - **Q4 quantization preserves 89% of injection quality** — TardigradeDB's storage approach is viable
-- **The reviewer was wrong about KV portability, right about mean-pooling concerns**
+- **Irrelevant KV injection ≈ baseline** — confirms improvement is genuine semantic transfer, not noise
+- **Selective token injection fails** — salience heuristic (hidden state norm) doesn't identify the tokens that matter for recall
+
+**Automated test coverage:** 5 ATDD tests in `tests/python/test_kv_injector.py` validate the injection pipeline mechanism (reshape, cache extend, GPT-2 integration, multi-cell, round-trip). 5 ATDD tests in `tests/python/test_sweep.py` validate background governance sweep (Active Object pattern).
+
+**Architectural implication:** Mean-pooled vectors work for **retrieval** (search index). Full per-token KV is necessary for **injection** (attention augmentation). The emerging architecture uses mean-pooled as the index key and full KV as the stored value.
 
 ## Planned Experiments
 
 | Experiment | Goal | Status |
 |-----------|------|--------|
-| **[KV injection validation](kv-injection-validation-test.md)** | **Test if cross-context KV injection helps, hurts, or is neutral** | **Next up** |
-| Larger model test (7B+) | Validate that richer representations improve recall | Planned |
+| Larger model test (Llama 3.2:3b) | Validate that richer representations improve recall + injection quality | Planned — `examples/llama_memory_test.py` prepared |
+| RoPE injection | Test KV injection with rotary position encoding (requires unrotate/re-rotate) | Planned — blocks Llama/Qwen support |
 | Multi-session memory | Cross-day retrieval ("what happened last week") | Planned |
-| Governance decay | Verify unused memories demote over simulated time | Planned |
+| Governance decay | Verify unused memories demote over simulated time | Validated via `test_sweep.py` |
 | Adversarial retrieval | Contradictory memories, test which surfaces | Planned |
 | Confidence thresholding | Calibrate "I don't remember" cutoff | Planned |
 | Cross-model retrieval | Store from one model, retrieve with another | Planned |
+| GQA head mismatch | Test injection with grouped query attention (Llama 2+) | Planned |
+| Q4 injection at scale | Verify Q4 quality holds across hundreds of memories | Planned |
 
 ## Running Experiments
 

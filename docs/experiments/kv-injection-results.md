@@ -1,8 +1,62 @@
 # KV Injection Validation — Results
 
 **Date:** April 22, 2026  
-**Model:** GPT-2 (117M, 12 layers, 12 heads, d_model=768)  
-**Script:** `examples/kv_injection_validation.py`
+**Model:** GPT-2 (117M, 12 layers, 12 heads, head_dim=64, d_model=768)  
+**Script:** `examples/kv_injection_validation.py`  
+**Automated tests:** `tests/python/test_kv_injector.py` (5 ATDD tests)  
+**Infrastructure:** `python/tardigrade_hooks/kv_injector.py` (Adapter pattern)
+
+## Test Infrastructure
+
+### Automated ATDD Tests (`test_kv_injector.py`)
+
+Five acceptance tests validate the injection pipeline end-to-end:
+
+| Test | What it validates | Pattern |
+|------|------------------|---------|
+| `test_injector_reshapes_to_past_key_values` | Flat 768-dim vector → `(1, 12, 1, 64)` tensor. Also verifies dimension mismatch raises `ValueError`. | Shape contract |
+| `test_injector_extends_kv_cache` | Existing cache with seq_len=5, inject 1 cell → seq_len=6. Verifies DynamicCache grows correctly. | Cache mutation |
+| `test_injector_with_real_gpt2` | Real GPT-2 forward pass: logits with injection ≠ logits without. Uses `attn_implementation="eager"` to avoid SDPA shape constraints. | Integration (model) |
+| `test_injector_multiple_handles` | Inject 3 handles at layer 0 → cache shape is `(1, 12, 3, 64)` for both K and V. | Multi-cell injection |
+| `test_round_trip_capture_inject` | Full round-trip: GPT-2 forward → capture hidden states → store in TardigradeDB engine → retrieve → reshape → inject into different prompt → verify logits changed. | End-to-end |
+
+### Injection Pipeline (`kv_injector.py`)
+
+Four functions compose the injection pipeline:
+
+| Function | Responsibility | Input → Output |
+|----------|---------------|----------------|
+| `reshape_to_kv(flat, num_heads, head_dim)` | Reshape flat f32 vector to PyTorch KV format | `(d_model,)` → `(1, nH, 1, hD)` |
+| `inject_into_cache(cache, layer_idx, handles, ...)` | Append handles' K/V into a DynamicCache at a layer | `DynamicCache` → mutated `DynamicCache` |
+| `build_injection_cache(handles_by_layer, ...)` | Build a complete multi-layer DynamicCache from retrieved handles | `Dict[layer, List[Handle]]` → `DynamicCache` |
+| `prepare_injection(cache, input_ids)` | Compute adjusted `position_ids` and `attention_mask` for injected cache | `(DynamicCache, input_ids)` → `dict` of forward kwargs |
+
+### Validation Experiment Script (`kv_injection_validation.py`)
+
+Six conditions tested across 5 experiential memory/query pairs. All memories are fictional — GPT-2 cannot infer the target tokens from training data. Each pair creates a fresh TardigradeDB engine instance to avoid cross-contamination.
+
+**Conditions:**
+1. **Baseline** — Raw prompt, no memory, no injection
+2. **Text RAG** — Memory text prepended to prompt (gold standard upper bound)
+3. **Mean-pooled inject (relevant)** — TardigradeDB's current pipeline: hidden states → mean-pool to `(d_model,)` → store → retrieve → reshape to `(1, nH, 1, hD)` → inject as synthetic cache token
+4. **Mean-pooled inject (irrelevant)** — Same pipeline but with unrelated memory (control)
+5. **Full KV inject (relevant)** — Direct `past_key_values` from memory prompt injected into query prompt with adjusted position_ids
+6. **Full KV inject (irrelevant)** — Same with unrelated memory's KV cache (control)
+
+**Prompt pairs (all fictional, not in GPT-2 training):**
+
+| Pair | Memory (excerpt) | Query | Target token | Why untestable from training |
+|------|-----------------|-------|-------------|---------------------------|
+| Standup | "Marcus flagged 502 errors in auth service..." | "...the person who reported server errors was" | `" Marcus"` | Fictional person + fictional incident |
+| Lunch | "I ate a banh mi from the food cart..." | "For lunch today I had a" | `" ban"` | Specific food + specific location |
+| Slack | "Lena sent me a Slack message at 4:12pm..." | "...my manager said we need to" | `" sync"` | Fictional Slack conversation |
+| Bug | "TypeError on line 84 of data_pipeline/ingest.py..." | "...the bug I spent two hours debugging was a" | `" Type"` | Fictional file + fictional bug |
+| Daniel | "I accidentally called the tech lead Daniel..." | "...the embarrassing thing that happened was when I called" | `" Daniel"` | Fictional social faux pas |
+
+**Irrelevant memory (used for conditions 4 and 6):**
+> "The quarterly budget review showed infrastructure costs increased by 23 percent due to the migration from AWS to Google Cloud"
+
+Same "work context" vocabulary, zero semantic overlap with any query pair.
 
 ## Summary
 
@@ -15,6 +69,102 @@ Three hypotheses were tested. **None of them was correct.**
 | C: Injection works broadly | Both methods help | **Wrong** — only full KV works |
 
 **The actual result:** Full per-token KV injection works. Mean-pooled injection is catastrophically broken.
+
+## Memory Registry: What Was Stored and Queried
+
+Each pair below shows the exact text stored as memory, the query used for retrieval, and the TardigradeDB operations performed. Every memory creates a fresh engine instance to avoid cross-contamination.
+
+### Pair 1: Standup (Marcus)
+
+**Stored memory:**
+> "During standup Marcus flagged 502 errors in the auth service and Priya said her PR was blocked on my code review"
+
+**Query:**
+> "At the morning meeting, the person who reported server errors was"
+
+**Target token:** `" Marcus"` (token ID via `tokenizer.encode(" Marcus")[0]`)
+
+**TardigradeDB operations:**
+- **Store:** 12 cells written (one per GPT-2 layer, layers 0–11). Each cell contains mean-pooled hidden states `hidden_states[layer+1].mean(axis=0)` as both key and value. Salience computed as `min(L2_norm × 50.0, 100.0)`. Owner=1.
+- **Retrieve (mean-pooled path):** For each layer, `hook.on_prefill(layer, query_hidden_states)` → `engine.mem_read(mean_query, k=1, owner=1)`. Returns 1 handle per layer with retrieval score based on dot-product attention.
+- **Retrieve (full KV path):** Direct `model(memory_text).past_key_values` — 12 layers of `(K, V)` tensors, each shaped `(1, 12, seq_len, 64)` where `seq_len` = number of tokens in memory text.
+
+**Irrelevant memory (control):**
+> "The quarterly budget review showed infrastructure costs increased by 23 percent due to the migration from AWS to Google Cloud"
+
+Stored in separate engine instance (owner=1) for conditions 4 and 6.
+
+---
+
+### Pair 2: Lunch (banh mi)
+
+**Stored memory:**
+> "I ate a banh mi from the food cart downstairs and sat alone at the window table watching pigeons"
+
+**Query:**
+> "For lunch today I had a"
+
+**Target token:** `" ban"` (first subword of "banh" in GPT-2 BPE tokenization)
+
+**TardigradeDB operations:** Same as Pair 1 — 12 cells stored, mean-pooled retrieval + full KV capture.
+
+---
+
+### Pair 3: Slack (Lena)
+
+**Stored memory:**
+> "Lena sent me a Slack message at 4:12pm saying can we sync tomorrow morning about your onboarding trajectory"
+
+**Query:**
+> "The message from my manager said we need to"
+
+**Target token:** `" sync"`
+
+**TardigradeDB operations:** Same pattern. 12 cells stored per layer.
+
+---
+
+### Pair 4: Bug (data_pipeline)
+
+**Stored memory:**
+> "I found a TypeError on line 84 of data_pipeline/ingest.py because someone's refactor left a NoneType where split was called"
+
+**Query:**
+> "The bug I spent two hours debugging was a"
+
+**Target token:** `" Type"` (first subword of "TypeError")
+
+**TardigradeDB operations:** Same pattern. 12 cells stored per layer.
+
+---
+
+### Pair 5: Daniel (embarrassment)
+
+**Stored memory:**
+> "I accidentally called the tech lead Daniel by the wrong name David in the backend channel and he replied with a single period"
+
+**Query:**
+> "The embarrassing thing that happened was when I called"
+
+**Target token:** `" Daniel"`
+
+**TardigradeDB operations:** Same pattern. 12 cells stored per layer.
+
+---
+
+### Storage Summary
+
+| Pair | Memory tokens | Cells stored | Layers | Key/Value dim | Salience range |
+|------|--------------|-------------|--------|--------------|---------------|
+| Standup | ~24 | 12 | 0–11 | 768 (mean-pooled) | Norm-based, 0–100 |
+| Lunch | ~20 | 12 | 0–11 | 768 | Norm-based, 0–100 |
+| Slack | ~22 | 12 | 0–11 | 768 | Norm-based, 0–100 |
+| Bug | ~24 | 12 | 0–11 | 768 | Norm-based, 0–100 |
+| Daniel | ~24 | 12 | 0–11 | 768 | Norm-based, 0–100 |
+
+For the **mean-pooled path** (Conditions 3–4): each cell stores a single `(768,)` vector — the mean across all tokens in that layer's hidden states. At injection time, this is reshaped to `(1, 12, 1, 64)` and injected as one synthetic cache token per layer.
+
+For the **full KV path** (Conditions 5–6): the model's actual `past_key_values` are used directly — `(1, 12, seq_len, 64)` per layer for both K and V. These are the real attention-projected tensors, not hidden states.
 
 ## Raw Results
 
@@ -220,3 +370,73 @@ TardigradeDB's value stack, from strongest to most speculative:
 3. **Governance (AKL)** — Implemented but not stress-tested in production. Unique feature.
 4. **KV injection for zero-cost context augmentation** — Proven to work with GPT-2. Needs validation on modern architectures (RoPE, GQA, sliding window attention).
 5. **Cross-model KV portability** — Completely untested. May not work.
+
+---
+
+## Test Coverage Map
+
+### How the tests relate to each other
+
+```
+Automated ATDD Tests (test_kv_injector.py)          Validation Experiment (kv_injection_validation.py)
+─────────────────────────────────────────            ──────────────────────────────────────────────────
+                                                     
+test_injector_reshapes_to_past_key_values            ┌─────────────────────────────────┐
+  └─ Verifies: reshape contract                      │  6 conditions × 5 prompt pairs  │
+                                                     │  = 30 measurements              │
+test_injector_extends_kv_cache                       │                                 │
+  └─ Verifies: DynamicCache mutation                 │  Condition 1: Baseline          │
+                                                     │  Condition 2: Text RAG          │
+test_injector_with_real_gpt2                         │  Condition 3: Mean-pool (rel)   │◄── Uses kv_injector.py pipeline
+  └─ Verifies: injection changes logits              │  Condition 4: Mean-pool (irr)   │◄── Uses kv_injector.py pipeline
+                                                     │  Condition 5: Full KV (rel)     │◄── Direct past_key_values
+test_injector_multiple_handles                       │  Condition 6: Full KV (irr)     │◄── Direct past_key_values
+  └─ Verifies: multi-cell injection                  └─────────────────────────────────┘
+                                                     
+test_round_trip_capture_inject                       Uses: TardigradeDB Engine, HuggingFaceHook,
+  └─ Verifies: engine → retrieve → inject            build_injection_cache, prepare_injection
+     (end-to-end with TardigradeDB engine)           
+```
+
+### What each test layer proves
+
+| Layer | What it proves | Confidence level |
+|-------|---------------|-----------------|
+| **Unit tests** (reshape, cache extend) | The plumbing works — tensors flow through the pipeline correctly | High — deterministic, no model dependency |
+| **Integration tests** (real GPT-2 forward) | Injection actually changes model output — not a no-op | High — uses real model, asserts logits differ |
+| **Round-trip test** (engine → inject) | Full TardigradeDB pipeline works end-to-end | High — captures, stores, retrieves, injects |
+| **Validation experiment** (6 conditions) | Whether injection *helps* — not just "changes output" but "changes it in the right direction" | Medium — GPT-2 only, 5 pairs, needs larger models |
+
+### Key distinction
+
+The automated tests (`test_kv_injector.py`) prove the **mechanism works** — tensors flow correctly, shapes match, logits change. They do NOT prove injection **helps** — changing output is necessary but not sufficient.
+
+The validation experiment proves injection **helps for full KV** (26x–829x target probability improvement) and **hurts for mean-pooled** (catastrophic collapse to "?" token). This distinction drove the architectural pivot documented in "The Emerging Architecture" section above.
+
+### Background Governance Tests (`test_sweep.py`)
+
+Five additional ATDD tests validate the Active Object pattern governance sweep:
+
+| Test | What it validates |
+|------|------------------|
+| `test_sweep_runs_automatically` | Daemon thread ticks at specified interval; importance decays after sweep |
+| `test_sweep_promotes_active_cells` | Cells boosted via reads maintain tier after sweep (sweep doesn't undo promotion) |
+| `test_sweep_evicts_stale_cells` | Aggressive decay (100 days/tick × 6 ticks) reduces importance below threshold |
+| `test_sweep_stops_on_close` | Thread terminates cleanly on `stop()` within timeout |
+| `test_sweep_does_not_corrupt` | 50 concurrent writes + reads during active sweep — zero exceptions, all cells persisted |
+
+These tests validate the `GovernanceSweepThread` in `python/tardigrade_hooks/sweep.py`, which wraps TardigradeDB's `engine.advance_days()` in an Active Object daemon thread.
+
+---
+
+## Open Questions for Future Experiments
+
+1. **RoPE models (Llama, Qwen):** GPT-2 uses absolute learned position embeddings. Full KV injection works because position information is additive, not rotational. For RoPE models, historical K vectors carry baked-in rotary position — injection requires unrotation at old position + re-rotation at new position. Does this work in practice?
+
+2. **GQA (Grouped Query Attention):** Llama 2+ uses GQA where K/V heads are fewer than Q heads. Does the injection pipeline handle the head count mismatch correctly?
+
+3. **Sliding window attention (Mistral):** If the model only attends to the last N tokens, injected KV outside the window is invisible. Does this limit injection utility for long-context memories?
+
+4. **Larger model quality:** GPT-2's 768-dim representations are relatively low-capacity. Llama 8B (4096-dim, 32 layers) should produce richer KV representations with higher injection quality. The `examples/llama_memory_test.py` script is prepared but not yet validated.
+
+5. **Q4 injection at scale:** The root cause analysis showed Q4 preserves 89% of injection quality on 5 pairs. Does this hold across hundreds of memories with varying token lengths?
