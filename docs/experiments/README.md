@@ -20,10 +20,22 @@ Two independent Claude Sonnet agents — one generating experiential memories, o
 
 **Scripts:** `examples/sonnet_memory_test.py` (word-hash), `examples/kv_memory_test.py` (KV cache)
 
+### [KV Injection Critique & Validation](kv-injection-critique.md)
+
+**Date:** April 22, 2026  
+**Status:** Complete — validated empirically
+
+External critique questioning whether cross-context KV injection works. [Validation test](kv-injection-results.md) proved:
+- **Full per-token KV injection works** — 26x to 829x improvement over baseline, matching or exceeding Text RAG
+- **Mean-pooled injection is broken** — mathematical category error (hidden states ≠ K/V projection space)
+- **Q4 quantization preserves 89% of injection quality** — TardigradeDB's storage approach is viable
+- **Breno was wrong about KV portability, right about mean-pooling concerns**
+
 ## Planned Experiments
 
 | Experiment | Goal | Status |
 |-----------|------|--------|
+| **[KV injection validation](kv-injection-validation-test.md)** | **Test if cross-context KV injection helps, hurts, or is neutral** | **Next up** |
 | Larger model test (7B+) | Validate that richer representations improve recall | Planned |
 | Multi-session memory | Cross-day retrieval ("what happened last week") | Planned |
 | Governance decay | Verify unused memories demote over simulated time | Planned |
