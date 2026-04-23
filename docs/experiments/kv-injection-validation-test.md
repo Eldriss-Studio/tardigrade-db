@@ -7,7 +7,7 @@
 
 ## Background
 
-Breno's critique: KV cache vectors are context-dependent. Storing them from prompt A and injecting them into prompt B's attention should not work because they carry positional encoding and causal dependencies from a different sequence.
+the reviewer's critique: KV cache vectors are context-dependent. Storing them from prompt A and injecting them into prompt B's attention should not work because they carry positional encoding and causal dependencies from a different sequence.
 
 This test measures whether that's true in practice.
 
@@ -26,12 +26,12 @@ Condition 2: TEXT CONTEXT (RAG)  — Prepend memory as text (gold standard)
 Condition 3: MEAN-POOLED INJECT (relevant)    — Inject mean-pooled pseudo-token from related memory
 Condition 4: MEAN-POOLED INJECT (irrelevant)  — Inject mean-pooled pseudo-token from unrelated memory
 
-── What Breno is critiquing (full per-token KV) ──────────────────────
+── What the reviewer is critiquing (full per-token KV) ──────────────────────
 Condition 5: FULL KV INJECT (relevant)    — Inject actual per-token KV cache from related memory
 Condition 6: FULL KV INJECT (irrelevant)  — Inject actual per-token KV cache from unrelated memory
 ```
 
-This three-way split is critical. Breno's critique targets full KV sharing (Conditions 5-6). TardigradeDB actually does mean-pooled injection (Conditions 3-4). These are fundamentally different operations and may have different outcomes.
+This three-way split is critical. the reviewer's critique targets full KV sharing (Conditions 5-6). TardigradeDB actually does mean-pooled injection (Conditions 3-4). These are fundamentally different operations and may have different outcomes.
 
 ### The Prompts
 
@@ -78,13 +78,13 @@ The key insight: P("Marcus") at baseline should be effectively **zero** — GPT-
 
 ### Expected Outcomes — The Three Hypotheses
 
-**Hypothesis A: Breno is fully right (all injection fails)**
+**Hypothesis A: the reviewer is fully right (all injection fails)**
 - Conditions 3, 4, 5, 6 ≈ Baseline (no improvement from any injection)
 - Condition 2 (text RAG) > Baseline
 - Conclusion: TardigradeDB is a retrieval engine, not an attention engine
 
-**Hypothesis B: Breno is right about full KV, but mean-pooled is different**
-- Conditions 5, 6 (full KV) ≈ Baseline or worse (Breno validated)
+**Hypothesis B: the reviewer is right about full KV, but mean-pooled is different**
+- Conditions 5, 6 (full KV) ≈ Baseline or worse (the reviewer validated)
 - Condition 3 (mean-pooled relevant) > Baseline (partial improvement)
 - Condition 4 (mean-pooled irrelevant) ≈ Baseline or worse
 - Conclusion: Mean-pooling accidentally creates a more portable representation. The lossy compression that destroys positional info also makes it context-independent enough to inject.
@@ -92,11 +92,11 @@ The key insight: P("Marcus") at baseline should be effectively **zero** — GPT-
 **Hypothesis C: Injection works broadly**
 - Conditions 3, 5 (relevant) > Baseline
 - Conditions 4, 6 (irrelevant) ≈ Baseline or worse
-- Conclusion: Cross-context injection is viable. Breno's concern is theoretical but not empirical.
+- Conclusion: Cross-context injection is viable. the reviewer's concern is theoretical but not empirical.
 
 ### The Most Likely Outcome
 
-Hypothesis B — the middle ground. Full per-token KV injection (Breno's concern) probably fails or hurts because those vectors carry positional/causal artifacts. Mean-pooled injection probably has a small positive or neutral effect because the mean-pooling destroyed exactly the context-specific information that causes problems. Text RAG probably still wins because the model gets the actual tokens, not a compressed summary.
+Hypothesis B — the middle ground. Full per-token KV injection (the reviewer's concern) probably fails or hurts because those vectors carry positional/causal artifacts. Mean-pooled injection probably has a small positive or neutral effect because the mean-pooling destroyed exactly the context-specific information that causes problems. Text RAG probably still wins because the model gets the actual tokens, not a compressed summary.
 
 This outcome would mean TardigradeDB's value is:
 1. **Retrieval** — proven, strong
@@ -148,7 +148,7 @@ for layer in range(12):
     mean_h = outputs_mem.hidden_states[layer+1][0].mean(dim=0).numpy()  # (d_model,)
     engine.mem_write(owner=1, layer=layer, key=mean_h, value=mean_h, ...)
 
-# Save full per-token KV cache (what Breno is critiquing)
+# Save full per-token KV cache (what the reviewer is critiquing)
 full_kv_relevant = outputs_mem.past_key_values     # 12 layers × (K, V)
 full_kv_irrelevant = outputs_irr.past_key_values
 
@@ -178,7 +178,7 @@ p_mean_relevant = softmax(mean_inject_logits[0, -1])[target_token]
 kwargs_full = prepare_injection_from_kv(full_kv_relevant, tokenize(query_text))
 full_inject_logits = model(tokenize(query_text), **kwargs_full).logits
 p_full_relevant = softmax(full_inject_logits[0, -1])[target_token]
-# Breno predicts this won't help (and might hurt)
+# the reviewer predicts this won't help (and might hurt)
 
 # ── Condition 6: Full KV inject (irrelevant) ─────────────────
 # Same with full_kv_irrelevant
@@ -210,7 +210,7 @@ print(f"Full KV (irrelevant):  ...")
 
 ## Success Criteria
 
-### This test validates Breno's full critique if:
+### This test validates the reviewer's full critique if:
 - Conditions 3, 4, 5, 6 all ≈ Baseline (no injection helps)
 - Condition 2 (text RAG) > Baseline
 - **Action:** Pivot TardigradeDB to retrieval-only. Drop kv_injector.py. Return text/metadata, not tensors.
@@ -218,11 +218,11 @@ print(f"Full KV (irrelevant):  ...")
 ### This test validates the "mean-pooled is different" hypothesis if:
 - Condition 3 (mean-pooled relevant) > Baseline
 - Conditions 5, 6 (full KV) ≈ Baseline or worse
-- **Action:** Keep mean-pooled injection as a feature. Document that it works because mean-pooling strips context-dependent positional info. Breno is right about full KV but wrong about TardigradeDB's actual approach.
+- **Action:** Keep mean-pooled injection as a feature. Document that it works because mean-pooling strips context-dependent positional info. the reviewer is right about full KV but wrong about TardigradeDB's actual approach.
 
 ### This test validates broad injection if:
 - Conditions 3 AND 5 (both relevant) > Baseline
-- **Action:** Breno's concern is theoretical but not empirical. Proceed with current architecture.
+- **Action:** the reviewer's concern is theoretical but not empirical. Proceed with current architecture.
 
 ### Regardless of outcome, this test informs:
 - Which layers show the most injection benefit (if any) — guides decoupled position encoding work

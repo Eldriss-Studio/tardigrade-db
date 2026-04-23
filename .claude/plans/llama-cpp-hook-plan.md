@@ -1,93 +1,87 @@
-# Plan: LlamaCppHook — GGUF Model Support for TardigradeDB
+# Plan: Dual-Store Architecture + GGUF Support
 
 ## Context
 
-TardigradeDB's hook system only supports HuggingFace transformers (`HuggingFaceHook`). People running local models via **Ollama** and **LM Studio** use GGUF files, which are invisible to the current system. In our two-agent experiment, the GPT-2 test (12 layers via HF) achieved 80% recall, while the Llama 3.2 test (1 layer via raw llama-cpp-python) dropped to 60%. The gap is both an integration gap (no hook for GGUF) and a quality gap (single-layer vs multi-layer extraction).
+Tonight's experiments fundamentally changed our understanding of TardigradeDB:
 
-**Goal:** Add a `LlamaCppHook` that lets users point at an Ollama/LM Studio model by name (e.g., `"llama3.2:3b"`) and get working memory storage and retrieval — following ATDD and established design patterns.
+1. **Mean-pooled hidden states** work for **retrieval** (80-92% recall in two-agent test) but are **catastrophically broken for injection** (P → 0, model outputs "?" at 89%). Root cause: hidden states live in `d_model` space, KV cache lives in `head_dim` space — reshaping one as the other is a category error.
 
-**Constraint:** `llama-cpp-python` only exposes **final-layer embeddings**, not per-layer hidden states. We compensate with a multi-view embedding strategy.
+2. **Full per-token KV injection** works dramatically well (26x-829x improvement, matching/exceeding Text RAG). Even Q4-quantized KV retains 89% of quality.
 
-## Architecture Decisions
+3. **The GGUFModelResolver** (finding Ollama/LM Studio model files by name) is still needed and unchanged.
 
-- **TardigradeHook ABC** — No changes. `layer` is just an int; single-layer hooks use `layer=0..N` for views.
-- **WriteDecision / MemoryCellHandle** — No changes. Multi-view produces multiple WriteDecisions, not new fields.
-- **Engine (Rust)** — No changes. `mem_write`/`mem_read` are layer-agnostic.
-- **kv_injector.py** — Not used in GGUF path (no PyTorch DynamicCache injection for llama-cpp models).
+4. **The multi-view embedding strategy is obsolete.** It was designed to compensate for single-layer extraction, but the real problem isn't too few views — it's that mean-pooled vectors can't be injected at all.
+
+## What Changed
+
+| Component | Old Plan | New Plan |
+|-----------|----------|----------|
+| **Storage** | Mean-pooled hidden states only | **Dual-store: mean-pooled index + full per-token KV** |
+| **EmbeddingViews** | 4 view strategies (mean, max, first, last) | **Removed — multi-view doesn't solve the real problem** |
+| **Injection** | Reshape mean-pool → `(1, nH, 1, hD)` via kv_injector | **Inject full KV as `past_key_values`** |
+| **kv_injector.py** | Keep as-is | **Rewrite — current reshape approach is broken** |
+| **GGUFModelResolver** | Find GGUF files by name | **Unchanged — still needed** |
+| **LlamaCppHook** | Extract embeddings, multi-view | **Retrieval-only hook (no injection — llama-cpp can't extract KV)** |
+| **HuggingFaceHook** | Mean-pool → inject | **Full KV capture → store both index and KV** |
+
+## The Revised Architecture
+
+```
+WRITE PATH (HuggingFace models — full access):
+  Text → Model forward pass
+       → Extract mean-pooled hidden state per layer → SEARCH INDEX (what TardigradeDB stores today)
+       → Extract full per-token KV cache → PAYLOAD (new: stored alongside index)
+       → Q4 quantize both
+       → engine.mem_write(index=mean_pool, payload=full_kv)
+
+WRITE PATH (GGUF models — embedding only):
+  Text → llama-cpp-python → Final-layer embedding → SEARCH INDEX only
+       → No KV extraction possible
+       → Retrieval works, injection not available
+
+READ PATH:
+  Query → Extract hidden state → Similarity search against indices
+       → If full KV available: inject as past_key_values (zero re-encoding)
+       → If only index available: return text/metadata (application does RAG)
+```
 
 ## Design Patterns
 
 | Pattern | Component | Purpose |
 |---------|-----------|---------|
-| **Adapter** | `LlamaCppHook` | Translates llama-cpp-python embedding API → TardigradeHook |
-| **Strategy** | `EmbeddingView` | Pluggable embedding projections (mean, max, first, last) |
+| **Adapter** | `LlamaCppHook` | Translates llama-cpp-python embedding API → TardigradeHook (retrieval only) |
+| **Adapter** | `HuggingFaceHook` (revised) | Full KV capture + mean-pooled indexing |
 | **Factory** | `GGUFModelResolver` | Resolves `"llama3.2:3b"` → `/path/to/blob` |
+| **Strategy** | `InjectionStrategy` | Pluggable injection: full KV, text fallback, or none |
 | Template Method | `TardigradeHook` (existing) | Hook lifecycle |
 
-## New Files
+## Scope Decision: What to Build Now vs Later
 
-```
-python/tardigrade_hooks/
-    embedding_views.py      # NEW — Strategy: view projections
-    gguf_resolver.py        # NEW — Factory: model name → GGUF path
-    llama_cpp_hook.py       # NEW — Adapter: LlamaCppHook
+### Now (this plan)
 
-tests/python/
-    test_embedding_views.py # NEW — AT-6 through AT-10
-    test_gguf_resolver.py   # NEW — AT-1 through AT-5
-    test_llama_cpp_hook.py  # NEW — AT-11 through AT-18
-```
+1. **GGUFModelResolver** — Find GGUF files from Ollama/LM Studio by name. This is self-contained, immediately useful, and unchanged from the original plan.
 
-**Modified files:**
-- `python/tardigrade_hooks/__init__.py` — export `LlamaCppHook`, `GGUFModelResolver`
-- `examples/llama_memory_test.py` — refactor to use `LlamaCppHook` instead of raw code
+2. **LlamaCppHook** — Retrieval-only hook for GGUF models. Uses `llama-cpp-python` final-layer embeddings for semantic search. No injection (not possible without full KV). This closes the "Ollama/LM Studio users can't use TardigradeDB" gap.
 
----
+3. **Fix kv_injector.py** — The current implementation injects mean-pooled hidden states reshaped as KV, which is broken. Either:
+   - Remove it (defer injection to the dual-store work)
+   - Or fix it to only accept actual KV cache tensors (not hidden states)
+
+### Later (separate plan, requires Rust engine changes)
+
+4. **Dual-store engine** — `mem_write` needs to accept both a search index vector AND a full KV payload. This is a Rust-level change to `tdb-engine`, `tdb-storage`, and the PyO3 bindings. Significant scope.
+
+5. **Revised HuggingFaceHook** — Captures both mean-pooled index and full per-token KV. Writes both to the dual-store engine.
+
+6. **KV injection path** — New injection logic that uses actual `past_key_values` from the stored KV payload, not reshaped hidden states.
+
+7. **RoPE validation** — Test whether full KV injection works with modern models that use Rotary Position Encoding (Llama 3, Qwen, Gemma) vs GPT-2's absolute encoding.
 
 ## Implementation Sequence (ATDD-first)
 
-### Step 1: Acceptance Tests for EmbeddingViews
-
-**File:** `tests/python/test_embedding_views.py`
-
-Pure numpy tests, no model or engine needed.
-
-| Test | What it proves |
-|------|---------------|
-| AT-6 | `MeanPoolView` produces `(d_model,)` from `(n_tokens, d_model)` |
-| AT-7 | `MaxPoolView` picks per-dimension maximum |
-| AT-8 | `FirstTokenView` returns row 0, `LastTokenView` returns row -1 |
-| AT-9 | Custom callable conforming to `EmbeddingView` protocol works |
-| AT-10 | 4 default views produce pairwise-distinct vectors |
-
-### Step 2: Implement EmbeddingViews
-
-**File:** `python/tardigrade_hooks/embedding_views.py`
-
-```python
-@dataclass
-class EmbeddingView:
-    name: str
-    fn: Callable[[np.ndarray], np.ndarray]
-    
-    def __call__(self, token_embeddings: np.ndarray) -> np.ndarray:
-        return self.fn(token_embeddings).astype(np.float32)
-
-MEAN_POOL  = EmbeddingView("mean",  lambda t: t.mean(axis=0))
-MAX_POOL   = EmbeddingView("max",   lambda t: t.max(axis=0))
-FIRST_TOKEN = EmbeddingView("first", lambda t: t[0])
-LAST_TOKEN  = EmbeddingView("last",  lambda t: t[-1])
-
-DEFAULT_VIEWS = [MEAN_POOL, MAX_POOL, FIRST_TOKEN, LAST_TOKEN]
-```
-
-Make AT-6 through AT-10 pass.
-
-### Step 3: Acceptance Tests for GGUFModelResolver
+### Step 1: Acceptance Tests for GGUFModelResolver
 
 **File:** `tests/python/test_gguf_resolver.py`
-
-Uses a temp directory with synthetic Ollama manifests for unit tests. Real-path tests marked `@pytest.mark.skipif` for CI.
 
 | Test | What it proves |
 |------|---------------|
@@ -97,100 +91,97 @@ Uses a temp directory with synthetic Ollama manifests for unit tests. Real-path 
 | AT-4 | Unknown model raises `GGUFNotFoundError` with helpful message |
 | AT-5 | `list_models()` returns available models from both sources |
 
-### Step 4: Implement GGUFModelResolver
+### Step 2: Implement GGUFModelResolver
 
 **File:** `python/tardigrade_hooks/gguf_resolver.py`
 
-Ollama resolution algorithm:
+Ollama resolution:
 1. Parse `"llama3.2:3b"` → `(name="llama3.2", tag="3b")`
 2. Read `~/.ollama/models/manifests/registry.ollama.ai/library/{name}/{tag}` as JSON
 3. Find layer with `mediaType == "application/vnd.ollama.image.model"`
 4. Return `~/.ollama/models/blobs/{digest}` (replacing `:` with `-` in digest)
 
-LM Studio: recursive glob for `*.gguf` in `~/.lmstudio/models/`, fuzzy match on name.
+LM Studio: recursive glob for `*.gguf` in `~/.lmstudio/models/`, fuzzy match.
 
-Make AT-1 through AT-5 pass.
-
-### Step 5: Acceptance Tests for LlamaCppHook
+### Step 3: Acceptance Tests for LlamaCppHook
 
 **File:** `tests/python/test_llama_cpp_hook.py`
 
-Uses the existing `engine` fixture pattern from `test_hook.py`. Mock llama-cpp-python for unit tests; integration test with real GGUF marked `skipif`.
-
 | Test | What it proves |
 |------|---------------|
-| AT-11 | `isinstance(LlamaCppHook(...), TardigradeHook)` is True |
-| AT-12 | `on_generate` with high-norm embeddings → `should_write=True` |
-| AT-13 | `on_generate` with near-zero embeddings → `should_write=False` |
-| AT-14 | `WriteDecision.key` has shape `(d_model,)` and dtype `float32` |
-| AT-15 | After writing cells, `on_prefill` retrieves `MemoryCellHandle` list |
-| AT-16 | Multi-view mode: `store_memory(text)` produces 4 cells (one per view at layers 0-3) |
-| AT-17 | Multi-view retrieval: store a memory, query with related text, correct memory in top-k |
-| AT-18 | Integration: real GGUF extraction produces `float32` array of expected dimension |
+| AT-6 | `isinstance(LlamaCppHook(...), TardigradeHook)` is True |
+| AT-7 | `on_generate` with high-norm embeddings → `should_write=True` |
+| AT-8 | `on_generate` with near-zero embeddings → `should_write=False` |
+| AT-9 | `WriteDecision.key` has shape `(d_model,)` and dtype `float32` |
+| AT-10 | After writing cells, `on_prefill` retrieves `MemoryCellHandle` list |
+| AT-11 | `store_memory(text)` writes 1 cell per memory (single-layer) |
+| AT-12 | `query_memory(text)` retrieves correct memory from stored set |
+| AT-13 | Integration: real GGUF extraction produces float32 array of expected dimension |
 
-### Step 6: Implement LlamaCppHook
+### Step 4: Implement LlamaCppHook
 
 **File:** `python/tardigrade_hooks/llama_cpp_hook.py`
 
-Key design:
-- Constructor accepts `model: str | Path` — string triggers `GGUFModelResolver`
-- `text_to_embeddings(text) → np.ndarray (n_tokens, d_model)` — extracts per-token embeddings
-- `on_generate(layer, hidden_states)` — applies view at `layer` index, returns WriteDecision
-- `on_prefill(layer, query_states)` — queries engine using view at `layer` index
-- `store_memory(text, salience=None) → list[int]` — convenience: extract → all views → mem_write
-- `query_memory(text, k=None) → list[MemoryCellHandle]` — convenience: extract → best match across views
+Retrieval-only hook:
+- Constructor: `model: str | Path` — string triggers `GGUFModelResolver`
+- `text_to_embedding(text) → np.ndarray (d_model,)` — final-layer embedding
+- `on_generate(layer, hidden_states) → WriteDecision`
+- `on_prefill(layer, query_states) → list[MemoryCellHandle]`
+- `store_memory(text) → int` — convenience: extract → mem_write
+- `query_memory(text, k) → list[MemoryCellHandle]` — convenience: extract → mem_read
 
-Make AT-11 through AT-18 pass.
+No injection. This hook enables semantic memory retrieval for GGUF users. The application layer decides what to do with retrieved memories (e.g., prepend as text context).
 
-### Step 7: Update Exports and Example
+### Step 5: Fix kv_injector.py
 
-- Update `python/tardigrade_hooks/__init__.py` to export `LlamaCppHook`, `GGUFModelResolver`
-- Refactor `examples/llama_memory_test.py` to use `LlamaCppHook` instead of raw code
+Add a guard that rejects mean-pooled hidden states:
+- Check that input dimensions match `(1, num_heads, seq_len, head_dim)` for actual KV
+- Raise `ValueError` if someone passes a reshaped hidden state
+- Document that injection requires full per-token KV (future dual-store feature)
 
-### Step 8: Refactor Pass
+### Step 6: Update Exports and Examples
 
-- Check for duplication between `hf_hook.py` and `llama_cpp_hook.py` (salience heuristic logic)
-- Extract shared salience computation if appropriate
-- Naming review: consistency of `owner` vs `agent_id`, `model` vs `model_path`
+- `python/tardigrade_hooks/__init__.py` — export `LlamaCppHook`, `GGUFModelResolver`
+- Refactor `examples/llama_memory_test.py` to use `LlamaCppHook`
 
-### Step 9: Gap Review
+### Step 7: Refactor Pass + Gap Review
 
-- Error handling: corrupt Ollama manifests, missing blobs, model loading OOM
-- Edge cases: 1-token input (first/last views collapse), empty string, very long text exceeding n_ctx
-- What if `llama-cpp-python` returns 1D embedding instead of 2D? (Some models only return pooled)
-
----
+- Shared salience logic between `hf_hook.py` and `llama_cpp_hook.py`
+- Error handling: corrupt manifests, missing blobs, OOM
+- Edge cases: empty text, very long text exceeding n_ctx, 1D vs 2D embeddings
 
 ## Verification
 
 ### Unit tests
 ```bash
 cd ~/Dev/tardigrade-db && source .venv/bin/activate
-pytest tests/python/test_embedding_views.py tests/python/test_gguf_resolver.py tests/python/test_llama_cpp_hook.py -v
+pytest tests/python/test_gguf_resolver.py tests/python/test_llama_cpp_hook.py -v
 ```
 
-### Integration test (requires Ollama models on disk)
+### Integration (requires Ollama models)
 ```bash
-pytest tests/python/test_llama_cpp_hook.py -v -k "AT_18"
+pytest tests/python/test_llama_cpp_hook.py -v -k "AT_13"
 ```
 
-### End-to-end: Two-agent character test with LlamaCppHook
+### End-to-end
 ```bash
 python examples/llama_memory_test.py clear
 python examples/llama_memory_test.py store "memory one" "memory two"
 python examples/llama_memory_test.py query "related question"
-python examples/llama_memory_test.py info
 ```
 
-### Recall comparison
-Rerun the two-agent Kael test with multi-view LlamaCppHook and compare:
-- Word-hash baseline: 92% recall
-- GPT-2 (12 layers): 80% recall
-- Llama 3.2 single-layer: 60% recall
-- **Llama 3.2 multi-view (4 views): target ≥ 70% recall**
-
-### All existing tests still pass
+### All existing tests
 ```bash
 cargo test --workspace --exclude tdb-python
 pytest tests/python/ -v
 ```
+
+## What This Plan Does NOT Cover (Deferred)
+
+These require Rust engine changes and are a separate, larger effort:
+
+1. **Dual-store `mem_write`** — Engine-level support for index vector + KV payload
+2. **Full KV capture in HuggingFaceHook** — Storing actual `past_key_values` alongside mean-pooled index
+3. **KV injection from stored payloads** — New injection path using real KV, not reshaped hidden states
+4. **RoPE compatibility testing** — Validating cross-context KV injection with modern positional encoding
+5. **Storage size optimization** — Q4-quantized full KV is ~40-200x larger than mean-pooled. Need segment management for larger payloads.

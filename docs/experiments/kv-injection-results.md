@@ -10,7 +10,7 @@ Three hypotheses were tested. **None of them was correct.**
 
 | Hypothesis | Prediction | Result |
 |-----------|-----------|--------|
-| A: Breno is right (all injection fails) | Full KV and mean-pool both ≈ baseline | **Wrong** — full KV works dramatically |
+| A: the reviewer is right (all injection fails) | Full KV and mean-pool both ≈ baseline | **Wrong** — full KV works dramatically |
 | B: Mean-pooled is different | Mean-pool helps, full KV fails | **Wrong** — exact opposite |
 | C: Injection works broadly | Both methods help | **Wrong** — only full KV works |
 
@@ -30,7 +30,7 @@ Six conditions tested across 5 experiential memory/query pairs. All memories are
 
 ### Key Observations
 
-**1. Full KV injection works — Breno's critique is empirically wrong for GPT-2.**
+**1. Full KV injection works — the reviewer's critique is empirically wrong for GPT-2.**
 
 Across all 5 pairs, full per-token KV injection (Condition 5) dramatically increases the probability of the correct target token:
 
@@ -96,7 +96,7 @@ Full KV is 40-200x larger. But TardigradeDB already has Q4 quantization (4x comp
 |-----------|-----------------|----------------|
 | **Mean-pooled retrieval** (semantic search) | Proven (80-92% recall) | Still works — use as search index |
 | **Mean-pooled injection** (kv_injector.py) | Assumed viable | **Broken — remove or redesign** |
-| **Full KV injection** | Assumed broken (Breno's critique) | **Works — 26x to 829x improvement** |
+| **Full KV injection** | Assumed broken (the reviewer's critique) | **Works — 26x to 829x improvement** |
 | **Full KV storage** | Not implemented | **Should be the primary storage format** |
 
 ### The Emerging Architecture
@@ -178,7 +178,7 @@ The selected tokens were "I, tech, lead, name, backend" — notably missing "Dan
 
 ---
 
-## Answering Breno's Next Critique
+## Answering the reviewer's Next Critique
 
 ### "You're just restoring a previous context. This is just KV caching."
 

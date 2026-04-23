@@ -29,7 +29,7 @@ External critique questioning whether cross-context KV injection works. [Validat
 - **Full per-token KV injection works** — 26x to 829x improvement over baseline, matching or exceeding Text RAG
 - **Mean-pooled injection is broken** — mathematical category error (hidden states ≠ K/V projection space)
 - **Q4 quantization preserves 89% of injection quality** — TardigradeDB's storage approach is viable
-- **Breno was wrong about KV portability, right about mean-pooling concerns**
+- **The reviewer was wrong about KV portability, right about mean-pooling concerns**
 
 ## Planned Experiments
 

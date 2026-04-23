@@ -1,7 +1,7 @@
 # KV Cache Context-Dependence Critique
 
 **Date:** April 22, 2026  
-**Source:** External review by Breno (software engineer)  
+**Source:** External peer review  
 **Status:** Open — requires empirical validation
 
 ## The Critique
@@ -48,11 +48,11 @@ What survives is a **semantic centroid** — the average activation across all t
 
 | What | What it is | Context-dependent? | Stored by TardigradeDB? |
 |------|-----------|-------------------|------------------------|
-| **Full per-token KV cache** | `(seq_len, num_heads, head_dim)` per layer | Yes — Breno is right | No |
+| **Full per-token KV cache** | `(seq_len, num_heads, head_dim)` per layer | Yes — the reviewer is right | No |
 | **Mean-pooled hidden state** | `(d_model,)` — semantic centroid | Partially — semantic content preserved, positional info destroyed | **Yes — this is what's stored** |
 | **Text embedding** | Dense vector from a separate encoder model | No — model-independent | No — this is what vector DBs do |
 
-TardigradeDB sits in the middle. It's not storing full KV (so Breno's strongest concern doesn't apply directly), but it's also not a text embedding (it captures richer model-internal representation). The mean-pooled vector is a lossy compression that accidentally makes the representation more portable across contexts — but also too lossy for faithful KV reconstruction.
+TardigradeDB sits in the middle. It's not storing full KV (so The reviewer's strongest concern doesn't apply directly), but it's also not a text embedding (it captures richer model-internal representation). The mean-pooled vector is a lossy compression that accidentally makes the representation more portable across contexts — but also too lossy for faithful KV reconstruction.
 
 ### The kv_injector.py Problem
 
@@ -63,13 +63,13 @@ The current `kv_injector.py` tries to do something questionable: it takes the me
 - Represents the *average* of all tokens, not any specific token
 - Is presented to the model's attention as if it were a real previous token
 
-This is neither faithful KV restoration (which Breno correctly says requires the exact context) nor pure retrieval (which works). It's something in between — a synthetic pseudo-token derived from a semantic summary.
+This is neither faithful KV restoration (which the reviewer correctly says requires the exact context) nor pure retrieval (which works). It's something in between — a synthetic pseudo-token derived from a semantic summary.
 
 ## Assessment
 
 ### What's valid
 
-Breno's core point stands: **full KV cache is context-dependent and non-portable.** You cannot save a conversation's KV and inject it into a different conversation. This is architecturally fundamental to how transformers work.
+The reviewer's core point stands: **full KV cache is context-dependent and non-portable.** You cannot save a conversation's KV and inject it into a different conversation. This is architecturally fundamental to how transformers work.
 
 ### What's not affected
 
@@ -89,15 +89,15 @@ TardigradeDB stores Q4-quantized, mean-pooled vectors (768–3072 floats per cel
 |----------|------------------|----------|
 | **Latent-space retrieval** (semantic memory search) | No | Validated: 80-92% recall in experiments |
 | **Mean-pooled pseudo-token injection** (current kv_injector.py) | Partially — it's not full KV restoration, but also not clearly valid | Unvalidated: needs empirical testing |
-| **Full KV cache restoration** (not implemented) | **Yes — Breno is right** | This is architecturally unsound without decoupled position encoding |
+| **Full KV cache restoration** (not implemented) | **Yes — the reviewer is right** | This is architecturally unsound without decoupled position encoding |
 
 ## Research That Addresses the Critique
 
 The TDD references several techniques designed to handle cross-context KV reuse:
 
-1. **Decoupled position encoding** — Separate positional information from semantic content in stored KV, re-encode positions on injection. This directly addresses Breno's concern by stripping context-specific positional artifacts before storage.
+1. **Decoupled position encoding** — Separate positional information from semantic content in stored KV, re-encode positions on injection. This directly addresses The reviewer's concern by stripping context-specific positional artifacts before storage.
 2. **MemArt** — Computes attention directly against compressed keys in latent space. Critically, MemArt does NOT inject into the KV cache — it uses stored keys as a retrieval signal only, then recomputes attention. This sidesteps the injection problem entirely.
-3. **RelayCaching** — Reuses decode-phase KV across agents, but only for shared-prefix contexts (which Breno would agree is valid).
+3. **RelayCaching** — Reuses decode-phase KV across agents, but only for shared-prefix contexts (which the reviewer would agree is valid).
 
 These are documented in `docs/technical/tdd.md` but not implemented. They represent the gap between "retrieval works" and "injection works."
 

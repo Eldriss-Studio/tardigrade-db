@@ -332,7 +332,7 @@ def main():
     # ── Verdict ───────────────────────────────────────────────
     print(f"\n  INTERPRETATION:")
     print(f"  Compare each row: if column 3 > column 1, mean-pooled injection helped.")
-    print(f"  Compare columns 5 vs 1: if full KV helped, Breno's critique needs nuance.")
+    print(f"  Compare columns 5 vs 1: if full KV helped, the reviewer's critique needs nuance.")
     print(f"  Column 2 (Text RAG) is the upper bound — it always has the answer in text.")
     print(f"  Columns 4 and 6 (irrelevant) should be ≈ baseline or worse.\n")
 
