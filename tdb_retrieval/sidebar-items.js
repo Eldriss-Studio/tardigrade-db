@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["attention","int8_quant","simd_distance","slb"]};
+window.SIDEBAR_ITEMS = {"mod":["attention","int8_quant","pipeline","retriever","simd_distance","slb"]};

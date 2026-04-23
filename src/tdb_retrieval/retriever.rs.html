@@ -1,0 +1,83 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/tdb-retrieval/src/retriever.rs`."><title>retriever.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_retrieval" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">tdb_retrieval/</div>retriever.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-2"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! Retriever trait — Strategy pattern for pluggable retrieval backends.
+<a href=#2 id=2 data-nosnippet>2</a>//!
+<a href=#3 id=3 data-nosnippet>3</a>//! Unifies [`BruteForceRetriever`](crate::attention::BruteForceRetriever) and
+<a href=#4 id=4 data-nosnippet>4</a>//! [`SemanticLookasideBuffer`](crate::slb::SemanticLookasideBuffer) behind a
+<a href=#5 id=5 data-nosnippet>5</a>//! common interface so the engine can compose retrieval strategies via
+<a href=#6 id=6 data-nosnippet>6</a>//! [`RetrieverPipeline`](crate::pipeline::RetrieverPipeline).
+<a href=#7 id=7 data-nosnippet>7</a>//!
+<a href=#8 id=8 data-nosnippet>8</a>//! Each retriever receives an `owner_filter` parameter. Retrievers that don't
+<a href=#9 id=9 data-nosnippet>9</a>//! support internal owner filtering (SLB, Vamana) ignore it — the pipeline
+<a href=#10 id=10 data-nosnippet>10</a>//! handles post-filtering when needed.
+<a href=#11 id=11 data-nosnippet>11</a>
+<a href=#12 id=12 data-nosnippet>12</a></span><span class="kw">use </span>tdb_core::{CellId, OwnerId};
+<a href=#13 id=13 data-nosnippet>13</a>
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span><span class="kw">crate</span>::attention::RetrievalResult;
+<a href=#15 id=15 data-nosnippet>15</a>
+<a href=#16 id=16 data-nosnippet>16</a><span class="doccomment">/// Strategy interface for retrieval backends.
+<a href=#17 id=17 data-nosnippet>17</a>///
+<a href=#18 id=18 data-nosnippet>18</a>/// Implementations must support both insertion (indexing) and querying.
+<a href=#19 id=19 data-nosnippet>19</a>/// The `query` method takes `&amp;mut self` because some implementations
+<a href=#20 id=20 data-nosnippet>20</a>/// (e.g., SLB) update internal state on access (LRU tracking).
+<a href=#21 id=21 data-nosnippet>21</a>///
+<a href=#22 id=22 data-nosnippet>22</a>/// Requires `Send + Sync` because the engine may be wrapped in a `PyO3`
+<a href=#23 id=23 data-nosnippet>23</a>/// `#[pyclass]` or shared across threads.
+<a href=#24 id=24 data-nosnippet>24</a></span><span class="kw">pub trait </span>Retriever: Send + Sync {
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="doccomment">/// Query for the top-k most relevant cells by attention score.
+<a href=#26 id=26 data-nosnippet>26</a>    ///
+<a href=#27 id=27 data-nosnippet>27</a>    /// `owner_filter`: if `Some(id)`, prefer results from that owner.
+<a href=#28 id=28 data-nosnippet>28</a>    /// Retrievers that don't support internal filtering may return
+<a href=#29 id=29 data-nosnippet>29</a>    /// results from any owner — the caller is responsible for final filtering.
+<a href=#30 id=30 data-nosnippet>30</a>    </span><span class="kw">fn </span>query(
+<a href=#31 id=31 data-nosnippet>31</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#32 id=32 data-nosnippet>32</a>        query_key: <span class="kw-2">&amp;</span>[f32],
+<a href=#33 id=33 data-nosnippet>33</a>        k: usize,
+<a href=#34 id=34 data-nosnippet>34</a>        owner_filter: <span class="prelude-ty">Option</span>&lt;OwnerId&gt;,
+<a href=#35 id=35 data-nosnippet>35</a>    ) -&gt; Vec&lt;RetrievalResult&gt;;
+<a href=#36 id=36 data-nosnippet>36</a>
+<a href=#37 id=37 data-nosnippet>37</a>    <span class="doccomment">/// Insert a key vector for a cell into the retrieval index.
+<a href=#38 id=38 data-nosnippet>38</a>    </span><span class="kw">fn </span>insert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, cell_id: CellId, owner: OwnerId, key: <span class="kw-2">&amp;</span>[f32]);
+<a href=#39 id=39 data-nosnippet>39</a>
+<a href=#40 id=40 data-nosnippet>40</a>    <span class="doccomment">/// Number of entries in this retriever.
+<a href=#41 id=41 data-nosnippet>41</a>    </span><span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
+<a href=#42 id=42 data-nosnippet>42</a>
+<a href=#43 id=43 data-nosnippet>43</a>    <span class="doccomment">/// Whether this retriever has no entries.
+<a href=#44 id=44 data-nosnippet>44</a>    </span><span class="kw">fn </span>is_empty(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#45 id=45 data-nosnippet>45</a>        <span class="self">self</span>.len() == <span class="number">0
+<a href=#46 id=46 data-nosnippet>46</a>    </span>}
+<a href=#47 id=47 data-nosnippet>47</a>}
+</code></pre></div></section></main></body></html>
