@@ -53,36 +53,36 @@ Two parallel Codex subagents (different agent models) executed separate Sonia ex
 - `sonia_production_sim.py`: recall was equal between modes (`31.2%` each) but per-token showed much larger SNR separation
 - Both runs completed successfully with no operational blockers
 
-### [KV Cache Validation — Hidden States vs Real KV](kv-cache-validation.md)
+### [KV Cache Validation — Full Progression](kv-cache-validation.md)
 
 **Date:** April 22-23, 2026
-**Status:** Complete
+**Status:** Complete — three major discoveries
 
-Systematic comparison of what to store: raw hidden states vs actual K projections from the KV cache. Tested on Sonia (16 diverse life memories) with GPT-2 and Qwen3-0.6B.
+Systematic exploration of what to store and how to retrieve, tested on Sonia (16 diverse life memories) with GPT-2, Qwen3-0.6B, and Qwen2.5-3B.
 
-**Key findings:**
-- **Storing hidden states produces gravity wells** — one memory dominates all queries regardless of content (31.2% recall)
-- **Storing real KV cache (K projections) doubled recall** — 62.5% mean-pool, 75.0% per-token on a 0.6B model
-- **Per-token KV breaks the gravity well** — 7 unique memories in top-1 across 16 queries (vs 1 with hidden states)
-- **Domain diversity helps** — memories across different life domains (cooking, legal, medical, social) separate naturally in K-projection space
-- **The 4 misses require world knowledge** (Coco = Day of the Dead), not better retrieval — model size problem, not architecture problem
-- Previous experiments that showed poor results were storing the wrong data
+**Three discoveries:**
+1. **Store K projections, not hidden states** — hidden states produce gravity wells (31.2%), K projections doubled recall (62.5-75%)
+2. **K*K per-token matching fails** — K vectors share a massive common component across all sequences (position-0 cross-sentence dot = 6281 for unrelated text). Per-token K*K got 25%, worse than mean-pool
+3. **Query with Q, store K (Q*K)** — matches how attention actually works. Q*K pipeline got 62.5% with 9 unique top-1 memories (no gravity well). Found Coco/Day of the Dead memory that no previous method ever retrieved
 
-**Scripts:** `experiments/sonia_real_kv_cache.py` (real KV), `experiments/sonia_production_sim.py` (hidden states comparison), `experiments/maya_kv_tensors_comparison.py` (GPT-2 vs Qwen3)
+**Full progression:** 31.2% (hidden) → 25% (K*K per-token) → 62.5% (K*K mean-pool) → 75% (K*K per-token manual) → 62.5% (Q*K pipeline, 9 unique top-1)
+
+**Also found:** position-0 attention sink, RoPE contamination in cross-sequence retrieval, GQA dimension mismatch, bigger model (3B) didn't help — ceiling is retrieval method not model size
+
+**Scripts:** `experiments/sonia_per_token_pipeline.py` (Q*K pipeline), `experiments/sonia_real_kv_cache.py` (K*K real KV), `experiments/sonia_production_sim.py` (hidden states)
 
 ## Planned Experiments
 
 | Experiment | Goal | Status |
 |-----------|------|--------|
-| Larger model test (Llama 3.2:3b) | Validate that richer representations improve recall + injection quality | Planned — `examples/llama_memory_test.py` prepared |
-| RoPE injection | Test KV injection with rotary position encoding (requires unrotate/re-rotate) | Planned — blocks Llama/Qwen support |
+| **100-memory scale test** | Does Q*K retrieval hold at realistic memory counts? | **Next up** |
+| GQA K-expansion | Expand K heads to match Q dims in retriever (recover 6% gap) | Planned |
+| Per-head scoring | Score per attention head instead of concatenating all heads | Planned |
 | Multi-session memory | Cross-day retrieval ("what happened last week") | Planned |
-| Governance decay | Verify unused memories demote over simulated time | Validated via `test_sweep.py` |
 | Adversarial retrieval | Contradictory memories, test which surfaces | Planned |
-| Confidence thresholding | Calibrate "I don't remember" cutoff | Planned |
-| [Cross-model retrieval](cross-model-memory-test.md) | Sonnet stores, Opus retrieves — test memory portability across models | Designed — **next up** |
-| GQA head mismatch | Test injection with grouped query attention (Llama 2+) | Planned |
-| Q4 injection at scale | Verify Q4 quality holds across hundreds of memories | Planned |
+| Confidence thresholding | Calibrate "I don't remember" cutoff using SNR | Planned |
+| [Cross-model retrieval](cross-model-memory-test.md) | Store with one model, retrieve with another | Designed |
+| RoPE injection | Test KV injection with rotary position encoding | Planned |
 
 ## Running Experiments
 
