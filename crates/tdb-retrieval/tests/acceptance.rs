@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use tdb_retrieval::attention::BruteForceRetriever;
 use tdb_retrieval::int8_quant::Int8Quantizer;
+use tdb_retrieval::per_token::{PerTokenRetriever, encode_per_token_keys};
 use tdb_retrieval::pipeline::RetrieverPipeline;
 use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::simd_distance::DotProduct;
@@ -584,4 +585,229 @@ fn test_pipeline_is_itself_a_retriever() {
     let results = outer_pipeline.query(&[1.0, 0.0, 0.0, 0.0], 1, None);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].cell_id, 0);
+}
+
+// ── Phase 22: Per-Token Retriever ATDD ──────────────────────────────────────
+
+/// ATDD 1: Insert cell with 3 token keys, query with exact match to token b.
+#[test]
+fn test_per_token_insert_and_exact_match() {
+    let token_a = vec![1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let token_b = vec![0.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let token_c = vec![0.0f32, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+    let encoded = encode_per_token_keys(&[&token_a, &token_b, &token_c]);
+
+    let mut retriever = PerTokenRetriever::new();
+    retriever.insert(42, 1, &encoded);
+
+    assert_eq!(retriever.token_count(), 3);
+    assert_eq!(retriever.cell_count(), 1);
+
+    // Query with exact match to token_b.
+    let results = retriever.query(&token_b, 1, None);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].cell_id, 42);
+    assert!(results[0].score > 0.0);
+}
+
+/// ATDD 2: Per-token beats mean-pool on discriminative queries.
+#[test]
+fn test_per_token_beats_mean_pool_on_discriminative_query() {
+    let dim = 8;
+
+    // Cell A: "food" + "italian" + "risotto" (simulated as unit vectors).
+    let food = vec![1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let italian = vec![0.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let risotto = vec![0.0f32, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+    // Cell B: "food" + "chinese" + "noodles".
+    let chinese = vec![0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+    let noodles = vec![0.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+
+    let encoded_a = encode_per_token_keys(&[&food, &italian, &risotto]);
+    let encoded_b = encode_per_token_keys(&[&food, &chinese, &noodles]);
+
+    let mut pt = PerTokenRetriever::new();
+    pt.insert(0, 1, &encoded_a);
+    pt.insert(1, 1, &encoded_b);
+
+    // Query: "risotto" — should find cell A decisively.
+    let results = pt.query(&risotto, 2, None);
+    assert_eq!(results[0].cell_id, 0, "Per-token should rank cell A (risotto) first");
+
+    // Compare with mean-pooled brute force.
+    let mean_a: Vec<f32> = (0..dim).map(|i| (food[i] + italian[i] + risotto[i]) / 3.0).collect();
+    let mean_b: Vec<f32> = (0..dim).map(|i| (food[i] + chinese[i] + noodles[i]) / 3.0).collect();
+
+    let mut bf = BruteForceRetriever::new();
+    bf.insert(0, 1, 0, &mean_a);
+    bf.insert(1, 1, 0, &mean_b);
+
+    let bf_results = bf.query(&risotto, 2, None);
+    // Mean-pool scores should be similar for both cells (both have "food" component).
+    let score_diff = (bf_results[0].score - bf_results[1].score).abs();
+    let pt_score_diff = (results[0].score - results[1].score).abs();
+
+    assert!(
+        pt_score_diff > score_diff,
+        "Per-token should separate cells more than mean-pool. PT diff: {pt_score_diff:.4}, BF diff: {score_diff:.4}"
+    );
+}
+
+/// ATDD 3: `PerTokenRetriever` implements `Retriever` trait.
+#[test]
+fn test_per_token_implements_retriever_trait() {
+    let token_a = vec![1.0f32, 0.0, 0.0, 0.0];
+    let encoded = encode_per_token_keys(&[&token_a]);
+
+    let mut retriever = PerTokenRetriever::new();
+    retriever.insert(0, 1, &encoded);
+
+    // Query via trait reference.
+    let trait_ref: &mut dyn Retriever = &mut retriever;
+    let results = trait_ref.query(&token_a, 1, None);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].cell_id, 0);
+}
+
+/// ATDD 4: Pipeline chains `PerTokenRetriever` + `BruteForceRetriever`.
+#[test]
+fn test_per_token_in_pipeline_with_brute_force() {
+    // Per-token retriever: cells 0-2.
+    let mut pt = PerTokenRetriever::new();
+    let enc0 = encode_per_token_keys(&[&[1.0, 0.0, 0.0, 0.0]]);
+    let enc1 = encode_per_token_keys(&[&[0.0, 1.0, 0.0, 0.0]]);
+    pt.insert(0, 1, &enc0);
+    pt.insert(1, 1, &enc1);
+
+    // BruteForce: cells 10-11.
+    let mut bf = BruteForceRetriever::new();
+    bf.insert(10, 1, 0, &[0.7, 0.7, 0.0, 0.0]);
+    bf.insert(11, 1, 0, &[0.0, 0.0, 1.0, 0.0]);
+
+    let mut pipeline = RetrieverPipeline::new();
+    pipeline.add_stage(Box::new(pt));
+    pipeline.add_stage(Box::new(bf));
+
+    // Query that matches per-token (cell 0) and brute-force (cell 10).
+    let results = pipeline.query(&[1.0, 0.0, 0.0, 0.0], 3, None);
+
+    assert!(results.len() >= 2, "Pipeline should return results from both stages");
+    let ids: Vec<u64> = results.iter().map(|r| r.cell_id).collect();
+    assert!(ids.contains(&0), "Should contain per-token cell 0");
+}
+
+/// ATDD 5: Owner filter works on per-token retriever.
+#[test]
+fn test_per_token_owner_filter() {
+    let mut pt = PerTokenRetriever::new();
+
+    let enc_a = encode_per_token_keys(&[&[1.0, 0.0, 0.0, 0.0]]);
+    let enc_b = encode_per_token_keys(&[&[0.9, 0.1, 0.0, 0.0]]);
+
+    pt.insert(0, 1, &enc_a); // owner 1
+    pt.insert(1, 2, &enc_b); // owner 2
+
+    let results = pt.query(&[1.0, 0.0, 0.0, 0.0], 5, Some(1));
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].owner, 1);
+}
+
+/// ATDD 6: Single-token cells degrade gracefully to brute-force behavior.
+#[test]
+fn test_single_token_cells_behave_like_brute_force() {
+    let mut pt = PerTokenRetriever::new();
+
+    // Insert single-token cells (no per-token encoding, just raw vectors).
+    pt.insert(0, 1, &[1.0, 0.0, 0.0, 0.0]);
+    pt.insert(1, 1, &[0.0, 1.0, 0.0, 0.0]);
+    pt.insert(2, 1, &[0.7, 0.7, 0.0, 0.0]);
+
+    let results = pt.query(&[1.0, 0.0, 0.0, 0.0], 3, None);
+
+    assert_eq!(results.len(), 3);
+    // Cell 0 should rank first (exact match).
+    assert_eq!(results[0].cell_id, 0);
+}
+
+/// ATDD 7 (eval): Per-token recall > 90% on synthetic multi-token cells.
+#[test]
+fn test_per_token_recall_improvement() {
+    let dim = 16;
+    let n_cells = 100;
+    let tokens_per_cell = 6;
+    let n_queries = 50;
+
+    // Deterministic pseudo-random via LCG.
+    let mut seed = 42u64;
+    let mut next_f32 = || -> f32 {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        ((seed >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+    };
+
+    // Build cells with distinct per-token vectors.
+    let mut pt = PerTokenRetriever::new();
+    let mut bf = BruteForceRetriever::new();
+    let mut all_tokens: Vec<(u64, Vec<f32>)> = Vec::new(); // (cell_id, token_vec)
+
+    for cell_id in 0..n_cells as u64 {
+        let mut token_vecs: Vec<Vec<f32>> = Vec::new();
+        for _ in 0..tokens_per_cell {
+            let tv: Vec<f32> = (0..dim).map(|_| next_f32()).collect();
+            all_tokens.push((cell_id, tv.clone()));
+            token_vecs.push(tv);
+        }
+
+        // Per-token insert.
+        let refs: Vec<&[f32]> = token_vecs.iter().map(Vec::as_slice).collect();
+        let encoded = encode_per_token_keys(&refs);
+        pt.insert(cell_id, 1, &encoded);
+
+        // Mean-pool insert for comparison.
+        let mean: Vec<f32> = (0..dim)
+            .map(|d| token_vecs.iter().map(|t| t[d]).sum::<f32>() / tokens_per_cell as f32)
+            .collect();
+        bf.insert(cell_id, 1, 0, &mean);
+    }
+
+    // Generate queries: perturbed copies of specific tokens from specific cells.
+    let mut pt_hits = 0;
+    let mut bf_hits = 0;
+
+    for q in 0..n_queries {
+        let idx = (q * 7 + 3) % all_tokens.len(); // deterministic selection
+        let (target_cell, ref target_token) = all_tokens[idx];
+
+        // Add small noise to query.
+        let query: Vec<f32> =
+            target_token.iter().enumerate().map(|(d, &v)| v + (d as f32 * 0.001)).collect();
+
+        // Per-token retrieval.
+        let pt_results = pt.query(&query, 5, None);
+        if pt_results.iter().any(|r| r.cell_id == target_cell) {
+            pt_hits += 1;
+        }
+
+        // Mean-pool retrieval.
+        let bf_results = bf.query(&query, 5, None);
+        if bf_results.iter().any(|r| r.cell_id == target_cell) {
+            bf_hits += 1;
+        }
+    }
+
+    let pt_recall = pt_hits as f64 / n_queries as f64;
+    let bf_recall = bf_hits as f64 / n_queries as f64;
+
+    // Log results via eval_log helper.
+    eval_log(&format!(
+        "Per-token recall@5: {pt_recall:.1}% ({pt_hits}/{n_queries}) | Mean-pool: {bf_recall:.1}% ({bf_hits}/{n_queries})"
+    ));
+
+    assert!(
+        pt_recall > 0.90,
+        "Per-token recall {pt_recall:.2} should exceed 90%. Mean-pool was {bf_recall:.2}"
+    );
 }

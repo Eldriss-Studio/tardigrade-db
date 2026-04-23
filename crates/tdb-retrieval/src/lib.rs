@@ -74,6 +74,7 @@
 
 pub mod attention;
 pub mod int8_quant;
+pub mod per_token;
 pub mod pipeline;
 pub mod retriever;
 pub mod simd_distance;
