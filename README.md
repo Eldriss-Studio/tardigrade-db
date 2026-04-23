@@ -2,9 +2,15 @@
 
 [![CI](https://github.com/Eldriss-Studio/tardigrade-db/actions/workflows/ci.yml/badge.svg)](https://github.com/Eldriss-Studio/tardigrade-db/actions/workflows/ci.yml)
 
-**An LLM-native database kernel — persistent memory for autonomous AI agents.**
+**An experimental LLM-native memory-kernel prototype for autonomous AI agents.**
 
 TardigradeDB is not a traditional database with tables and indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
+
+> **Research status (April 23, 2026): experimental prototype**
+>
+> TardigradeDB is a research experiment, not a production-ready database.
+> Current results are from controlled demos, experiments, and benchmarks.
+> APIs, on-disk formats, and guarantees may change while the architecture is validated.
 
 > *From "storage as a service" to "storage as cognition."*
 
@@ -14,7 +20,7 @@ TardigradeDB is not a traditional database with tables and indexes, nor a vector
 - Benchmark narrative: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html)
 - Observed benchmark results so far: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html)
 
-## What The App Does Today
+## What The Prototype Demonstrates Today
 
 At runtime, TardigradeDB acts like a memory engine for agents:
 
@@ -30,7 +36,54 @@ If you only need one mental model: **capture memory state, persist it, and retri
 
 Current agent memory systems (Mem0, Letta, Zep) rely on text retrieval — tokenize, embed, search, detokenize. This creates a lossy round-trip through representations the model never asked for. TardigradeDB eliminates that entirely by persisting the model's own internal state and restoring it directly into the attention stack.
 
-**Measured performance** (Apple M-series, release mode, criterion):
+### "Isn't this just a KV cache?"
+
+Yes at the data level; no at the system level.
+
+A raw KV cache is append-and-replay state for one running model session. TardigradeDB adds the memory-system capabilities a raw cache does not have:
+
+- **Selective semantic recall** in latent space (`q · k / sqrt(d_k)`), so the engine can fetch the relevant few memories instead of replaying full history.
+- **Durable persistence** across sessions in compressed form (Q4/Q8), not process-local ephemeral cache pages.
+- **Memory lifecycle management** (AKL promotion, demotion, decay), so memory quality improves over time instead of unbounded growth.
+- **Causal organization** (Trace graph + WAL), so episodic relationships survive crashes and can be traversed explicitly.
+- **Cross-agent reuse boundary** via a unified engine API, rather than per-process cache state.
+
+In short: TardigradeDB stores KV tensors, but behaves like a managed long-term memory kernel.
+
+### Differentiators and practical advantages
+
+Compared with raw KV cache and text/embedding memory stacks, the prototype is designed to demonstrate:
+
+- **Semantic retrieval from mnemonic state**: retrieval happens in latent KV space using attention-style scoring, not text keyword overlap.
+- **Selective memory injection**: fetch only relevant KV slices rather than replaying entire history.
+- **Persistence across runs**: KV activations survive process/session boundaries instead of vanishing with model shutdown.
+- **Memory quality management**: AKL-based promotion, demotion, and decay to avoid unmanaged memory growth.
+- **Causal/episodic structure**: Trace graph captures relationships such as caused-by/follows/supports for structured recall.
+- **Rebuild-oriented reliability model**: WAL/snapshot recovery path plus rebuildable derived state.
+- **Cross-agent memory boundary**: shared engine-level memory API instead of one-cache-per-process isolation.
+- **Native tensor path**: no mandatory text -> embedding -> ANN -> text round-trip.
+
+These are architectural differentiators under active validation, not final production claims.
+
+### Real KV Cache Retrieval Result (April 23, 2026)
+
+`experiments/sonia_real_kv_cache.py` compared storing hidden-state proxies vs storing actual KV cache key projections (`past_key_values`) on `Qwen/Qwen3-0.6B` across 16 diverse memories and 16 semantic queries.
+
+| What was stored | Mean-pool recall | Per-token recall | Unique top-1 memories |
+|-----------------|------------------|------------------|-----------------------|
+| Hidden states (proxy, wrong target) | 31.2% | 31.2% | not reported in this run |
+| Real KV cache (actual key projections) | 62.5% | 75.0% | 7 / 16 |
+
+Key outcomes from that run:
+
+- Switching from hidden states to real KV tensors doubled mean-pool recall (31.2% -> 62.5%).
+- Per-token recall more than doubled (31.2% -> 75.0%).
+- The top-1 "gravity well" collapsed: 7 different memories reached top-1 across 16 queries.
+- Remaining misses were limited to 4/16 queries in that setup (smoke-alarm cooking, doctor visit, first snow, Coco movie).
+
+Primary takeaway: the retrieval architecture was not the core failure mode; storing the wrong representation was.
+
+**Measured prototype performance** (Apple M-series, release mode, criterion):
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
@@ -287,9 +340,9 @@ PYTHONPATH=python python -m tdb_bench compare \
 | Docs | doctests | 8 | Crate-level usage examples |
 | Python | pytest | 10 | PyO3 bindings, hook ABC, HF adapter, WriteDecision |
 
-## What We Built
+## Research Milestones Implemented
 
-**All 11 implementation phases complete.** 117 tests passing, GPT-2 end-to-end demo working.
+**All 11 planned prototype phases are implemented.** Current evidence: 117 tests passing and end-to-end demos/experiments working.
 
 ### Storage Layer — Custom from scratch, not a wrapper
 
@@ -324,9 +377,11 @@ PYTHONPATH=python python -m tdb_bench compare \
 - **Python bridge (PyO3)** — `tardigrade_db.Engine` class with `mem_write`, `mem_read`, `trace_ancestors`, `store_synapsis`, `load_synapsis`. Numpy arrays in, lists out.
 - **Inference hook framework** — `TardigradeHook` ABC (Template Method pattern) with `HuggingFaceHook` reference implementation. Norm-based salience heuristic, automatic KV capture/retrieval.
 
-### Proven with GPT-2
+### Proven in practice (proxy and real-KV paths)
 
-The end-to-end demo captures hidden states from GPT-2 inference on *"The capital of France is"*, persists them, then retrieves them when querying with *"What is the main city of France"* — proving that semantically related prompts find each other through latent-space attention scoring.
+The GPT-2 end-to-end demo validates the full persistence/retrieval loop with hidden-state proxy tensors for fast local verification.
+
+The April 23, 2026 Qwen3 experiment (`experiments/sonia_real_kv_cache.py`) validates the same retrieval idea using actual KV cache key projections (`past_key_values`), with substantially higher recall (up to 75.0% per-token in that run).
 
 ---
 
