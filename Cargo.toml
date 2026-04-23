@@ -35,8 +35,8 @@ half = { version = "2", features = ["num-traits"] }
 bytemuck = { version = "1", features = ["derive"] }
 
 # Shared dev dependencies (used via [dev-dependencies] foo = { workspace = true })
-criterion = { version = "0.5", features = ["html_reports"] }
-rstest = "0.25"
+criterion = { version = "0.8", features = ["html_reports"] }
+rstest = "0.26"
 tempfile = "3"
 
 [workspace.lints.clippy]

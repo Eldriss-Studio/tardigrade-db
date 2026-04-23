@@ -1,4 +1,5 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use tdb_engine::engine::Engine;
 
 fn bench_engine_write(c: &mut Criterion) {

@@ -1,4 +1,5 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use tdb_storage::quantization::{DequantizeStrategy, Q4, QuantizeStrategy};
 
 fn bench_q4_quantize(c: &mut Criterion) {
