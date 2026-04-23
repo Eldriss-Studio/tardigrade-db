@@ -74,5 +74,7 @@
 
 pub mod attention;
 pub mod int8_quant;
+pub mod pipeline;
+pub mod retriever;
 pub mod simd_distance;
 pub mod slb;

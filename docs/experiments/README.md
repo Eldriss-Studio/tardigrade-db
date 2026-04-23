@@ -51,7 +51,7 @@ Key findings from [validation results](kv-injection-results.md):
 | Governance decay | Verify unused memories demote over simulated time | Validated via `test_sweep.py` |
 | Adversarial retrieval | Contradictory memories, test which surfaces | Planned |
 | Confidence thresholding | Calibrate "I don't remember" cutoff | Planned |
-| Cross-model retrieval | Store from one model, retrieve with another | Planned |
+| [Cross-model retrieval](cross-model-memory-test.md) | Sonnet stores, Opus retrieves — test memory portability across models | Designed — **next up** |
 | GQA head mismatch | Test injection with grouped query attention (Llama 2+) | Planned |
 | Q4 injection at scale | Verify Q4 quality holds across hundreds of memories | Planned |
 

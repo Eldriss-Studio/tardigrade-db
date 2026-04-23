@@ -218,6 +218,30 @@ impl SemanticLookasideBuffer {
     }
 }
 
+impl crate::retriever::Retriever for SemanticLookasideBuffer {
+    fn query(
+        &mut self,
+        query_key: &[f32],
+        k: usize,
+        owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        let results = SemanticLookasideBuffer::query(self, query_key, k);
+        // SLB doesn't filter internally — apply owner filter post-retrieval.
+        match owner_filter {
+            Some(owner) => results.into_iter().filter(|r| r.owner == owner).collect(),
+            None => results,
+        }
+    }
+
+    fn insert(&mut self, cell_id: CellId, owner: OwnerId, key: &[f32]) {
+        SemanticLookasideBuffer::insert(self, cell_id, owner, key);
+    }
+
+    fn len(&self) -> usize {
+        SemanticLookasideBuffer::len(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

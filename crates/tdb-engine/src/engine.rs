@@ -11,7 +11,7 @@
 //!
 //! Each stage returns results or passes to the next. Results are merged by `CellId`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use tdb_core::error::{Result, TardigradeError};
@@ -24,7 +24,9 @@ use tdb_governance::tiers::TierStateMachine;
 use tdb_index::trace::{EdgeType, TraceGraph};
 use tdb_index::vamana::VamanaIndex;
 use tdb_index::wal::{Wal, WalEntry};
-use tdb_retrieval::attention::{BruteForceRetriever, RetrievalResult};
+use tdb_retrieval::attention::RetrievalResult;
+use tdb_retrieval::pipeline::RetrieverPipeline;
+use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::slb::SemanticLookasideBuffer;
 use tdb_storage::block_pool::BlockPool;
 use tdb_storage::synaptic_store::SynapticStore;
@@ -35,6 +37,38 @@ const DEFAULT_SLB_CAPACITY: usize = 4096;
 const DEFAULT_VAMANA_MAX_DEGREE: usize = 16;
 /// Default cell count threshold before activating Vamana.
 const DEFAULT_VAMANA_THRESHOLD: usize = 10_000;
+
+/// Adapter: wraps `VamanaIndex` (from `tdb-index`) to implement `Retriever` (from `tdb-retrieval`).
+///
+/// Bridges the interface gap: Vamana returns `(CellId, f32)` tuples with no owner info,
+/// while `Retriever` returns `RetrievalResult` with owner. The adapter sets owner to 0
+/// — the pipeline caller is responsible for final owner filtering.
+struct VamanaAdapter {
+    inner: VamanaIndex,
+}
+
+impl Retriever for VamanaAdapter {
+    fn query(
+        &mut self,
+        query_key: &[f32],
+        k: usize,
+        _owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        self.inner
+            .query(query_key, k)
+            .into_iter()
+            .map(|(cell_id, score)| RetrievalResult { cell_id, owner: 0, score })
+            .collect()
+    }
+
+    fn insert(&mut self, cell_id: CellId, _owner: OwnerId, key: &[f32]) {
+        self.inner.insert(cell_id, key);
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
 
 /// Per-cell governance state tracked by the engine.
 #[derive(Debug)]
@@ -56,9 +90,21 @@ pub struct ReadResult {
 ///
 /// Facade pattern: single entry point coordinating storage, retrieval,
 /// governance, and organization (trace + WAL).
+///
+/// ## Retrieval Architecture
+///
+/// ```text
+/// query → SLB (cache, separate) → Pipeline [BruteForce, Vamana*] → merge
+/// ```
+///
+/// The SLB is a separate LRU cache (needs direct access for warming on reads).
+/// The [`RetrieverPipeline`] chains cold-path retrievers via the [`Retriever`] trait.
+/// Vamana is lazily activated when cell count crosses the threshold.
 pub struct Engine {
     pool: BlockPool,
-    retriever: BruteForceRetriever,
+    /// Cold-path retrieval: `BruteForce` + Vamana (when active).
+    pipeline: RetrieverPipeline,
+    /// Hot-path cache: separate from pipeline for direct LRU warming on reads/writes.
     slb: SemanticLookasideBuffer,
     vamana: Option<VamanaIndex>,
     trace: TraceGraph,
@@ -119,13 +165,17 @@ impl Engine {
         }
 
         // Rebuild derived state from persisted cells (Memento pattern).
-        let mut retriever = BruteForceRetriever::new();
+        let mut pipeline = RetrieverPipeline::new();
+        pipeline.add_stage(Box::new(tdb_retrieval::attention::BruteForceRetriever::new()));
+
         let mut governance = HashMap::new();
         let mut next_id: CellId = 0;
         let mut key_dim: Option<usize> = None;
 
         let cell_ids: Vec<CellId> = pool.iter_cell_ids().collect();
 
+        // Rebuild retrieval index from persisted cells.
+        // Vamana is added as a pipeline stage lazily when cell count crosses threshold.
         for cell_id in &cell_ids {
             let cell = pool.get(*cell_id)?;
 
@@ -133,7 +183,7 @@ impl Engine {
                 key_dim = Some(cell.key.len());
             }
 
-            retriever.insert(cell.id, cell.owner, cell.layer, &cell.key);
+            pipeline.insert(cell.id, cell.owner, &cell.key);
 
             let scorer = ImportanceScorer::new(cell.meta.importance);
             let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
@@ -149,7 +199,7 @@ impl Engine {
 
         Ok(Self {
             pool,
-            retriever,
+            pipeline,
             slb,
             vamana: None,
             trace,
@@ -205,15 +255,9 @@ impl Engine {
         // Persist to block pool.
         self.pool.append(&cell)?;
 
-        // Index for retrieval (BruteForce + SLB).
-        self.retriever.insert(id, owner, layer, key);
+        // Index for retrieval (pipeline + SLB).
+        self.pipeline.insert(id, owner, key);
         self.slb.insert(id, owner, key);
-
-        // If Vamana is active, insert online.
-        if let Some(ref mut vamana) = self.vamana {
-            vamana.insert(id, key);
-            // Rebuild needed after insert — for now, defer to threshold activation.
-        }
 
         self.governance.insert(id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
 
@@ -239,7 +283,8 @@ impl Engine {
 
     /// Read the top-k most relevant cells for a query key.
     ///
-    /// Chain of Responsibility: SLB → Vamana → `BruteForce`.
+    /// Two-phase retrieval: SLB (hot cache) then [`RetrieverPipeline`] (cold path).
+    /// Results are merged, deduplicated, scored with recency decay, and filtered by owner.
     pub fn mem_read(
         &mut self,
         query_key: &[f32],
@@ -250,37 +295,18 @@ impl Engine {
             return Ok(Vec::new());
         }
 
-        let mut seen = HashSet::new();
-        let mut candidates: Vec<RetrievalResult> = Vec::new();
+        // Phase 1: SLB hot cache (separate from pipeline for LRU warming).
+        let mut candidates =
+            if self.slb.is_empty() { Vec::new() } else { self.slb.query(query_key, k * 2) };
 
-        // Stage 1: SLB (hot path, INT8 quantized).
-        if !self.slb.is_empty() {
-            let slb_results = self.slb.query(query_key, k * 2);
-            for r in slb_results {
-                if owner_filter.is_none_or(|o| o == r.owner) && seen.insert(r.cell_id) {
-                    candidates.push(r);
-                }
-            }
-        }
-
-        // Stage 2: Vamana (warm path, graph ANN) if active and SLB didn't fill k.
+        // Phase 2: Cold-path pipeline (BruteForce + Vamana) if SLB didn't fill k.
         if candidates.len() < k {
-            if let Some(ref vamana) = self.vamana {
-                let vamana_results = vamana.query(query_key, k * 2);
-                for (cell_id, score) in vamana_results {
-                    if seen.insert(cell_id) {
-                        let owner = self.governance.get(&cell_id).map_or(0, |_| 0); // Owner not stored in Vamana; filter later.
-                        candidates.push(RetrievalResult { cell_id, owner, score });
-                    }
-                }
-            }
-        }
-
-        // Stage 3: BruteForce (cold path, exact).
-        if candidates.len() < k {
-            let brute_results = self.retriever.query(query_key, k * 2, owner_filter);
-            for r in brute_results {
-                if seen.insert(r.cell_id) {
+            let cold_results = self.pipeline.query(query_key, k * 2, owner_filter);
+            // Deduplicate against SLB results.
+            let seen: std::collections::HashSet<CellId> =
+                candidates.iter().map(|r| r.cell_id).collect();
+            for r in cold_results {
+                if !seen.contains(&r.cell_id) {
                     candidates.push(r);
                 }
             }
@@ -302,10 +328,9 @@ impl Engine {
             let tier =
                 self.governance.get(&rr.cell_id).map_or(Tier::Draft, |g| g.tier_sm.current());
 
-            // Single pool.get() — also handles owner filtering to avoid a double read.
             match self.pool.get(rr.cell_id) {
                 Ok(cell) => {
-                    // Owner filter (needed for Vamana results which don't filter internally).
+                    // Owner filter (pipeline may not filter internally for all stages).
                     if let Some(filter_owner) = owner_filter {
                         if cell.owner != filter_owner {
                             continue;
@@ -316,7 +341,7 @@ impl Engine {
                         gov.scorer.on_access();
                         gov.tier_sm.evaluate(gov.scorer.importance());
                     }
-                    // Populate SLB with accessed cells for future hot-path hits.
+                    // Warm the SLB with accessed cells for future hot-path hits.
                     self.slb.insert(rr.cell_id, cell.owner, &cell.key);
 
                     results.push(ReadResult { cell, score: adjusted_score, tier });
@@ -389,7 +414,7 @@ impl Engine {
         self.synaptic_store.load_by_owner(owner).map_err(|e| TardigradeError::Io { source: e })
     }
 
-    /// Build and activate the Vamana index from all existing keys.
+    /// Build and activate the Vamana index, adding it as a pipeline stage.
     fn activate_vamana(&mut self) -> Result<()> {
         let dim = self.key_dim.unwrap_or(128);
         let mut vamana = VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE);
@@ -401,7 +426,9 @@ impl Engine {
         }
         vamana.build();
 
-        self.vamana = Some(vamana);
+        // Add Vamana as a pipeline stage via the adapter.
+        self.pipeline.add_stage(Box::new(VamanaAdapter { inner: vamana }));
+        self.vamana = Some(VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE)); // Marker only.
         Ok(())
     }
 }

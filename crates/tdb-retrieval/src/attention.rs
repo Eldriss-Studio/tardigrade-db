@@ -94,6 +94,27 @@ impl Default for BruteForceRetriever {
     }
 }
 
+impl crate::retriever::Retriever for BruteForceRetriever {
+    fn query(
+        &mut self,
+        query_key: &[f32],
+        k: usize,
+        owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        // Delegate to the existing immutable query method.
+        BruteForceRetriever::query(self, query_key, k, owner_filter)
+    }
+
+    fn insert(&mut self, cell_id: CellId, owner: OwnerId, key: &[f32]) {
+        // Layer is not used in the trait interface — pass 0 as default.
+        BruteForceRetriever::insert(self, cell_id, owner, 0, key);
+    }
+
+    fn len(&self) -> usize {
+        BruteForceRetriever::len(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

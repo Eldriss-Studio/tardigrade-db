@@ -2,6 +2,8 @@ use std::time::{Duration, Instant};
 
 use tdb_retrieval::attention::BruteForceRetriever;
 use tdb_retrieval::int8_quant::Int8Quantizer;
+use tdb_retrieval::pipeline::RetrieverPipeline;
+use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::simd_distance::DotProduct;
 use tdb_retrieval::slb::SemanticLookasideBuffer;
 
@@ -441,4 +443,145 @@ fn eval_aspir_recall_realistic_dist() {
         avg_recall > 0.99,
         "BruteForce recall should be ~1.0 on realistic dist, got {avg_recall:.3}"
     );
+}
+
+// ── Phase 19: Retriever Trait + Pipeline ATDD ───────────────────────────────
+
+/// ATDD 1: `BruteForceRetriever` implements `Retriever` trait — same results via trait ref.
+#[test]
+fn test_retriever_trait_brute_force_via_trait_ref() {
+    let mut retriever = BruteForceRetriever::new();
+    retriever.insert(0, 1, 0, &[1.0, 0.0, 0.0, 0.0]);
+    retriever.insert(1, 1, 0, &[0.0, 1.0, 0.0, 0.0]);
+    retriever.insert(2, 1, 0, &[0.7, 0.7, 0.0, 0.0]);
+
+    // Query via direct method.
+    let direct = retriever.query(&[1.0, 0.0, 0.0, 0.0], 2, None);
+
+    // Query via trait reference.
+    let trait_ref: &mut dyn Retriever = &mut retriever;
+    let via_trait = trait_ref.query(&[1.0, 0.0, 0.0, 0.0], 2, None);
+
+    assert_eq!(direct.len(), via_trait.len());
+    assert_eq!(direct[0].cell_id, via_trait[0].cell_id);
+    assert_eq!(direct[1].cell_id, via_trait[1].cell_id);
+}
+
+/// ATDD 2: SLB implements Retriever trait — owner filtering applied post-retrieval.
+#[test]
+fn test_retriever_trait_slb_with_owner_filter() {
+    let dim = 4;
+    let mut slb = SemanticLookasideBuffer::new(100, dim);
+    slb.insert(0, 1, &[1.0, 0.0, 0.0, 0.0]); // owner 1
+    slb.insert(1, 2, &[0.9, 0.1, 0.0, 0.0]); // owner 2
+    slb.insert(2, 1, &[0.8, 0.2, 0.0, 0.0]); // owner 1
+
+    let trait_ref: &mut dyn Retriever = &mut slb;
+    let results = trait_ref.query(&[1.0, 0.0, 0.0, 0.0], 5, Some(1));
+
+    // Only owner 1 results should be returned.
+    for r in &results {
+        assert_eq!(r.owner, 1, "SLB Retriever trait should filter by owner");
+    }
+    assert_eq!(results.len(), 2);
+}
+
+/// ATDD 3: Pipeline delegates in order — second stage called when first returns 0 results.
+#[test]
+fn test_pipeline_delegates_to_second_stage() {
+    let dim = 4;
+
+    // Stage 1: empty SLB (returns nothing).
+    let slb = SemanticLookasideBuffer::new(100, dim);
+
+    // Stage 2: BruteForce with data.
+    let mut brute = BruteForceRetriever::new();
+    brute.insert(0, 1, 0, &[1.0, 0.0, 0.0, 0.0]);
+    brute.insert(1, 1, 0, &[0.0, 1.0, 0.0, 0.0]);
+
+    let mut pipeline = RetrieverPipeline::new();
+    pipeline.add_stage(Box::new(slb));
+    pipeline.add_stage(Box::new(brute));
+
+    let results = pipeline.query(&[1.0, 0.0, 0.0, 0.0], 2, None);
+    assert_eq!(results.len(), 2, "Pipeline should fall through to BruteForce");
+    assert_eq!(results[0].cell_id, 0, "Best match should be cell 0");
+}
+
+/// ATDD 4: Pipeline short-circuits when first stage fills k results.
+#[test]
+fn test_pipeline_short_circuits_when_full() {
+    let dim = 4;
+
+    // Stage 1: SLB with enough data to fill k=2.
+    let mut slb = SemanticLookasideBuffer::new(100, dim);
+    slb.insert(10, 1, &[1.0, 0.0, 0.0, 0.0]);
+    slb.insert(11, 1, &[0.9, 0.1, 0.0, 0.0]);
+    slb.insert(12, 1, &[0.8, 0.2, 0.0, 0.0]);
+
+    // Stage 2: BruteForce with different data.
+    let mut brute = BruteForceRetriever::new();
+    brute.insert(20, 1, 0, &[1.0, 0.0, 0.0, 0.0]);
+    brute.insert(21, 1, 0, &[0.9, 0.1, 0.0, 0.0]);
+
+    let mut pipeline = RetrieverPipeline::new();
+    pipeline.add_stage(Box::new(slb));
+    pipeline.add_stage(Box::new(brute));
+
+    let results = pipeline.query(&[1.0, 0.0, 0.0, 0.0], 2, None);
+    assert_eq!(results.len(), 2);
+
+    // All results should be from SLB (cells 10-12), not BruteForce (cells 20-21).
+    for r in &results {
+        assert!(
+            r.cell_id >= 10 && r.cell_id <= 12,
+            "Expected SLB result (10-12), got cell {}",
+            r.cell_id
+        );
+    }
+}
+
+/// ATDD 5: Pipeline deduplicates across stages by `CellId`.
+#[test]
+fn test_pipeline_deduplicates_across_stages() {
+    let dim = 4;
+    let key = [1.0f32, 0.0, 0.0, 0.0];
+
+    // Both stages contain cell 0 with the same key.
+    let mut slb = SemanticLookasideBuffer::new(100, dim);
+    slb.insert(0, 1, &key);
+
+    let mut brute = BruteForceRetriever::new();
+    brute.insert(0, 1, 0, &key);
+    brute.insert(1, 1, 0, &[0.0, 1.0, 0.0, 0.0]);
+
+    let mut pipeline = RetrieverPipeline::new();
+    pipeline.add_stage(Box::new(slb));
+    pipeline.add_stage(Box::new(brute));
+
+    // SLB returns cell 0 (1 result < k=3), pipeline falls through to BruteForce.
+    // BruteForce also has cell 0 — it should be deduplicated.
+    let results = pipeline.query(&key, 3, None);
+
+    let ids: Vec<u64> = results.iter().map(|r| r.cell_id).collect();
+    let unique: std::collections::HashSet<u64> = ids.iter().copied().collect();
+    assert_eq!(ids.len(), unique.len(), "Pipeline should deduplicate: {ids:?}");
+}
+
+/// ATDD 6: Pipeline itself implements `Retriever` (composable).
+#[test]
+fn test_pipeline_is_itself_a_retriever() {
+    let mut inner_pipeline = RetrieverPipeline::new();
+
+    let mut brute = BruteForceRetriever::new();
+    brute.insert(0, 1, 0, &[1.0, 0.0, 0.0, 0.0]);
+    inner_pipeline.add_stage(Box::new(brute));
+
+    // Wrap pipeline in another pipeline (composability).
+    let mut outer_pipeline = RetrieverPipeline::new();
+    outer_pipeline.add_stage(Box::new(inner_pipeline));
+
+    let results = outer_pipeline.query(&[1.0, 0.0, 0.0, 0.0], 1, None);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].cell_id, 0);
 }
