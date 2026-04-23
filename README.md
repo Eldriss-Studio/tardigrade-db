@@ -45,6 +45,20 @@ If you only need one mental model: **capture memory state, persist it, and retri
 
 Current agent memory systems (Mem0, Letta, Zep) rely on text retrieval — tokenize, embed, search, detokenize. This creates a lossy round-trip through representations the model never asked for. TardigradeDB eliminates that entirely by persisting the model's own internal state and restoring it directly into the attention stack.
 
+### Quick comparison
+
+| Dimension | Embedding RAG / vector memory | Traditional KV cache | TardigradeDB (experimental prototype) |
+|-----------|-------------------------------|----------------------|---------------------------------------|
+| Primary stored unit | Text chunks + embedding vectors | Attention K/V tensors for active context window | Quantized K/V tensors as durable memory cells |
+| Retrieval signal | ANN/cosine similarity in embedding space | Usually none (append + replay only) | Attention-native latent scoring (`q · k / sqrt(d_k)`) |
+| Semantic recall | Strong for text-level similarity | Not a retrieval system by itself | Designed for latent semantic recall directly on K/V |
+| Persistence scope | External DB persistence is common | Usually process/session-local and ephemeral | Built for cross-session persistence in the engine |
+| Context usage pattern | Retrieve text, then re-tokenize into prompt | Replay prior cache pages, often all-or-nothing | Retrieve and inject selected memory slices |
+| Lifecycle/governance | App-defined policies, often ad hoc | None by default | AKL promotion/demotion/decay (prototype) |
+| Causal/episodic structure | Optional metadata graph | None by default | Trace graph + WAL recovery model |
+| Representation round-trip | text -> embed -> search -> text | none, but no semantic retrieval layer | native tensor path (no mandatory text/embedding round-trip) |
+| Status | Mature ecosystem/pattern | Core inference primitive | Research prototype under active validation |
+
 ### "Isn't this just a KV cache?"
 
 Yes at the data level; no at the system level.
