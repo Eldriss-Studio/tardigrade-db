@@ -73,11 +73,9 @@ class HuggingFaceKVHook(TardigradeHook):
         # Per-token K vectors: (heads, seq, head_dim) -> (seq, kv_dim)
         k_flat_per_token = k.permute(1, 0, 2).reshape(s, kv_dim).numpy().astype(np.float32)
 
-        # Encode with header: [token_count_bits, dim_bits, token_0, token_1, ...]
-        header = np.array([
-            np.float32(np.uint32(s).view(np.float32)),
-            np.float32(np.uint32(kv_dim).view(np.float32)),
-        ], dtype=np.float32)
+        # Encode with header: [SENTINEL, token_count, dim, token_0, token_1, ...]
+        # Sentinel must survive Q4 quantization (large negative value).
+        header = np.array([-1.0e9, float(s), float(kv_dim)], dtype=np.float32)
         per_token_key = np.concatenate([header, k_flat_per_token.ravel()])
 
         # Full K+V payload: flatten both and concatenate.

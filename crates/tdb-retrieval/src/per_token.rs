@@ -73,9 +73,16 @@ impl Default for PerTokenRetriever {
     }
 }
 
+/// Sentinel value marking the start of a per-token encoded header.
+/// Chosen to be a large negative value that survives Q4 quantization
+/// and is unlikely to appear in real K vectors.
+const HEADER_SENTINEL: f32 = -1.0e9;
+
 /// Encode multiple per-token K vectors into a flat f32 slice with header.
 ///
-/// Format: `[token_count_bits, dim_bits, k0_0, k0_1, ..., k0_D, k1_0, ...]`
+/// Format: `[SENTINEL, token_count_as_f32, dim_as_f32, k0_0, ..., k0_D, k1_0, ...]`
+///
+/// The sentinel value survives Q4 quantization (unlike bit-cast denorms).
 pub fn encode_per_token_keys(token_keys: &[&[f32]]) -> Vec<f32> {
     if token_keys.is_empty() {
         return Vec::new();
@@ -83,11 +90,12 @@ pub fn encode_per_token_keys(token_keys: &[&[f32]]) -> Vec<f32> {
 
     let n = token_keys.len();
     let d = token_keys[0].len();
-    let mut encoded = Vec::with_capacity(2 + n * d);
+    let mut encoded = Vec::with_capacity(3 + n * d);
 
-    // Header: token count and dimension as reinterpreted f32 bits.
-    encoded.push(f32::from_bits(n as u32));
-    encoded.push(f32::from_bits(d as u32));
+    // Header: sentinel + token count + dimension as plain f32 values.
+    encoded.push(HEADER_SENTINEL);
+    encoded.push(n as f32);
+    encoded.push(d as f32);
 
     // Concatenated token vectors.
     for tk in token_keys {
@@ -99,20 +107,25 @@ pub fn encode_per_token_keys(token_keys: &[&[f32]]) -> Vec<f32> {
 
 /// Decode a per-token encoded key slice into token count, dim, and flat data.
 ///
-/// Returns `None` if the slice is too short or doesn't match the encoding convention.
+/// Returns `None` if the slice doesn't start with the sentinel or sizes don't match.
 pub fn decode_per_token_keys(encoded: &[f32]) -> Option<(usize, usize, &[f32])> {
-    if encoded.len() < 2 {
+    if encoded.len() < 3 {
         return None;
     }
 
-    let n = encoded[0].to_bits() as usize;
-    let d = encoded[1].to_bits() as usize;
+    // Check sentinel (allow some Q4 quantization tolerance).
+    if encoded[0] > -1.0e8 {
+        return None;
+    }
+
+    let n = encoded[1].round() as usize;
+    let d = encoded[2].round() as usize;
 
     if n == 0 || d == 0 {
         return None;
     }
 
-    let data = &encoded[2..];
+    let data = &encoded[3..];
     if data.len() != n * d {
         return None;
     }
