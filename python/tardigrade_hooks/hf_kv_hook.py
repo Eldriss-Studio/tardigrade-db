@@ -24,8 +24,8 @@ class HuggingFaceKVHook(TardigradeHook):
     Queries with per-token Q vectors (without RoPE) for Q*K attention scoring.
     Skips position 0 (attention sink token) which dominates dot products.
 
-    For GQA models: Q heads are expanded to match K heads via repeat_interleave,
-    handled automatically based on model config.
+    For GQA models: K heads are expanded to match Q heads via repeat_interleave
+    for retrieval keys. The stored injection payload remains the compact original KV cache.
 
     Requires the model object for access to q_proj/k_proj weights.
     """
@@ -85,7 +85,8 @@ class HuggingFaceKVHook(TardigradeHook):
                 k = attn.k_norm(k)
                 k = k.view(-1, self.kv_dim)
 
-        return k[1:].numpy().astype(np.float32)  # skip position 0
+        k_tokens = k[1:].detach().cpu().numpy().astype(np.float32)  # skip position 0
+        return self._expand_k_tokens_for_gqa(k_tokens)
 
     def _project_q(self, hidden_states, layer_idx):
         """Apply Q projection (without RoPE) to hidden states.
@@ -104,7 +105,21 @@ class HuggingFaceKVHook(TardigradeHook):
                 q = attn.q_norm(q)
                 q = q.view(-1, self.q_dim)
 
-        return q[1:].numpy().astype(np.float32)  # skip position 0
+        return q[1:].detach().cpu().numpy().astype(np.float32)  # skip position 0
+
+    def _expand_k_tokens_for_gqa(self, k_tokens):
+        """Repeat KV heads so stored K retrieval keys match Q dimensions."""
+        if (
+            k_tokens is None
+            or self.gqa_ratio <= 1
+            or self.num_kv_heads is None
+            or self.head_dim is None
+        ):
+            return k_tokens
+
+        reshaped = k_tokens.reshape(-1, self.num_kv_heads, self.head_dim)
+        expanded = np.repeat(reshaped, self.gqa_ratio, axis=1)
+        return expanded.reshape(-1, self.q_dim).astype(np.float32)
 
     def _encode_per_token(self, token_vecs, dim):
         """Encode per-token vectors with sentinel header."""
@@ -119,8 +134,8 @@ class HuggingFaceKVHook(TardigradeHook):
         v = layer_cache.values[0]
         h, s, d = k.shape
         kv_dim = h * d
-        k_flat = k.permute(1, 0, 2).reshape(s, kv_dim).numpy().astype(np.float32)
-        v_flat = v.permute(1, 0, 2).reshape(s, kv_dim).numpy().astype(np.float32)
+        k_flat = k.permute(1, 0, 2).reshape(s, kv_dim).detach().cpu().numpy().astype(np.float32)
+        v_flat = v.permute(1, 0, 2).reshape(s, kv_dim).detach().cpu().numpy().astype(np.float32)
         return np.concatenate([k_flat.ravel(), v_flat.ravel()])
 
     def on_generate(self, layer, past_key_values=None, hidden_states=None, model_hidden_states=None):
@@ -139,15 +154,16 @@ class HuggingFaceKVHook(TardigradeHook):
             k_tokens = self._project_k(h, layer)
 
         if k_tokens is not None and len(k_tokens) > 0:
-            per_token_key = self._encode_per_token(k_tokens, self.kv_dim)
+            per_token_key = self._encode_per_token(k_tokens, k_tokens.shape[1])
         else:
             # Fallback: use K from cache (has RoPE, skip pos 0)
             lc = past_key_values.layers[layer]
             k = lc.keys[0]
             h, s, d = k.shape
             kv_dim = h * d
-            k_flat = k.permute(1, 0, 2).reshape(s, kv_dim)[1:].numpy().astype(np.float32)
-            per_token_key = self._encode_per_token(k_flat, kv_dim)
+            k_flat = k.permute(1, 0, 2).reshape(s, kv_dim)[1:].detach().cpu().numpy().astype(np.float32)
+            k_flat = self._expand_k_tokens_for_gqa(k_flat)
+            per_token_key = self._encode_per_token(k_flat, k_flat.shape[1])
 
         flat_kv = self._extract_kv_payload(past_key_values, layer)
 
@@ -165,7 +181,8 @@ class HuggingFaceKVHook(TardigradeHook):
         """Query with per-token Q projections (Q*K scoring).
 
         Uses Q projection (without RoPE) for queries against stored K vectors.
-        For GQA: expands K stored keys by repeating heads to match Q dimension.
+        Query keys keep the full Q-head dimensionality. Stored K retrieval
+        keys are expanded to that same dimensionality on write.
         """
         if past_key_values is None and model_hidden_states is None:
             return []
@@ -177,27 +194,16 @@ class HuggingFaceKVHook(TardigradeHook):
             q_tokens = self._project_q(h, layer)
 
         if q_tokens is not None and len(q_tokens) > 0:
-            # For GQA: stored K has kv_dim, Q has q_dim (larger).
-            # Use mean-pooled Q as a single query vector (same dim as mean-pooled K).
-            # This gives the best Q*K signal through the existing retriever.
-            q_mean = q_tokens.mean(axis=0).astype(np.float32)
-            # Average Q heads to match K head count for dot product compatibility.
-            if self.gqa_ratio > 1:
-                q_reshaped = q_mean.reshape(self.num_q_heads, self.head_dim)
-                q_grouped = q_reshaped.reshape(self.num_kv_heads, self.gqa_ratio, self.head_dim)
-                q_for_search = q_grouped.mean(axis=1).reshape(self.kv_dim)
-            else:
-                q_for_search = q_mean
-
-            query_key = q_for_search
+            query_key = self._encode_per_token(q_tokens, q_tokens.shape[1])
         elif past_key_values is not None:
             # Fallback: use K from cache
             lc = past_key_values.layers[layer]
             k = lc.keys[0]
             h_heads, s, d = k.shape
             kv_dim = h_heads * d
-            k_flat = k.permute(1, 0, 2).reshape(s, kv_dim)[1:].numpy().astype(np.float32)
-            query_key = self._encode_per_token(k_flat, kv_dim)
+            k_flat = k.permute(1, 0, 2).reshape(s, kv_dim)[1:].detach().cpu().numpy().astype(np.float32)
+            k_flat = self._expand_k_tokens_for_gqa(k_flat)
+            query_key = self._encode_per_token(k_flat, k_flat.shape[1])
         else:
             return []
 

@@ -5,6 +5,7 @@
 
 use tdb_core::{CellId, OwnerId};
 
+use crate::per_token::decode_per_token_keys;
 use crate::simd_distance::DotProduct;
 
 /// A single retrieval result: cell ID, owner, and attention score.
@@ -23,6 +24,24 @@ struct StoredKey {
     key: Vec<f32>,
 }
 
+fn mean_pool_if_per_token(key: &[f32]) -> Vec<f32> {
+    if let Some((n, d, data)) = decode_per_token_keys(key) {
+        let mut mean = vec![0.0f32; d];
+        for i in 0..n {
+            for j in 0..d {
+                mean[j] += data[i * d + j];
+            }
+        }
+        let inv_n = 1.0 / n as f32;
+        for v in &mut mean {
+            *v *= inv_n;
+        }
+        mean
+    } else {
+        key.to_vec()
+    }
+}
+
 /// Brute-force retriever over in-memory key vectors.
 ///
 /// Stores key vectors and computes attention scores via exhaustive dot product.
@@ -39,7 +58,7 @@ impl BruteForceRetriever {
 
     /// Insert a key vector for a cell.
     pub fn insert(&mut self, cell_id: CellId, owner: OwnerId, _layer: u16, key: &[f32]) {
-        self.entries.push(StoredKey { cell_id, owner, key: key.to_vec() });
+        self.entries.push(StoredKey { cell_id, owner, key: mean_pool_if_per_token(key) });
     }
 
     /// Query for the top-k most relevant cells by attention score.
@@ -55,6 +74,7 @@ impl BruteForceRetriever {
         if query.is_empty() {
             return Vec::new();
         }
+        let query = mean_pool_if_per_token(query);
         let d_k = query.len() as f32;
         let inv_sqrt_dk = 1.0 / d_k.sqrt();
 
@@ -67,7 +87,7 @@ impl BruteForceRetriever {
             })
             .filter(|e| e.key.len() == query.len())
             .map(|e| {
-                let dot = DotProduct::f32_dot(query, &e.key);
+                let dot = DotProduct::f32_dot(&query, &e.key);
                 RetrievalResult { cell_id: e.cell_id, owner: e.owner, score: dot * inv_sqrt_dk }
             })
             .collect();

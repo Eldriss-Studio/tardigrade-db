@@ -733,6 +733,28 @@ fn test_single_token_cells_behave_like_brute_force() {
     assert_eq!(results[0].cell_id, 0);
 }
 
+#[test]
+fn test_brute_force_mean_pools_encoded_per_token_keys() {
+    let target_a = [1.0f32, 0.0];
+    let target_b = [0.0f32, 1.0];
+    let distractor_a = [-1.0f32, 0.0];
+    let distractor_b = [0.0f32, -1.0];
+
+    let encoded_target = encode_per_token_keys(&[&target_a, &target_b]);
+    let encoded_distractor = encode_per_token_keys(&[&distractor_a, &distractor_b]);
+
+    let mut retriever = BruteForceRetriever::new();
+    retriever.insert(1, 1, 0, &encoded_distractor);
+    retriever.insert(0, 1, 0, &encoded_target);
+
+    let results = retriever.query(&encoded_target, 2, None);
+
+    assert_eq!(
+        results[0].cell_id, 0,
+        "encoded header/sentinel values must not participate in brute-force fallback scoring"
+    );
+}
+
 /// ATDD 7 (eval): Per-token recall > 90% on synthetic multi-token cells.
 #[test]
 fn test_per_token_recall_improvement() {

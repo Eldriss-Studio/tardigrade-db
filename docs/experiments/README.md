@@ -63,20 +63,21 @@ Systematic exploration of what to store and how to retrieve, tested on Sonia (16
 **Three discoveries:**
 1. **Store K projections, not hidden states** — hidden states produce gravity wells (31.2%), K projections doubled recall (62.5-75%)
 2. **K*K per-token matching fails** — K vectors share a massive common component across all sequences (position-0 cross-sentence dot = 6281 for unrelated text). Per-token K*K got 25%, worse than mean-pool
-3. **Query with Q, store K (Q*K)** — matches how attention actually works. Q*K pipeline got 62.5% with 9 unique top-1 memories (no gravity well). Found Coco/Day of the Dead memory that no previous method ever retrieved
+3. **Query with Q, store K (Q*K)** — matches how attention actually works. The fixed Q*K per-token pipeline gets 68.8% recall with 8 unique top-1 memories, and now exercises encoded Q tokens against encoded K tokens through max-sim scoring
 
-**Full progression:** 31.2% (hidden) → 25% (K*K per-token) → 62.5% (K*K mean-pool) → 75% (K*K per-token manual) → 62.5% (Q*K pipeline, 9 unique top-1)
+**Full progression:** 31.2% (hidden) → 25% (K*K per-token) → 62.5% (K*K mean-pool) → 75% (K*K per-token manual) → 68.8% (Q*K per-token pipeline, 16 memories)
 
-**Also found:** position-0 attention sink, RoPE contamination in cross-sequence retrieval, GQA dimension mismatch, bigger model (3B) didn't help — ceiling is retrieval method not model size
+**100-memory scale test:** Q*K recall dropped to **40%** at 100 memories. Gravity well returned (one memory dominated 7/30 queries). The gap between raw Q*K dot product and proper attention (with softmax normalization) is the current bottleneck. Retrieval quality degrades at scale — this is the main open problem.
 
-**Scripts:** `experiments/sonia_per_token_pipeline.py` (Q*K pipeline), `experiments/sonia_real_kv_cache.py` (K*K real KV), `experiments/sonia_production_sim.py` (hidden states)
+**Scripts:** `experiments/scale_100_qk.py` (100-memory scale test), `experiments/sonia_per_token_pipeline.py` (Q*K pipeline), `experiments/sonia_real_kv_cache.py` (K*K real KV)
 
 ## Planned Experiments
 
 | Experiment | Goal | Status |
 |-----------|------|--------|
-| **100-memory scale test** | Does Q*K retrieval hold at realistic memory counts? | **Next up** |
-| GQA K-expansion | Expand K heads to match Q dims in retriever (recover 6% gap) | Planned |
+| **100-memory scale test** | Does Q*K retrieval hold at realistic memory counts? | **Complete — 40% recall, needs scoring improvements** |
+| **Softmax-normalized scoring** | Replace raw dot product with softmax(Q*K^T/sqrt(d_k)) in retriever | **Next up — main open problem** |
+| GQA K-expansion | Expand K heads to match Q dims for Q*K retrieval | Complete |
 | Per-head scoring | Score per attention head instead of concatenating all heads | Planned |
 | Multi-session memory | Cross-day retrieval ("what happened last week") | Planned |
 | Adversarial retrieval | Contradictory memories, test which surfaces | Planned |

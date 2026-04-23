@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from types import SimpleNamespace
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
@@ -43,6 +44,41 @@ def get_past_kv(model, tokenizer, text):
     return out.past_key_values
 
 
+class RecordingEngine:
+    """Minimal engine double that records the query key passed to mem_read."""
+
+    def __init__(self):
+        self.query_key = None
+
+    def mem_read(self, query_key, k, owner):
+        self.query_key = np.array(query_key, dtype=np.float32)
+        return []
+
+
+class DummyAttention(torch.nn.Module):
+    def __init__(self, hidden_size, q_dim, kv_dim):
+        super().__init__()
+        self.q_proj = torch.nn.Linear(hidden_size, q_dim, bias=False)
+        self.k_proj = torch.nn.Linear(hidden_size, kv_dim, bias=False)
+        with torch.no_grad():
+            self.q_proj.weight.copy_(torch.arange(q_dim * hidden_size, dtype=torch.float32).reshape(q_dim, hidden_size) / 100.0)
+            self.k_proj.weight.copy_(torch.arange(kv_dim * hidden_size, dtype=torch.float32).reshape(kv_dim, hidden_size) / 100.0)
+
+
+class DummyModel:
+    def __init__(self, hidden_size, q_dim, kv_dim):
+        attn = DummyAttention(hidden_size, q_dim, kv_dim)
+        layer = SimpleNamespace(self_attn=attn)
+        self.model = SimpleNamespace(layers=[layer])
+
+
+class DummyCache:
+    def __init__(self, heads, seq, head_dim):
+        keys = torch.arange(heads * seq * head_dim, dtype=torch.float32).reshape(1, heads, seq, head_dim)
+        values = keys + 100.0
+        self.layers = [SimpleNamespace(keys=keys, values=values)]
+
+
 # -- ATDD 1: Hook extracts real K projections from past_key_values -----------
 
 
@@ -68,6 +104,68 @@ def test_kv_hook_extracts_real_k_projections(gpt2, tokenizer, engine):
     assert dim_from_header == kv_dim, f"Header dim {dim_from_header} should match kv_dim {kv_dim}"
     assert len(decision.key) == 3 + n_tokens * kv_dim
     assert decision.key.dtype == np.float32
+
+
+def test_kv_hook_prefill_sends_encoded_per_token_q_query():
+    """Regression: on_prefill must not collapse Q tokens to one mean vector."""
+    hidden_size = 8
+    q_dim = 8
+    kv_dim = 8
+    model_config = SimpleNamespace(
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        hidden_size=hidden_size,
+        head_dim=4,
+    )
+    recorder = RecordingEngine()
+    hook = HuggingFaceKVHook(
+        recorder,
+        owner=1,
+        model_config=model_config,
+        model=DummyModel(hidden_size, q_dim, kv_dim),
+    )
+    hidden = torch.arange(3 * hidden_size, dtype=torch.float32).reshape(1, 3, hidden_size)
+
+    hook.on_prefill(layer=0, model_hidden_states=hidden)
+
+    assert recorder.query_key is not None
+    assert recorder.query_key[0] < -1.0e8
+    assert int(round(recorder.query_key[1])) == 2  # skips position 0
+    assert int(round(recorder.query_key[2])) == q_dim
+    assert len(recorder.query_key) == 3 + 2 * q_dim
+
+
+def test_kv_hook_expands_gqa_k_for_retrieval_but_keeps_payload_compact():
+    """Regression: GQA storage expands K search keys instead of averaging Q down."""
+    hidden_size = 8
+    num_q_heads = 4
+    num_kv_heads = 2
+    head_dim = 2
+    q_dim = num_q_heads * head_dim
+    kv_dim = num_kv_heads * head_dim
+    seq = 3
+    model_config = SimpleNamespace(
+        num_attention_heads=num_q_heads,
+        num_key_value_heads=num_kv_heads,
+        hidden_size=hidden_size,
+        head_dim=head_dim,
+    )
+    hook = HuggingFaceKVHook(
+        RecordingEngine(),
+        owner=1,
+        model_config=model_config,
+        model=DummyModel(hidden_size, q_dim, kv_dim),
+    )
+    hidden = torch.arange(seq * hidden_size, dtype=torch.float32).reshape(1, seq, hidden_size)
+    cache = DummyCache(num_kv_heads, seq, head_dim)
+
+    decision = hook.on_generate(layer=0, past_key_values=cache, model_hidden_states=hidden)
+
+    assert decision.should_write is True
+    assert int(round(decision.key[1])) == seq - 1
+    assert int(round(decision.key[2])) == q_dim
+    assert len(decision.key) == 3 + (seq - 1) * q_dim
+    assert len(decision.value) == 2 * seq * kv_dim
 
 
 # -- ATDD 2: Dual-store: key (index) is smaller than value (payload) ---------

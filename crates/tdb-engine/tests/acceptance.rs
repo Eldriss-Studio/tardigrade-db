@@ -786,3 +786,30 @@ fn test_engine_per_token_and_mean_pool_coexist() {
     let r2 = engine.mem_read(&mean_key, 2, None).unwrap();
     assert!(!r2.is_empty(), "Should retrieve mean-pooled cell");
 }
+
+#[test]
+fn test_engine_per_token_query_cannot_be_satisfied_by_slb_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let target = [1.0f32, 0.0];
+    let zero = [0.0f32, 0.0];
+    let negative = [-1.0f32, 0.0];
+    let near_miss = [0.9f32, 0.0];
+
+    // Cell 0 has the exact token but a poor mean-pooled summary.
+    let encoded_target = encode_per_token_keys(&[&target, &negative, &negative]);
+    // Cell 1 has a better mean-pooled summary but no exact token.
+    let encoded_slb_trap = encode_per_token_keys(&[&near_miss]);
+
+    engine.mem_write(1, 0, &encoded_target, vec![0.0; 2], 50.0, None).unwrap();
+    engine.mem_write(1, 0, &encoded_slb_trap, vec![0.0; 2], 50.0, None).unwrap();
+
+    let query = encode_per_token_keys(&[&target, &zero]);
+    let results = engine.mem_read(&query, 1, Some(1)).unwrap();
+
+    assert_eq!(
+        results[0].cell.id, 0,
+        "encoded per-token queries must run max-sim cold scoring even when SLB has enough candidates"
+    );
+}

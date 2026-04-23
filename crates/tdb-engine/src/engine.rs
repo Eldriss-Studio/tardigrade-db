@@ -439,20 +439,44 @@ impl Engine {
             return Ok(Vec::new());
         }
 
+        let is_per_token_query = decode_per_token_keys(query_key).is_some();
+
         // Phase 1: SLB hot cache (uses mean-pooled query for fixed-dim INT8 scoring).
         let slb_query = mean_pool_key(query_key);
-        let mut candidates =
-            if self.slb.is_empty() { Vec::new() } else { self.slb.query(&slb_query, k * 2) };
+        let mut candidates = Vec::new();
 
-        // Phase 2: Cold-path pipeline (PerToken + BruteForce) — gets raw query.
-        if candidates.len() < k {
+        if is_per_token_query {
+            // Encoded per-token queries require max-sim scoring. SLB can fill gaps,
+            // but it must not suppress the cold per-token retriever.
             let cold_results = self.pipeline.query(query_key, k * 2, owner_filter);
-            // Deduplicate against SLB results.
-            let seen: std::collections::HashSet<CellId> =
-                candidates.iter().map(|r| r.cell_id).collect();
+            let mut seen: std::collections::HashSet<CellId> = std::collections::HashSet::new();
             for r in cold_results {
-                if !seen.contains(&r.cell_id) {
+                if seen.insert(r.cell_id) {
                     candidates.push(r);
+                }
+            }
+
+            if candidates.len() < k && !self.slb.is_empty() {
+                for r in self.slb.query(&slb_query, k * 2) {
+                    if seen.insert(r.cell_id) {
+                        candidates.push(r);
+                    }
+                }
+            }
+        } else {
+            candidates =
+                if self.slb.is_empty() { Vec::new() } else { self.slb.query(&slb_query, k * 2) };
+
+            // Phase 2: Cold-path pipeline (PerToken + BruteForce) — gets raw query.
+            if candidates.len() < k {
+                let cold_results = self.pipeline.query(query_key, k * 2, owner_filter);
+                // Deduplicate against SLB results.
+                let seen: std::collections::HashSet<CellId> =
+                    candidates.iter().map(|r| r.cell_id).collect();
+                for r in cold_results {
+                    if !seen.contains(&r.cell_id) {
+                        candidates.push(r);
+                    }
                 }
             }
         }
@@ -487,7 +511,8 @@ impl Engine {
                         gov.tier_sm.evaluate(gov.scorer.importance());
                     }
                     // Warm the SLB with accessed cells for future hot-path hits.
-                    self.slb.insert(rr.cell_id, cell.owner, &cell.key);
+                    let slb_key = mean_pool_key(&cell.key);
+                    self.slb.insert(rr.cell_id, cell.owner, &slb_key);
 
                     results.push(ReadResult { cell, score: adjusted_score, tier });
                 }
