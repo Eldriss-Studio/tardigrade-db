@@ -45,6 +45,26 @@ If you only need one mental model: **capture memory state, persist it, and retri
 
 Current agent memory systems (Mem0, Letta, Zep) rely on text retrieval — tokenize, embed, search, detokenize. This creates a lossy round-trip through representations the model never asked for. TardigradeDB eliminates that entirely by persisting the model's own internal state and restoring it directly into the attention stack.
 
+### How retrieval differs from semantic search
+
+Semantic search (vector DBs, RAG) and TardigradeDB both find "relevant stuff" from stored data. The difference is in what is being compared:
+
+```
+Semantic search (Mem0, Letta, Pinecone):
+  text → separate embedding model → vector → store
+  query → same embedding model → vector → cosine similarity
+  The embedding model is a translator between text and numbers.
+  The LLM that is actually thinking never touches this process.
+
+TardigradeDB:
+  LLM is already thinking → K tensors exist as a byproduct → store
+  LLM thinks about query → K tensors exist as a byproduct → dot product
+  No translator. No separate model. The comparison happens in the same
+  mathematical space the model uses to think. The search IS attention.
+```
+
+Semantic search outsources retrieval to a separate system. TardigradeDB does retrieval inside the model's own attention mechanism — the model searches its own memories using the same math it uses to relate tokens during inference.
+
 ### Quick comparison
 
 | Dimension | Embedding RAG / vector memory | Traditional KV cache | TardigradeDB (experimental prototype) |
