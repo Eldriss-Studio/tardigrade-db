@@ -53,6 +53,23 @@ Two parallel Codex subagents (different agent models) executed separate Sonia ex
 - `sonia_production_sim.py`: recall was equal between modes (`31.2%` each) but per-token showed much larger SNR separation
 - Both runs completed successfully with no operational blockers
 
+### [KV Cache Validation — Hidden States vs Real KV](kv-cache-validation.md)
+
+**Date:** April 22-23, 2026
+**Status:** Complete
+
+Systematic comparison of what to store: raw hidden states vs actual K projections from the KV cache. Tested on Sonia (16 diverse life memories) with GPT-2 and Qwen3-0.6B.
+
+**Key findings:**
+- **Storing hidden states produces gravity wells** — one memory dominates all queries regardless of content (31.2% recall)
+- **Storing real KV cache (K projections) doubled recall** — 62.5% mean-pool, 75.0% per-token on a 0.6B model
+- **Per-token KV breaks the gravity well** — 7 unique memories in top-1 across 16 queries (vs 1 with hidden states)
+- **Domain diversity helps** — memories across different life domains (cooking, legal, medical, social) separate naturally in K-projection space
+- **The 4 misses require world knowledge** (Coco = Day of the Dead), not better retrieval — model size problem, not architecture problem
+- Previous experiments that showed poor results were storing the wrong data
+
+**Scripts:** `experiments/sonia_real_kv_cache.py` (real KV), `experiments/sonia_production_sim.py` (hidden states comparison), `experiments/maya_kv_tensors_comparison.py` (GPT-2 vs Qwen3)
+
 ## Planned Experiments
 
 | Experiment | Goal | Status |
