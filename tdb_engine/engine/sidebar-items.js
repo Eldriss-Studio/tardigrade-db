@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_SLB_CAPACITY","DEFAULT_VAMANA_MAX_DEGREE","DEFAULT_VAMANA_THRESHOLD"],"struct":["CellGovernance","Engine","ReadResult","VamanaAdapter","WriteRequest"]};
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_SLB_CAPACITY","DEFAULT_VAMANA_MAX_DEGREE","DEFAULT_VAMANA_THRESHOLD"],"fn":["mean_pool_key"],"struct":["CellGovernance","Engine","ReadResult","VamanaAdapter","WriteRequest"]};
