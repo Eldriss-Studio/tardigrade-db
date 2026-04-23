@@ -58,9 +58,14 @@ def test_kv_hook_extracts_real_k_projections(gpt2, tokenizer, engine):
     assert decision.should_write is True
     assert decision.key is not None
 
-    # GPT-2: 12 heads * 64 head_dim = 768
-    expected_dim = gpt2.config.n_head * (gpt2.config.n_embd // gpt2.config.n_head)
-    assert len(decision.key) == expected_dim
+    # Per-token encoded: 2 header floats + N_tokens * kv_dim.
+    kv_dim = gpt2.config.n_head * (gpt2.config.n_embd // gpt2.config.n_head)
+    assert len(decision.key) > kv_dim, "Per-token key should be larger than single-token dim"
+    # Decode header: first 2 floats are token_count and dim as bit-casted u32.
+    n_tokens = np.float32(decision.key[0]).view(np.uint32)
+    dim_from_header = np.float32(decision.key[1]).view(np.uint32)
+    assert dim_from_header == kv_dim, f"Header dim {dim_from_header} should match kv_dim {kv_dim}"
+    assert len(decision.key) == 2 + n_tokens * kv_dim
     assert decision.key.dtype == np.float32
 
 
@@ -134,8 +139,10 @@ def test_kv_hook_differs_from_hidden_state_hook(gpt2, tokenizer, engine):
     hs_hook = HuggingFaceHook(engine, owner=1, norm_threshold=0.0)
     hs_decision = hs_hook.on_generate(layer=0, hidden_states=hidden)
 
-    assert not np.allclose(kv_decision.key, hs_decision.key, atol=1e-4), (
-        "KV hook key should differ from hidden-state hook key"
+    # Keys should differ: KV hook produces per-token encoded (longer),
+    # hidden-state hook produces mean-pooled (shorter).
+    assert len(kv_decision.key) != len(hs_decision.key), (
+        "KV hook key (per-token encoded) should differ in length from hidden-state hook key (mean-pooled)"
     )
 
 

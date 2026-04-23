@@ -1,5 +1,6 @@
 use tdb_core::Tier;
 use tdb_engine::engine::{Engine, WriteRequest};
+use tdb_retrieval::per_token::encode_per_token_keys;
 
 /// ATDD Test 1: Write a cell via Engine, read it back, verify data round-trips.
 #[test]
@@ -727,4 +728,61 @@ fn test_batch_write_with_causal_edges() {
     let ancestors_1 = engine.trace_ancestors(ids[1]);
     assert!(ancestors_0.contains(&root_id), "Cell {} should trace to root {root_id}", ids[0]);
     assert!(ancestors_1.contains(&root_id), "Cell {} should trace to root {root_id}", ids[1]);
+}
+
+// -- Phase 22: Per-Token Engine Integration ATDD -----------------------------
+
+/// ATDD 27: Engine retrieves per-token encoded cells correctly.
+#[test]
+fn test_engine_per_token_retrieval() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+
+    // Cell 0: per-token encoded with 3 tokens including distinctive "risotto".
+    let food = [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let italian = [0.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let risotto = [0.0f32, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let encoded_a = encode_per_token_keys(&[&food, &italian, &risotto]);
+
+    // Cell 1: per-token encoded with different tokens.
+    let travel = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+    let france = [0.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+    let encoded_b = encode_per_token_keys(&[&travel, &france]);
+
+    engine.mem_write(1, 0, &encoded_a, vec![0.0; dim], 50.0, None).unwrap();
+    engine.mem_write(1, 0, &encoded_b, vec![0.0; dim], 50.0, None).unwrap();
+
+    // Query with "risotto" -- should find cell 0.
+    let results = engine.mem_read(&risotto, 2, None).unwrap();
+    assert!(!results.is_empty(), "Should find results for per-token query");
+    assert_eq!(results[0].cell.id, 0, "Cell 0 (risotto token) should rank first");
+}
+
+/// ATDD 28: Per-token and mean-pooled cells coexist in the same engine.
+#[test]
+fn test_engine_per_token_and_mean_pool_coexist() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+
+    // Cell 0: per-token encoded.
+    let token_a = [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let encoded = encode_per_token_keys(&[&token_a]);
+    engine.mem_write(1, 0, &encoded, vec![0.0; dim], 50.0, None).unwrap();
+
+    // Cell 1: legacy mean-pooled (raw vector, no header).
+    let mean_key = [0.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    engine.mem_write(1, 0, &mean_key, vec![0.0; dim], 50.0, None).unwrap();
+
+    assert_eq!(engine.cell_count(), 2);
+
+    // Both should be retrievable.
+    let r1 = engine.mem_read(&token_a, 2, None).unwrap();
+    assert!(!r1.is_empty(), "Should retrieve per-token cell");
+
+    let r2 = engine.mem_read(&mean_key, 2, None).unwrap();
+    assert!(!r2.is_empty(), "Should retrieve mean-pooled cell");
 }

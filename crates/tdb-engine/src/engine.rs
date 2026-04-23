@@ -25,6 +25,7 @@ use tdb_index::trace::{EdgeType, TraceGraph};
 use tdb_index::vamana::VamanaIndex;
 use tdb_index::wal::{Wal, WalEntry};
 use tdb_retrieval::attention::RetrievalResult;
+use tdb_retrieval::per_token::decode_per_token_keys;
 use tdb_retrieval::pipeline::RetrieverPipeline;
 use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::slb::SemanticLookasideBuffer;
@@ -33,6 +34,28 @@ use tdb_storage::synaptic_store::SynapticStore;
 
 /// Default SLB capacity.
 const DEFAULT_SLB_CAPACITY: usize = 4096;
+
+/// Compute a mean-pooled key from a potentially per-token encoded key.
+///
+/// If the key is per-token encoded (has header), averages all token vectors.
+/// If it's already a plain vector, returns it unchanged.
+fn mean_pool_key(key: &[f32]) -> Vec<f32> {
+    if let Some((n, d, data)) = decode_per_token_keys(key) {
+        let mut mean = vec![0.0f32; d];
+        for i in 0..n {
+            for j in 0..d {
+                mean[j] += data[i * d + j];
+            }
+        }
+        let inv_n = 1.0 / n as f32;
+        for v in &mut mean {
+            *v *= inv_n;
+        }
+        mean
+    } else {
+        key.to_vec()
+    }
+}
 /// Default Vamana max degree.
 const DEFAULT_VAMANA_MAX_DEGREE: usize = 16;
 /// Default cell count threshold before activating Vamana.
@@ -179,12 +202,15 @@ impl Engine {
         }
 
         // Rebuild derived state from persisted cells (Memento pattern).
+        // Pipeline: PerTokenRetriever (per-token max-sim) → BruteForceRetriever (fallback).
         let mut pipeline = RetrieverPipeline::new();
+        pipeline.add_stage(Box::new(tdb_retrieval::per_token::PerTokenRetriever::new()));
         pipeline.add_stage(Box::new(tdb_retrieval::attention::BruteForceRetriever::new()));
 
         let mut governance = HashMap::new();
         let mut next_id: CellId = 0;
         let mut key_dim: Option<usize> = None;
+        let mut slb_entries: Vec<(CellId, OwnerId, Vec<f32>)> = Vec::new();
 
         let cell_ids: Vec<CellId> = pool.iter_cell_ids().collect();
 
@@ -193,11 +219,14 @@ impl Engine {
         for cell_id in &cell_ids {
             let cell = pool.get(*cell_id)?;
 
+            // Track mean-pooled dim for SLB (may differ from raw key length if per-token).
+            let slb_key = mean_pool_key(&cell.key);
             if key_dim.is_none() {
-                key_dim = Some(cell.key.len());
+                key_dim = Some(slb_key.len());
             }
 
             pipeline.insert(cell.id, cell.owner, &cell.key);
+            slb_entries.push((cell.id, cell.owner, slb_key));
 
             let scorer = ImportanceScorer::new(cell.meta.importance);
             let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
@@ -209,7 +238,12 @@ impl Engine {
         }
 
         let dim = key_dim.unwrap_or(128);
-        let slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, dim);
+        let mut slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, dim);
+
+        // Populate SLB with mean-pooled keys (computed during rebuild above).
+        for (cell_id, owner, slb_key) in slb_entries {
+            slb.insert(cell_id, owner, &slb_key);
+        }
 
         Ok(Self {
             pool,
@@ -242,11 +276,11 @@ impl Engine {
         let id = self.next_id;
         self.next_id += 1;
 
-        // Detect key dimension on first write.
+        // Detect key dimension on first write (use mean-pooled dim for SLB).
         if self.key_dim.is_none() {
-            self.key_dim = Some(key.len());
-            // Reinitialize SLB with correct dimension.
-            self.slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, key.len());
+            let mean_dim = mean_pool_key(key).len();
+            self.key_dim = Some(mean_dim);
+            self.slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, mean_dim);
         }
 
         let now_nanos = std::time::SystemTime::now()
@@ -269,9 +303,13 @@ impl Engine {
         // Persist to block pool.
         self.pool.append(&cell)?;
 
-        // Index for retrieval (pipeline + SLB).
+        // Index for retrieval.
+        // Pipeline gets the raw key (PerTokenRetriever decodes per-token encoding).
         self.pipeline.insert(id, owner, key);
-        self.slb.insert(id, owner, key);
+
+        // SLB gets a mean-pooled summary (it needs fixed-dim vectors for INT8 scoring).
+        let slb_key = mean_pool_key(key);
+        self.slb.insert(id, owner, &slb_key);
 
         self.governance.insert(id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
 
@@ -307,10 +345,11 @@ impl Engine {
             return Ok(Vec::new());
         }
 
-        // Detect key dimension on first write.
+        // Detect key dimension on first write (use mean-pooled dim for SLB).
         if self.key_dim.is_none() {
-            self.key_dim = Some(requests[0].key.len());
-            self.slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, requests[0].key.len());
+            let mean_dim = mean_pool_key(&requests[0].key).len();
+            self.key_dim = Some(mean_dim);
+            self.slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, mean_dim);
         }
 
         let now_nanos = std::time::SystemTime::now()
@@ -359,7 +398,8 @@ impl Engine {
         // Phase 3: Index all cells into retrieval + governance (in memory, fast).
         for (id, owner, key, parent_cell_id, gov) in gov_entries {
             self.pipeline.insert(id, owner, &key);
-            self.slb.insert(id, owner, &key);
+            let slb_key = mean_pool_key(&key);
+            self.slb.insert(id, owner, &slb_key);
             self.governance.insert(id, gov);
 
             // Causal edges via WAL.
@@ -399,11 +439,12 @@ impl Engine {
             return Ok(Vec::new());
         }
 
-        // Phase 1: SLB hot cache (separate from pipeline for LRU warming).
+        // Phase 1: SLB hot cache (uses mean-pooled query for fixed-dim INT8 scoring).
+        let slb_query = mean_pool_key(query_key);
         let mut candidates =
-            if self.slb.is_empty() { Vec::new() } else { self.slb.query(query_key, k * 2) };
+            if self.slb.is_empty() { Vec::new() } else { self.slb.query(&slb_query, k * 2) };
 
-        // Phase 2: Cold-path pipeline (BruteForce + Vamana) if SLB didn't fill k.
+        // Phase 2: Cold-path pipeline (PerToken + BruteForce) — gets raw query.
         if candidates.len() < k {
             let cold_results = self.pipeline.query(query_key, k * 2, owner_filter);
             // Deduplicate against SLB results.

@@ -52,9 +52,11 @@ class HuggingFaceKVHook(TardigradeHook):
     def _extract_layer_keys(self, past_key_values, layer):
         """Extract K tensor from past_key_values at a given layer.
 
-        Returns (mean_k, flat_kv):
-            mean_k: Mean-pooled K across tokens, shape (num_heads * head_dim,).
-            flat_kv: Flattened K + V for all tokens, shape (2 * seq * num_heads * head_dim,).
+        Returns (per_token_key, flat_kv):
+            per_token_key: Per-token encoded K vectors with 2-float header,
+                shape (2 + seq * kv_dim,). Encodes token count and dim as
+                f32::from_bits sentinels, followed by concatenated per-token K vectors.
+            flat_kv: Flattened K + V for all tokens, shape (2 * seq * kv_dim,).
         """
         # DynamicCache API: .layers[i].keys / .layers[i].values
         layer_cache = past_key_values.layers[layer]
@@ -66,17 +68,23 @@ class HuggingFaceKVHook(TardigradeHook):
         v = v_tensor[0]
 
         h, s, d = k.shape
+        kv_dim = h * d
 
-        # Mean-pooled K: (heads, seq, head_dim) -> (seq, heads*head_dim) -> mean -> (heads*head_dim,)
-        k_flat_per_token = k.permute(1, 0, 2).reshape(s, h * d)  # (seq, heads*head_dim)
-        mean_k = k_flat_per_token.mean(dim=0).numpy().astype(np.float32)
+        # Per-token K vectors: (heads, seq, head_dim) -> (seq, kv_dim)
+        k_flat_per_token = k.permute(1, 0, 2).reshape(s, kv_dim).numpy().astype(np.float32)
+
+        # Encode with header: [token_count_bits, dim_bits, token_0, token_1, ...]
+        header = np.array([
+            np.float32(np.uint32(s).view(np.float32)),
+            np.float32(np.uint32(kv_dim).view(np.float32)),
+        ], dtype=np.float32)
+        per_token_key = np.concatenate([header, k_flat_per_token.ravel()])
 
         # Full K+V payload: flatten both and concatenate.
-        k_flat = k.permute(1, 0, 2).reshape(s, h * d).numpy().astype(np.float32)
-        v_flat = v.permute(1, 0, 2).reshape(s, h * d).numpy().astype(np.float32)
-        flat_kv = np.concatenate([k_flat.ravel(), v_flat.ravel()])
+        v_flat = v.permute(1, 0, 2).reshape(s, kv_dim).numpy().astype(np.float32)
+        flat_kv = np.concatenate([k_flat_per_token.ravel(), v_flat.ravel()])
 
-        return mean_k, flat_kv
+        return per_token_key, flat_kv
 
     def on_generate(self, layer, past_key_values=None, hidden_states=None):
         """Capture real K/V projections from past_key_values.
@@ -95,15 +103,17 @@ class HuggingFaceKVHook(TardigradeHook):
         if past_key_values is None:
             return WriteDecision(should_write=False)
 
-        mean_k, flat_kv = self._extract_layer_keys(past_key_values, layer)
+        per_token_key, flat_kv = self._extract_layer_keys(past_key_values, layer)
 
-        norm = float(np.linalg.norm(mean_k))
-        salience = min(norm * 10.0, 100.0)
+        # Salience from mean norm of per-token keys (skip 2-float header).
+        data = per_token_key[2:]
+        norm = float(np.linalg.norm(data / max(len(data), 1)))
+        salience = min(norm * 50.0, 100.0)
 
         return WriteDecision(
             should_write=True,
             salience=salience,
-            key=mean_k,
+            key=per_token_key,
             value=flat_kv,
         )
 
@@ -121,9 +131,10 @@ class HuggingFaceKVHook(TardigradeHook):
         if past_key_values is None:
             return []
 
-        mean_k, _ = self._extract_layer_keys(past_key_values, layer)
+        per_token_key, _ = self._extract_layer_keys(past_key_values, layer)
 
-        results = self.engine.mem_read(mean_k, self.k, self.owner)
+        # Query with per-token encoded key for max-sim matching.
+        results = self.engine.mem_read(per_token_key, self.k, self.owner)
 
         return [
             MemoryCellHandle(

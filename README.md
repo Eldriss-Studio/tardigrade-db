@@ -114,6 +114,17 @@ Key outcomes from that run:
 
 Primary takeaway: the retrieval architecture was not the core failure mode; storing the wrong representation was.
 
+### Per-Token Retrieval (Phase 22, April 23, 2026)
+
+The 75% ceiling was caused by mean-pooling queries: averaging all query tokens into one vector loses the distinguishing words. The `PerTokenRetriever` (based on FIER 2025 research) stores individual token K vectors and uses max-sim scoring — the best token-to-token match determines cell ranking.
+
+| Method | Recall@5 (synthetic benchmark) |
+|--------|-------------------------------|
+| Mean-pool (BruteForce) | 50% |
+| **Per-token (max-sim)** | **100%** |
+
+The per-token retriever is now wired into the engine pipeline and the Python KV hook emits per-token encoded keys.
+
 **Measured prototype performance** (Apple M-series, release mode, criterion):
 
 | Operation | Latency | Notes |
