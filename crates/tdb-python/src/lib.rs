@@ -107,6 +107,47 @@ impl Engine {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Write multiple cells in a single batch with one fsync (Batch Command).
+    ///
+    /// Each item is a tuple of (owner, layer, key, value, salience, parent).
+    /// Returns a list of assigned cell IDs.
+    fn mem_write_batch(
+        &mut self,
+        requests: Vec<pyo3::Py<pyo3::PyAny>>,
+        py: Python<'_>,
+    ) -> PyResult<Vec<u64>> {
+        use tdb_engine::engine::WriteRequest;
+
+        let reqs: Vec<WriteRequest> = requests
+            .iter()
+            .map(|item| {
+                let tuple = item.bind(py).cast::<pyo3::types::PyTuple>()?;
+                let owner: u64 = tuple.get_item(0)?.extract()?;
+                let layer: u16 = tuple.get_item(1)?.extract()?;
+                let key: PyReadonlyArray1<'_, f32> = tuple.get_item(2)?.extract()?;
+                let value: PyReadonlyArray1<'_, f32> = tuple.get_item(3)?.extract()?;
+                let salience: f32 = tuple.get_item(4)?.extract()?;
+                let parent: Option<u64> = tuple.get_item(5)?.extract()?;
+                Ok(WriteRequest {
+                    owner,
+                    layer,
+                    key: key
+                        .as_slice()
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                        .to_vec(),
+                    value: value
+                        .as_slice()
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                        .to_vec(),
+                    salience,
+                    parent_cell_id: parent,
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+
+        self.inner.mem_write_batch(&reqs).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Read the top-k most relevant cells for a query key.
     ///
     /// Args:

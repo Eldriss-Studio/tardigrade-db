@@ -1,5 +1,5 @@
 use tdb_core::Tier;
-use tdb_engine::engine::Engine;
+use tdb_engine::engine::{Engine, WriteRequest};
 
 /// ATDD Test 1: Write a cell via Engine, read it back, verify data round-trips.
 #[test]
@@ -535,4 +535,196 @@ fn test_engine_synapsis_api() {
     assert_eq!(loaded[0].owner, 42);
     assert_eq!(loaded[0].rank, 2);
     assert_eq!(loaded[0].d_model, 4);
+}
+
+// ── Phase 21: Batch Write (Batch Command pattern) ───────────────────────────
+
+/// ATDD 22: Batch write 100 cells — all readable afterward.
+#[test]
+fn test_batch_write_all_readable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let requests: Vec<WriteRequest> = (0..100u64)
+        .map(|i| {
+            let mut key = vec![0.01f32; 64];
+            key[(i as usize) % 64] = 1.0;
+            WriteRequest {
+                owner: 1,
+                layer: 0,
+                key: key.clone(),
+                value: key,
+                salience: 50.0,
+                parent_cell_id: None,
+            }
+        })
+        .collect();
+
+    let ids = engine.mem_write_batch(&requests).unwrap();
+    assert_eq!(ids.len(), 100);
+
+    // All 100 cells should be readable.
+    assert_eq!(engine.cell_count(), 100);
+
+    // Query should find cells.
+    let mut query = vec![0.01f32; 64];
+    query[42] = 1.0;
+    let results = engine.mem_read(&query, 5, None).unwrap();
+    assert!(!results.is_empty());
+}
+
+/// ATDD 23: Batch write is faster than individual writes.
+#[test]
+fn test_batch_write_faster_than_individual() {
+    let n = 200;
+    let dim = 32;
+
+    let make_requests = || -> Vec<WriteRequest> {
+        (0..n)
+            .map(|i: u64| {
+                let mut key = vec![0.01f32; dim];
+                key[(i as usize) % dim] = 1.0;
+                WriteRequest {
+                    owner: 1,
+                    layer: 0,
+                    key: key.clone(),
+                    value: key,
+                    salience: 50.0,
+                    parent_cell_id: None,
+                }
+            })
+            .collect()
+    };
+
+    // Individual writes.
+    let dir1 = tempfile::tempdir().unwrap();
+    let mut engine1 = Engine::open(dir1.path()).unwrap();
+    let reqs = make_requests();
+
+    let start_individual = std::time::Instant::now();
+    for r in &reqs {
+        engine1.mem_write(r.owner, r.layer, &r.key, r.value.clone(), r.salience, None).unwrap();
+    }
+    let time_individual = start_individual.elapsed();
+
+    // Batch writes.
+    let dir2 = tempfile::tempdir().unwrap();
+    let mut engine2 = Engine::open(dir2.path()).unwrap();
+    let reqs2 = make_requests();
+
+    let start_batch = std::time::Instant::now();
+    engine2.mem_write_batch(&reqs2).unwrap();
+    let time_batch = start_batch.elapsed();
+
+    // Batch should be at least 2x faster (typically 10-50x).
+    let ratio = time_individual.as_secs_f64() / time_batch.as_secs_f64();
+    assert!(
+        ratio > 2.0,
+        "Batch ({time_batch:?}) should be >2x faster than individual ({time_individual:?}). Ratio: {ratio:.1}x"
+    );
+}
+
+/// ATDD 24: Batch write cells have governance (importance, tier).
+#[test]
+fn test_batch_write_has_governance() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let requests: Vec<WriteRequest> = (0..5u64)
+        .map(|i| {
+            let key = vec![i as f32; 16];
+            WriteRequest {
+                owner: 1,
+                layer: 0,
+                key: key.clone(),
+                value: key,
+                salience: 80.0,
+                parent_cell_id: None,
+            }
+        })
+        .collect();
+
+    let ids = engine.mem_write_batch(&requests).unwrap();
+
+    for id in &ids {
+        let imp = engine.cell_importance(*id).unwrap();
+        let tier = engine.cell_tier(*id).unwrap();
+        // salience 80 + on_update boost 5 = 85 -> Core tier.
+        assert!(imp >= 80.0, "Importance {imp} should be >= 80");
+        assert_eq!(tier, Tier::Core, "Tier should be Core at importance {imp}");
+    }
+}
+
+/// ATDD 25: Batch write cells persist across engine reopen.
+#[test]
+fn test_batch_write_persists() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let ids;
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let requests: Vec<WriteRequest> = (0..10u64)
+            .map(|i| {
+                let key = vec![i as f32; 32];
+                WriteRequest {
+                    owner: 1,
+                    layer: 0,
+                    key: key.clone(),
+                    value: key,
+                    salience: 50.0,
+                    parent_cell_id: None,
+                }
+            })
+            .collect();
+
+        ids = engine.mem_write_batch(&requests).unwrap();
+        assert_eq!(engine.cell_count(), 10);
+    }
+
+    // Reopen engine — all cells should survive.
+    let engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine.cell_count(), 10);
+
+    // Governance should be rebuilt.
+    for id in &ids {
+        assert!(engine.cell_importance(*id).is_some());
+    }
+}
+
+/// ATDD 26: Batch write with causal parent IDs creates trace edges.
+#[test]
+fn test_batch_write_with_causal_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    // Write a root cell first.
+    let root_id = engine.mem_write(1, 0, &[1.0f32; 16], vec![1.0; 16], 50.0, None).unwrap();
+
+    // Batch with parent references.
+    let requests = vec![
+        WriteRequest {
+            owner: 1,
+            layer: 0,
+            key: vec![2.0; 16],
+            value: vec![2.0; 16],
+            salience: 50.0,
+            parent_cell_id: Some(root_id),
+        },
+        WriteRequest {
+            owner: 1,
+            layer: 0,
+            key: vec![3.0; 16],
+            value: vec![3.0; 16],
+            salience: 50.0,
+            parent_cell_id: Some(root_id),
+        },
+    ];
+
+    let ids = engine.mem_write_batch(&requests).unwrap();
+
+    // Both batch cells should be traceable ancestors of root.
+    let ancestors_0 = engine.trace_ancestors(ids[0]);
+    let ancestors_1 = engine.trace_ancestors(ids[1]);
+    assert!(ancestors_0.contains(&root_id), "Cell {} should trace to root {root_id}", ids[0]);
+    assert!(ancestors_1.contains(&root_id), "Cell {} should trace to root {root_id}", ids[1]);
 }
