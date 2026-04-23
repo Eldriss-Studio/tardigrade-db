@@ -6,7 +6,15 @@ import argparse
 import json
 from pathlib import Path
 
-from .reporting import compare_runs, load_run, render_compare_markdown, render_report_json, render_report_markdown
+from .reporting import (
+    compare_runs,
+    load_run,
+    render_compare_html,
+    render_compare_markdown,
+    render_report_html,
+    render_report_json,
+    render_report_markdown,
+)
 from .runner import BenchmarkRunner
 
 
@@ -25,13 +33,13 @@ def _parser() -> argparse.ArgumentParser:
 
     report = sub.add_parser("report")
     report.add_argument("--input", required=True)
-    report.add_argument("--format", required=True, choices=["md", "json"])
+    report.add_argument("--format", required=True, choices=["md", "json", "html"])
     report.add_argument("--output", required=True)
 
     compare = sub.add_parser("compare")
     compare.add_argument("--baseline", required=True)
     compare.add_argument("--candidate", required=True)
-    compare.add_argument("--format", required=True, choices=["md", "json"])
+    compare.add_argument("--format", required=True, choices=["md", "json", "html"])
     compare.add_argument("--output", required=True)
 
     return parser
@@ -54,7 +62,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "report":
         run = load_run(Path(args.input))
-        payload = render_report_markdown(run) if args.format == "md" else render_report_json(run)
+        if args.format == "md":
+            payload = render_report_markdown(run)
+        elif args.format == "html":
+            payload = render_report_html(run)
+        else:
+            payload = render_report_json(run)
         Path(args.output).write_text(payload, encoding="utf-8")
         return 0
 
@@ -64,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
         comparison = compare_runs(baseline, candidate)
         if args.format == "md":
             text = render_compare_markdown(comparison)
+        elif args.format == "html":
+            text = render_compare_html(comparison)
         else:
             text = json.dumps(comparison, indent=2, sort_keys=True)
         Path(args.output).write_text(text, encoding="utf-8")

@@ -12,7 +12,19 @@ TardigradeDB is not a traditional database with tables and indexes, nor a vector
 
 - Experiments log: [docs/experiments/README.md](docs/experiments/README.md)
 - Benchmark narrative: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html)
-- Observed benchmark results so far: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.md](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.md)
+- Observed benchmark results so far: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html)
+
+## What The App Does Today
+
+At runtime, TardigradeDB acts like a memory engine for agents:
+
+1. It stores model KV activations durably (`mem_write`) in quantized form.
+2. It retrieves relevant past activations (`mem_read`) using latent-space scoring.
+3. It tracks causal links and importance so memory can evolve over time.
+4. It exposes the engine through Rust APIs and Python bindings.
+5. It ships a comparable benchmark harness (`tdb_bench`) for transparent system-to-system evaluation.
+
+If you only need one mental model: **capture memory state, persist it, and retrieve it later with attention-compatible relevance.**
 
 ## Why TardigradeDB?
 
@@ -129,7 +141,7 @@ Rustdoc is built and deployed to GitHub Pages on every push to `main`:
 Benchmark result pages:
 - Criterion dashboard: **[.../dev/bench/index.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench/index.html)**
 - Benchmark v1 narrative + latest links: **[.../dev/bench-v1/index.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html)**
-- Observed completed runs (sample/smoke + caveats): **[.../dev/bench-v1/results.md](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.md)**
+- Observed completed runs (sample/smoke + caveats): **[.../dev/bench-v1/results.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html)**
 
 To build locally: `just doc` (output in `target/doc/`).
 

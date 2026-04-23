@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 from pathlib import Path
 
@@ -70,6 +71,65 @@ def render_report_json(run: RunResultV1) -> str:
     return json.dumps(payload, indent=2, sort_keys=True)
 
 
+def render_report_html(run: RunResultV1) -> str:
+    validity = classify_run_validity(run)
+    rows: list[str] = []
+    for system, agg in sorted(run.aggregates.get("systems", {}).items()):
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(system)}</td>"
+            f"<td>{float(agg.get('avg_score', 0.0)):.4f}</td>"
+            f"<td>{float(agg.get('score_stddev', 0.0)):.4f}</td>"
+            f"<td>{float(agg.get('score_ci95', 0.0)):.4f}</td>"
+            f"<td>{int(agg.get('run_count', 1))}</td>"
+            f"<td>{int(agg.get('ok', 0))}</td>"
+            f"<td>{int(agg.get('skipped', 0))}</td>"
+            f"<td>{int(agg.get('failed', 0))}</td>"
+            "</tr>"
+        )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Benchmark Report</title>
+  <style>
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#0d1117;color:#e6edf3;padding:24px;line-height:1.5}}
+    .card{{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;margin:12px 0}}
+    table{{width:100%;border-collapse:collapse}}
+    th,td{{border-bottom:1px solid #30363d;padding:8px;text-align:left}}
+    th{{color:#8b949e}}
+    code{{background:#11151c;border:1px solid #30363d;border-radius:4px;padding:0 6px}}
+  </style>
+</head>
+<body>
+  <h1>Benchmark Report</h1>
+  <div class="card">
+    <div>mode: <code>{html.escape(str(run.manifest.get('mode', '')))}</code></div>
+    <div>git_sha: <code>{html.escape(str(run.manifest.get('git_sha', '')))}</code></div>
+    <div>repeats: <code>{html.escape(str(run.manifest.get('repeats', 1)))}</code></div>
+    <div>seeds: <code>{html.escape(str(run.manifest.get('seeds', [run.manifest.get('seed', 0)])))}</code></div>
+    <div>run_validity: <code>{html.escape(validity['state'])}</code></div>
+    <div>run_validity_reason: <code>{html.escape(validity['reason'])}</code></div>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>system</th><th>avg_score</th><th>stddev</th><th>ci95</th><th>runs</th><th>ok</th><th>skipped</th><th>failed</th>
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(rows)}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
+"""
+
+
 def compare_runs(baseline: RunResultV1, candidate: RunResultV1) -> dict:
     result: dict[str, dict] = {}
     baseline_systems = baseline.aggregates.get("systems", {})
@@ -107,6 +167,53 @@ def render_compare_markdown(comparison: dict) -> str:
             f"| {system} | {row['baseline_avg_score']:.4f} | {row['candidate_avg_score']:.4f} | {row.get('baseline_ci95', 0.0):.4f} | {row.get('candidate_ci95', 0.0):.4f} | {row['delta']:+.4f} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def render_compare_html(comparison: dict) -> str:
+    rows: list[str] = []
+    for system, row in sorted(comparison.items()):
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(system)}</td>"
+            f"<td>{float(row['baseline_avg_score']):.4f}</td>"
+            f"<td>{float(row['candidate_avg_score']):.4f}</td>"
+            f"<td>{float(row.get('baseline_ci95', 0.0)):.4f}</td>"
+            f"<td>{float(row.get('candidate_ci95', 0.0)):.4f}</td>"
+            f"<td>{float(row['delta']):+.4f}</td>"
+            "</tr>"
+        )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Benchmark Comparison</title>
+  <style>
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#0d1117;color:#e6edf3;padding:24px;line-height:1.5}}
+    .card{{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;margin:12px 0}}
+    table{{width:100%;border-collapse:collapse}}
+    th,td{{border-bottom:1px solid #30363d;padding:8px;text-align:left}}
+    th{{color:#8b949e}}
+  </style>
+</head>
+<body>
+  <h1>Benchmark Comparison</h1>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>system</th><th>baseline_avg_score</th><th>candidate_avg_score</th><th>baseline_ci95</th><th>candidate_ci95</th><th>delta</th>
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(rows)}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
+"""
 
 
 def load_run(path: Path) -> RunResultV1:

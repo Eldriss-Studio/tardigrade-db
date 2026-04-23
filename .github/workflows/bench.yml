@@ -83,6 +83,31 @@ jobs:
             --input target/bench-v1/full-run.json \
             --format json \
             --output target/bench-v1/full-report.json
+          PYTHONPATH=python python -m tdb_bench report \
+            --input target/bench-v1/full-run.json \
+            --format html \
+            --output target/bench-v1/full-report.html
+          PYTHONPATH=python python - <<'PY'
+import html
+import json
+from pathlib import Path
+
+raw = json.loads(Path("target/bench-v1/full-run.json").read_text(encoding="utf-8"))
+pretty = json.dumps(raw, indent=2, sort_keys=True)
+page = (
+    "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+    "<title>Benchmark Run JSON</title>"
+    "<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;"
+    "background:#0d1117;color:#e6edf3;padding:24px}"
+    ".card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px}"
+    "pre{white-space:pre-wrap;word-break:break-word}</style></head><body>"
+    "<h1>Benchmark Run JSON</h1><div class='card'><pre>"
+    + html.escape(pretty)
+    + "</pre></div></body></html>"
+)
+Path("target/bench-v1/full-run.html").write_text(page, encoding="utf-8")
+PY
 
       - name: Checkout gh-pages for baseline comparison
         uses: actions/checkout@v4
@@ -101,20 +126,31 @@ jobs:
               --format md \
               --output target/bench-v1/full-compare.md; then
               echo "compare generated"
+              PYTHONPATH=python python -m tdb_bench compare \
+                --baseline gh-pages/dev/bench-v1/latest-full-run.json \
+                --candidate target/bench-v1/full-run.json \
+                --format html \
+                --output target/bench-v1/full-compare.html
             else
-              cat > target/bench-v1/full-compare.md <<'EOF'
-              # Benchmark Comparison
-
-              Baseline comparison unavailable for this run.
-              The previous `latest-full-run.json` is not compatible with the current comparison schema yet.
-              EOF
+              printf '%s\n' \
+                '# Benchmark Comparison' \
+                '' \
+                'Baseline comparison unavailable for this run.' \
+                'The previous `latest-full-run.json` is not compatible with the current comparison schema yet.' \
+                > target/bench-v1/full-compare.md
+              printf '%s\n' \
+                "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Benchmark Comparison</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#0d1117;color:#e6edf3;padding:24px}.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px}</style></head><body><h1>Benchmark Comparison</h1><div class='card'>Baseline comparison unavailable for this run. The previous <code>latest-full-run.json</code> is not compatible with the current comparison schema yet.</div></body></html>" \
+                > target/bench-v1/full-compare.html
             fi
           else
-            cat > target/bench-v1/full-compare.md <<'EOF'
-            # Benchmark Comparison
-
-            No previous baseline found in `gh-pages/dev/bench-v1/latest-full-run.json`.
-            EOF
+            printf '%s\n' \
+              '# Benchmark Comparison' \
+              '' \
+              'No previous baseline found in `gh-pages/dev/bench-v1/latest-full-run.json`.' \
+              > target/bench-v1/full-compare.md
+            printf '%s\n' \
+              "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Benchmark Comparison</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#0d1117;color:#e6edf3;padding:24px}.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px}</style></head><body><h1>Benchmark Comparison</h1><div class='card'>No previous baseline found in <code>gh-pages/dev/bench-v1/latest-full-run.json</code>.</div></body></html>" \
+              > target/bench-v1/full-compare.html
           fi
 
       - name: Upload full benchmark artifacts
@@ -139,9 +175,17 @@ jobs:
             cp target/bench-v1/full-run.json gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/run.json
             cp target/bench-v1/full-run.json gh-pages/dev/bench-v1/latest-full-run.json
           fi
+          if [ -f target/bench-v1/full-run.html ]; then
+            cp target/bench-v1/full-run.html gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/run.html
+            cp target/bench-v1/full-run.html gh-pages/dev/bench-v1/latest-full-run.html
+          fi
           if [ -f target/bench-v1/full-report.md ]; then
             cp target/bench-v1/full-report.md gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/report.md
             cp target/bench-v1/full-report.md gh-pages/dev/bench-v1/latest-full-report.md
+          fi
+          if [ -f target/bench-v1/full-report.html ]; then
+            cp target/bench-v1/full-report.html gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/report.html
+            cp target/bench-v1/full-report.html gh-pages/dev/bench-v1/latest-full-report.html
           fi
           if [ -f target/bench-v1/full-report.json ]; then
             cp target/bench-v1/full-report.json gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/report.json
@@ -149,6 +193,10 @@ jobs:
           if [ -f target/bench-v1/full-compare.md ]; then
             cp target/bench-v1/full-compare.md gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/compare.md
             cp target/bench-v1/full-compare.md gh-pages/dev/bench-v1/latest-full-compare.md
+          fi
+          if [ -f target/bench-v1/full-compare.html ]; then
+            cp target/bench-v1/full-compare.html gh-pages/dev/bench-v1/runs/${GITHUB_RUN_ID}/compare.html
+            cp target/bench-v1/full-compare.html gh-pages/dev/bench-v1/latest-full-compare.html
           fi
 
           git -C gh-pages config user.name "github-actions[bot]"
@@ -189,6 +237,11 @@ jobs:
               'Trigger the **Benchmarks** workflow (`bench.yml`) manually or wait for the scheduled run.' \
               > gh-pages/dev/bench-v1/latest-full-report.md
           fi
+          if [ ! -f gh-pages/dev/bench-v1/latest-full-report.html ]; then
+            printf '%s\n' \
+              "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Benchmark Report</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#0d1117;color:#e6edf3;padding:24px}.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px}.nav{margin-bottom:16px}.nav a{color:#58a6ff;text-decoration:none;margin-right:10px}</style></head><body><div class='nav'><a href='index.html'>Narrative</a><a href='results.html'>Observed Results</a><a href='../bench/index.html'>Criterion</a></div><h1>Benchmark Report</h1><div class='card'>No full benchmark result has been published yet. Trigger the <strong>Benchmarks</strong> workflow (<code>bench.yml</code>) manually or wait for the scheduled run.</div></body></html>" \
+              > gh-pages/dev/bench-v1/latest-full-report.html
+          fi
 
           if [ ! -f gh-pages/dev/bench-v1/latest-full-run.json ]; then
             printf '%s\n' \
@@ -201,6 +254,11 @@ jobs:
               '}' \
               > gh-pages/dev/bench-v1/latest-full-run.json
           fi
+          if [ ! -f gh-pages/dev/bench-v1/latest-full-run.html ]; then
+            printf '%s\n' \
+              "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Benchmark Run JSON</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#0d1117;color:#e6edf3;padding:24px}.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px}.nav{margin-bottom:16px}.nav a{color:#58a6ff;text-decoration:none;margin-right:10px}pre{white-space:pre-wrap;word-break:break-word}</style></head><body><div class='nav'><a href='index.html'>Narrative</a><a href='results.html'>Observed Results</a><a href='latest-full-report.html'>Report</a></div><h1>Benchmark Run JSON</h1><div class='card'><pre>{\n  \"run_validity\": {\n    \"state\": \"invalid\",\n    \"reason\": \"no_full_benchmark_published_yet\"\n  },\n  \"status_summary\": {}\n}</pre></div></body></html>" \
+              > gh-pages/dev/bench-v1/latest-full-run.html
+          fi
 
           if [ ! -f gh-pages/dev/bench-v1/latest-full-compare.md ]; then
             printf '%s\n' \
@@ -209,10 +267,21 @@ jobs:
               'No full benchmark comparison has been published yet.' \
               > gh-pages/dev/bench-v1/latest-full-compare.md
           fi
+          if [ ! -f gh-pages/dev/bench-v1/latest-full-compare.html ]; then
+            printf '%s\n' \
+              "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Benchmark Comparison</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#0d1117;color:#e6edf3;padding:24px}.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px}.nav{margin-bottom:16px}.nav a{color:#58a6ff;text-decoration:none;margin-right:10px}</style></head><body><div class='nav'><a href='index.html'>Narrative</a><a href='results.html'>Observed Results</a><a href='latest-full-report.html'>Report</a></div><h1>Benchmark Comparison</h1><div class='card'>No full benchmark comparison has been published yet.</div></body></html>" \
+              > gh-pages/dev/bench-v1/latest-full-compare.html
+          fi
 
           git -C gh-pages config user.name "github-actions[bot]"
           git -C gh-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C gh-pages add dev/bench-v1/latest-full-report.md dev/bench-v1/latest-full-run.json dev/bench-v1/latest-full-compare.md
+          git -C gh-pages add \
+            dev/bench-v1/latest-full-report.md \
+            dev/bench-v1/latest-full-report.html \
+            dev/bench-v1/latest-full-run.json \
+            dev/bench-v1/latest-full-run.html \
+            dev/bench-v1/latest-full-compare.md \
+            dev/bench-v1/latest-full-compare.html
           git -C gh-pages commit -m "bench-v1 bootstrap latest files for ${GITHUB_SHA}" || true
           git -C gh-pages push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git HEAD:gh-pages
         env:

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TardigradeDB — Benchmark V1 Observed Results</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --good: #3fb950;
+      --warn: #d29922;
+      --bad: #f85149;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .wrap {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+    .topnav {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .topnav a {
+      display: inline-block;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: 999px;
+      padding: 0.25rem 0.65rem;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .topnav a:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.8rem;
+    }
+    .sub {
+      color: var(--muted);
+      margin: 0.4rem 0 1.5rem;
+    }
+    h2 {
+      margin: 1.4rem 0 0.6rem;
+      font-size: 1.1rem;
+      color: var(--accent);
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+      margin: 0.9rem 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.6rem;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 0.5rem 0.3rem;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.92rem;
+    }
+    code {
+      background: #11151c;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.05rem 0.3rem;
+      font-size: 0.9em;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="topnav" aria-label="Benchmark navigation">
+      <a href="../bench/index.html">Criterion Dashboard</a>
+      <a href="../bench-v1/index.html">Benchmark V1 Narrative</a>
+      <a href="../bench-v1/results.html">Observed Results</a>
+      <a href="../../tdb_engine/index.html">API Docs</a>
+      <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+    </nav>
+
+    <h1>Benchmark V1 — Observed Results So Far</h1>
+    <p class="sub">Last updated: 2026-04-22</p>
+
+    <div class="panel">
+      This page reports <strong>completed runs we actually executed</strong>. It is intentionally separate from
+      <code>latest-full-*</code> so partial runs are never mislabeled as full matrix results.
+    </div>
+
+    <h2>Reading Guide</h2>
+    <div class="panel">
+      <ul>
+        <li><code>run_validity=comparable</code>: safe to compare systems in that run scope.</li>
+        <li><code>run_validity=invalid</code>: at least one system had no successful outputs; not a fair quality comparison.</li>
+        <li>Evaluator mode: <code>llm</code> or <code>deterministic_fallback</code>.</li>
+      </ul>
+    </div>
+
+    <h2>Completed Runs</h2>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Scope</th>
+            <th>Systems</th>
+            <th>Evaluator</th>
+            <th>Run validity</th>
+            <th>Key outcome</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>2026-04-22</td>
+            <td>Smoke fixture, 3 repeats</td>
+            <td>Tardigrade vs Letta</td>
+            <td>deterministic_fallback</td>
+            <td>comparable</td>
+            <td>Quality tie (<code>1.0000</code> vs <code>1.0000</code>), Tardigrade lower latency</td>
+          </tr>
+          <tr>
+            <td>2026-04-22</td>
+            <td>Official-data sample (25 LoCoMo + 25 LongMemEval)</td>
+            <td>Tardigrade vs Letta</td>
+            <td>deterministic_fallback</td>
+            <td>comparable</td>
+            <td>Tardigrade <code>1.0000</code>, Letta <code>0.2002</code>; no failures</td>
+          </tr>
+          <tr>
+            <td>2026-04-22</td>
+            <td>Official full Phase-1 (attempt before ingest chunk fix)</td>
+            <td>Tardigrade vs Letta</td>
+            <td>deterministic_fallback</td>
+            <td>invalid</td>
+            <td>Letta ingest failures on all items (<code>2042/2042</code>)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Comparable Sample Metrics</h2>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>System</th>
+            <th>Avg score</th>
+            <th>LoCoMo avg latency</th>
+            <th>LongMemEval avg latency</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Tardigrade</td>
+            <td><code>1.0000</code></td>
+            <td><code>~7.44 ms</code></td>
+            <td><code>~6.67 ms</code></td>
+          </tr>
+          <tr>
+            <td>Letta</td>
+            <td><code>0.2002</code></td>
+            <td><code>~81.10 ms</code></td>
+            <td><code>~77.63 ms</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Important Caveats</h2>
+    <div class="panel">
+      <ul>
+        <li>Full matrix runs can be heavy for constrained local machines.</li>
+        <li>Sample results are transparent and useful, but not a substitute for full-matrix publication.</li>
+        <li>Failed/skipped outcomes remain visible and are never silently dropped.</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      Raw markdown source: <a href="../bench-v1/results.md">results.md</a>
+    </div>
+  </div>
+</body>
+</html>

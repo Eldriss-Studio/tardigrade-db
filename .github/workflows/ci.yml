@@ -199,6 +199,7 @@ jobs:
           mkdir -p target/doc/dev/bench target/doc/dev/bench-v1
           cp docs/bench/index.html target/doc/dev/bench/index.html
           cp docs/bench/v1.html target/doc/dev/bench-v1/index.html
+          cp docs/bench/v1-results.html target/doc/dev/bench-v1/results.html
           cp docs/bench/v1-results.md target/doc/dev/bench-v1/results.md
       - name: Deploy to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4

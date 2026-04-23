@@ -331,13 +331,16 @@ def test_cli_run_report_compare(tmp_path: Path) -> None:
     run_b = tmp_path / "run_b.json"
     report_md = tmp_path / "report.md"
     report_json = tmp_path / "report.json"
+    report_html = tmp_path / "report.html"
     compare_md = tmp_path / "compare.md"
+    compare_html = tmp_path / "compare.html"
 
     assert main(["run", "--mode", "smoke", "--config", str(cfg_path), "--output", str(run_a)]) == 0
     assert main(["run", "--mode", "smoke", "--config", str(cfg_path), "--output", str(run_b)]) == 0
 
     assert main(["report", "--input", str(run_a), "--format", "md", "--output", str(report_md)]) == 0
     assert main(["report", "--input", str(run_a), "--format", "json", "--output", str(report_json)]) == 0
+    assert main(["report", "--input", str(run_a), "--format", "html", "--output", str(report_html)]) == 0
     assert main(
         [
             "compare",
@@ -351,6 +354,19 @@ def test_cli_run_report_compare(tmp_path: Path) -> None:
             str(compare_md),
         ]
     ) == 0
+    assert main(
+        [
+            "compare",
+            "--baseline",
+            str(run_a),
+            "--candidate",
+            str(run_b),
+            "--format",
+            "html",
+            "--output",
+            str(compare_html),
+        ]
+    ) == 0
 
     assert run_a.exists()
     assert run_b.exists()
@@ -360,6 +376,8 @@ def test_cli_run_report_compare(tmp_path: Path) -> None:
     json_report = json.loads(report_json.read_text(encoding="utf-8"))
     assert "aggregates" in json_report
     assert "Benchmark Comparison" in compare_md.read_text(encoding="utf-8")
+    assert "<html" in report_html.read_text(encoding="utf-8").lower()
+    assert "<html" in compare_html.read_text(encoding="utf-8").lower()
 
 
 # ATDD 6b: CLI repeat flag should run multiple replicates and persist manifest fields.
