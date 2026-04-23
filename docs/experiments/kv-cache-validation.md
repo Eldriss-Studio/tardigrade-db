@@ -149,6 +149,14 @@ The per-token Q*K approach is the architecturally correct direction (matching ho
 
 The 40% recall at 100 memories means TardigradeDB's retrieval engine cannot yet reliably find memories at realistic scale. This is not a storage problem, a governance problem, or a model problem. It is a scoring problem in the retrieval layer.
 
+### Traditional RAG Baseline
+
+A retrieval-only traditional RAG baseline was run against the same 100-memory corpus using `intfloat/e5-small-v2` embeddings through `transformers`. Memories were encoded as `passage: ...`, queries as `query: ...`, pooled with the attention mask, L2-normalized, and ranked by cosine similarity.
+
+Result: traditional embedding RAG achieved **100% recall@1, recall@3, recall@5, and recall@10** on the 30 positive queries. It produced 30/30 unique top-1 memories, with no gravity well. This does not change the architecture by itself, but it gives a hard benchmark: current Q*K retrieval is not competitive with standard embedding retrieval on this corpus.
+
+This comparison is retrieval-only. It does not test whether KV injection after retrieval improves answer quality, reduces token cost, or preserves model state better than text RAG. Those remain separate questions.
+
 ## What's Validated
 
 - Storing K projections (not hidden states) is correct and necessary
@@ -185,6 +193,9 @@ These are retrieval engine changes in Rust (`tdb-retrieval`), not model or stora
 | `experiments/sonia_production_sim.py` | Hidden states comparison |
 | `experiments/maya_kv_tensors_comparison.py` | GPT-2 vs Qwen3, hidden states, Maya |
 | `experiments/sonia_real_kv_3b.py` | Qwen2.5-3B, same as sonia_real_kv_cache |
+| `experiments/scale_100_qk.py` | Q*K retrieval at 100-memory density |
+| `experiments/scale_100_qk_diagnostics.py` | Diagnostic scorer comparison for 100-memory collapse |
+| `experiments/scale_100_rag_baseline.py` | Traditional embedding RAG retrieval baseline |
 
 ## Next Steps
 
