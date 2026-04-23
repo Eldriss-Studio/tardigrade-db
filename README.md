@@ -125,6 +125,26 @@ The 75% ceiling was caused by mean-pooling queries: averaging all query tokens i
 
 The per-token retriever is now wired into the engine pipeline and the Python KV hook emits per-token encoded keys.
 
+### Retrieval Evolution (What We Learned)
+
+Three experiments in one session revealed a clear progression:
+
+1. **Storing hidden states is wrong.** Raw internal activations (before the model's attention projections) cluster everything together. A 0.6B model couldn't tell "burnt risotto" from "custody hearing" — 31% recall with a gravity well (one memory dominated all queries).
+
+2. **Storing real K projections works.** Switching to `past_key_values` (the actual attention keys) doubled recall to 75%. But mean-pooling the query still lost distinguishing tokens.
+
+3. **Per-token retrieval breaks the ceiling.** Storing and querying individual token K vectors with max-sim scoring (best token-to-token match per cell) achieved 100% recall on synthetic benchmarks. This is based on FIER (2025) research, using the existing INT8 SIMD infrastructure.
+
+The retrieval pipeline now chains: **SLB (mean-pooled hot cache) -> PerTokenRetriever (max-sim) -> BruteForceRetriever (fallback)**.
+
+### Why Python Exists in This Project
+
+The Rust kernel (storage, retrieval, governance, indexing — 131 tests) is a self-contained library. It does not need Python.
+
+Python exists for one reason: **to bridge TardigradeDB to model inference frameworks**. HuggingFace Transformers is the only practical way to access a model's KV cache (`past_key_values`) on local hardware. The Python layer (`tardigrade_hooks`) captures those tensors and feeds them to the Rust engine via PyO3 bindings.
+
+In production, this bridge would be replaced by a direct Rust integration with vLLM or SGLang (serving frameworks that expose KV cache internals). The Python layer is an experiment adapter, not a permanent architecture requirement.
+
 **Measured prototype performance** (Apple M-series, release mode, criterion):
 
 | Operation | Latency | Notes |
