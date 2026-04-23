@@ -88,26 +88,26 @@ jobs:
             --format html \
             --output target/bench-v1/full-report.html
           PYTHONPATH=python python - <<'PY'
-import html
-import json
-from pathlib import Path
+          import html
+          import json
+          from pathlib import Path
 
-raw = json.loads(Path("target/bench-v1/full-run.json").read_text(encoding="utf-8"))
-pretty = json.dumps(raw, indent=2, sort_keys=True)
-page = (
-    "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
-    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<title>Benchmark Run JSON</title>"
-    "<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;"
-    "background:#0d1117;color:#e6edf3;padding:24px}"
-    ".card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px}"
-    "pre{white-space:pre-wrap;word-break:break-word}</style></head><body>"
-    "<h1>Benchmark Run JSON</h1><div class='card'><pre>"
-    + html.escape(pretty)
-    + "</pre></div></body></html>"
-)
-Path("target/bench-v1/full-run.html").write_text(page, encoding="utf-8")
-PY
+          raw = json.loads(Path("target/bench-v1/full-run.json").read_text(encoding="utf-8"))
+          pretty = json.dumps(raw, indent=2, sort_keys=True)
+          page = (
+              "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+              "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+              "<title>Benchmark Run JSON</title>"
+              "<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;"
+              "background:#0d1117;color:#e6edf3;padding:24px}"
+              ".card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px}"
+              "pre{white-space:pre-wrap;word-break:break-word}</style></head><body>"
+              "<h1>Benchmark Run JSON</h1><div class='card'><pre>"
+              + html.escape(pretty)
+              + "</pre></div></body></html>"
+          )
+          Path("target/bench-v1/full-run.html").write_text(page, encoding="utf-8")
+          PY
 
       - name: Checkout gh-pages for baseline comparison
         uses: actions/checkout@v4
