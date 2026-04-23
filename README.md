@@ -20,6 +20,15 @@ TardigradeDB is not a traditional database with tables and indexes, nor a vector
 - Benchmark narrative: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html)
 - Observed benchmark results so far: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html)
 
+## Naming Trivia
+
+The name *TardigradeDB* is a metaphor, and these are the development pillars behind it:
+
+- **Cryptobiosis -> dormant memory revival**: quantized KV state can be persisted, then "reanimated" by retrieval and reinjection later.
+- **Resilience under stress -> recovery-first design**: WAL + rebuildable derived state + fail-fast replay boundaries.
+- **Tiny footprint -> compressed survival**: Q4/Q8 compression keeps memory practical under constrained capacity.
+- **Adaptive survival -> memory lifecycle control**: AKL promotion/demotion/decay keeps useful memory active and stale memory fading.
+
 ## What The Prototype Demonstrates Today
 
 At runtime, TardigradeDB acts like a memory engine for agents:
@@ -40,29 +49,17 @@ Current agent memory systems (Mem0, Letta, Zep) rely on text retrieval — token
 
 Yes at the data level; no at the system level.
 
-A raw KV cache is append-and-replay state for one running model session. TardigradeDB adds the memory-system capabilities a raw cache does not have:
+A raw KV cache is append-and-replay state for one running model session. Compared with raw KV cache and text/embedding memory stacks, this prototype demonstrates:
 
-- **Selective semantic recall** in latent space (`q · k / sqrt(d_k)`), so the engine can fetch the relevant few memories instead of replaying full history.
-- **Durable persistence** across sessions in compressed form (Q4/Q8), not process-local ephemeral cache pages.
-- **Memory lifecycle management** (AKL promotion, demotion, decay), so memory quality improves over time instead of unbounded growth.
-- **Causal organization** (Trace graph + WAL), so episodic relationships survive crashes and can be traversed explicitly.
-- **Cross-agent reuse boundary** via a unified engine API, rather than per-process cache state.
+- **Attention-native semantic retrieval** (`q · k / sqrt(d_k)`), so recall is based on latent similarity rather than text keyword overlap.
+- **Selective memory injection**, fetching only relevant KV slices instead of replaying full history.
+- **Durable compressed persistence** (Q4/Q8) across sessions/runs, not process-local ephemeral cache pages.
+- **Memory lifecycle control** (AKL promotion, demotion, decay), avoiding unmanaged growth.
+- **Causal/episodic structure + recovery model** (Trace + WAL + rebuildable derived state).
+- **Cross-agent memory boundary** via a shared engine API, instead of one cache per process.
+- **Native tensor path**, with no mandatory text -> embedding -> ANN -> text round-trip.
 
-In short: TardigradeDB stores KV tensors, but behaves like a managed long-term memory kernel.
-
-### Differentiators and practical advantages
-
-Compared with raw KV cache and text/embedding memory stacks, the prototype is designed to demonstrate:
-
-- **Semantic retrieval from mnemonic state**: retrieval happens in latent KV space using attention-style scoring, not text keyword overlap.
-- **Selective memory injection**: fetch only relevant KV slices rather than replaying entire history.
-- **Persistence across runs**: KV activations survive process/session boundaries instead of vanishing with model shutdown.
-- **Memory quality management**: AKL-based promotion, demotion, and decay to avoid unmanaged memory growth.
-- **Causal/episodic structure**: Trace graph captures relationships such as caused-by/follows/supports for structured recall.
-- **Rebuild-oriented reliability model**: WAL/snapshot recovery path plus rebuildable derived state.
-- **Cross-agent memory boundary**: shared engine-level memory API instead of one-cache-per-process isolation.
-- **Native tensor path**: no mandatory text -> embedding -> ANN -> text round-trip.
-
+In short: TardigradeDB stores KV tensors, but is aiming to behave like a managed long-term memory kernel.
 These are architectural differentiators under active validation, not final production claims.
 
 ### Real KV Cache Retrieval Result (April 23, 2026)
