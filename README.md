@@ -148,7 +148,7 @@ Four-layer system treating memory as a managed OS resource:
 
 ## Requirements
 
-- **Rust** ≥ 1.85 (edition 2024) — pinned via `rust-toolchain.toml`
+- **Rust** ≥ 1.95 (edition 2024) — MSRV enforced in CI (`MSRV (1.95)`), local toolchain tracks `stable` via `rust-toolchain.toml`
 - **[just](https://github.com/casey/just)** — task runner (`cargo install just`)
 - **[lefthook](https://github.com/evilmartians/lefthook)** — git hooks (`brew install lefthook`)
 - **CUDA toolkit** (optional, for GPU DMA paths)
@@ -218,7 +218,7 @@ Five jobs run on every push and PR:
 | **Check & Lint** | `cargo fmt`, `clippy --pedantic`, `typos`, `cargo-deny` |
 | **Test** | `cargo nextest` on Ubuntu + macOS |
 | **Coverage** | `cargo-llvm-cov` with Codecov upload |
-| **MSRV** | Verifies build on Rust 1.85 |
+| **MSRV** | Verifies build on Rust 1.95 |
 | **Documentation** | Rustdoc build with `-D warnings`, deployed to GitHub Pages on main |
 
 ## Quick Start

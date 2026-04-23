@@ -13,7 +13,7 @@ TardigradeDB is a from-scratch, LLM-native database kernel designed as a persist
 ### Prerequisites
 
 ```bash
-# Rust (1.85+, edition 2024)
+# Rust (1.95+, edition 2024)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Python (3.13+ recommended, 3.14 works with ABI3 compat)

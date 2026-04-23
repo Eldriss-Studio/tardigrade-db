@@ -331,10 +331,10 @@ impl Engine {
             match self.pool.get(rr.cell_id) {
                 Ok(cell) => {
                     // Owner filter (pipeline may not filter internally for all stages).
-                    if let Some(filter_owner) = owner_filter {
-                        if cell.owner != filter_owner {
-                            continue;
-                        }
+                    if let Some(filter_owner) = owner_filter
+                        && cell.owner != filter_owner
+                    {
+                        continue;
                     }
 
                     if let Some(gov) = self.governance.get_mut(&rr.cell_id) {

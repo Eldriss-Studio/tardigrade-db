@@ -258,12 +258,11 @@ pub fn list_segments(dir: &Path) -> io::Result<Vec<u32>> {
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if let Some(rest) = name.strip_prefix("segment_") {
-            if let Some(num_str) = rest.strip_suffix(".tdb") {
-                if let Ok(id) = num_str.parse::<u32>() {
-                    ids.push(id);
-                }
-            }
+        if let Some(rest) = name.strip_prefix("segment_")
+            && let Some(num_str) = rest.strip_suffix(".tdb")
+            && let Ok(id) = num_str.parse::<u32>()
+        {
+            ids.push(id);
         }
     }
     ids.sort_unstable();

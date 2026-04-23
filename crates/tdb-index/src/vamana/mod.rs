@@ -107,7 +107,7 @@ impl VamanaIndex {
         }
 
         // Periodically update medoid for better search entry point.
-        if self.nodes.len() % 500 == 0 {
+        if self.nodes.len().is_multiple_of(500) {
             self.update_medoid();
         }
     }
