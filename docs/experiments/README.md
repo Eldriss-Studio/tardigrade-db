@@ -41,6 +41,18 @@ Key findings from [validation results](kv-injection-results.md):
 
 **Architectural implication:** Mean-pooled vectors work for **retrieval** (search index). Full per-token KV is necessary for **injection** (attention augmentation). The emerging architecture uses mean-pooled as the index key and full KV as the stored value.
 
+### [Sonia Parallel Subagent Validation](sonia-subagent-parallel-test.md)
+
+**Date:** April 23, 2026  
+**Status:** Complete
+
+Two parallel Codex subagents (different agent models) executed separate Sonia experiment scripts and reported recall/SNR outcomes independently.
+
+**Key findings:**
+- `sonia_real_kv_cache.py`: per-token real-KV beat mean-pool on recall in this run (`75.0%` vs `62.5%`, +12.5 points)
+- `sonia_production_sim.py`: recall was equal between modes (`31.2%` each) but per-token showed much larger SNR separation
+- Both runs completed successfully with no operational blockers
+
 ## Planned Experiments
 
 | Experiment | Goal | Status |
