@@ -4,9 +4,11 @@
 # KV packs into a single DynamicCache for injection.
 #
 # - NaiveConcatComposer: concatenates K/V tensors per layer. Cheap but
-#   may produce non-monotonic RoPE positions (Knowledge Packs warns -6%).
+#   produces non-monotonic RoPE positions (3/10 on cross-referencing queries).
 # - SequentialRecomputeComposer: processes facts sequentially through the
-#   model, building contextual KV. Correct but requires stored fact text.
+#   model, building contextual KV. Requires stored fact text (1/10).
+# - RoPECorrectedConcatComposer: fixes RoPE positions before concatenation
+#   using unrotate/re-rotate (CacheBlend approach, EuroSys 2025).
 
 from abc import ABC, abstractmethod
 
@@ -59,19 +61,60 @@ class NaiveConcatComposer(CompositionStrategy):
                 if layer_info is None:
                     continue
 
-                val = np.array(layer_info["data"], dtype=np.float32)
-                half = len(val) // 2
-                seq_len = half // kv_dim
-
-                kt = torch.tensor(val[:half]).reshape(
-                    1, seq_len, num_kv_heads, head_dim
-                ).permute(0, 2, 1, 3)
-                vt = torch.tensor(val[half:]).reshape(
-                    1, seq_len, num_kv_heads, head_dim
-                ).permute(0, 2, 1, 3)
-
+                kt, vt, _ = _unpack_layer(layer_info, num_kv_heads, head_dim, kv_dim)
                 all_k.append(kt)
                 all_v.append(vt)
+
+            if all_k:
+                cache.update(
+                    torch.cat(all_k, dim=2),
+                    torch.cat(all_v, dim=2),
+                    layer_idx,
+                )
+
+        return cache
+
+
+class RoPECorrectedConcatComposer(CompositionStrategy):
+    """Concatenate K/V tensors with RoPE position correction.
+
+    Based on CacheBlend (EuroSys 2025 Best Paper). Each pack's K vectors
+    carry RoPE rotations at their original positions [0..N]. This composer
+    unrotates them and re-rotates at contiguous positions so the combined
+    cache has monotonically increasing positions.
+
+    V vectors are unchanged — RoPE only affects K.
+
+    Accepts a PositionEncoder via constructor injection:
+    - RoPEPositionEncoder: applies unrotate/re-rotate (Qwen, Llama)
+    - AbsolutePositionEncoder: no-op, degrades to NaiveConcatComposer (GPT-2)
+    """
+
+    def __init__(self, position_encoder):
+        self.position_encoder = position_encoder
+
+    def compose(self, packs, num_kv_heads, head_dim, kv_dim, n_layers):
+        cache = DynamicCache()
+
+        for layer_idx in range(n_layers):
+            all_k = []
+            all_v = []
+            cumulative_offset = 0
+
+            for pack in packs:
+                layer_info = _find_layer(pack, layer_idx)
+                if layer_info is None:
+                    continue
+
+                kt, vt, seq_len = _unpack_layer(layer_info, num_kv_heads, head_dim, kv_dim)
+
+                # Fix RoPE: remap K vectors to contiguous positions
+                old_positions = torch.arange(seq_len)
+                kt = self.position_encoder.remap_keys(kt, old_positions, cumulative_offset)
+
+                all_k.append(kt)
+                all_v.append(vt)  # V unchanged — RoPE only affects K
+                cumulative_offset += seq_len
 
             if all_k:
                 cache.update(
@@ -137,6 +180,26 @@ class SequentialRecomputeComposer(CompositionStrategy):
             return DynamicCache()
 
         return accumulated_cache
+
+
+def _unpack_layer(layer_info, num_kv_heads, head_dim, kv_dim):
+    """Unpack a layer dict into K and V tensors.
+
+    Returns (kt, vt, seq_len) where kt and vt have shape
+    (1, num_kv_heads, seq_len, head_dim).
+    """
+    val = np.array(layer_info["data"], dtype=np.float32)
+    half = len(val) // 2
+    seq_len = half // kv_dim
+
+    kt = torch.tensor(val[:half]).reshape(
+        1, seq_len, num_kv_heads, head_dim
+    ).permute(0, 2, 1, 3)
+    vt = torch.tensor(val[half:]).reshape(
+        1, seq_len, num_kv_heads, head_dim
+    ).permute(0, 2, 1, 3)
+
+    return kt, vt, seq_len
 
 
 def _find_layer(pack, layer_idx):
