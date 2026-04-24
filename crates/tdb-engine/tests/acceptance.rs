@@ -1639,6 +1639,124 @@ fn test_correctness_report_detects_vamana_regression() {
     assert!(has_vamana_regression(&before, &after, &expected));
 }
 
+// -- Phase 30: Pack Materialization ATDD ────────────────────────────────────
+
+const OUT_OF_ORDER_LAYER_A: u16 = 3;
+const OUT_OF_ORDER_LAYER_B: u16 = 0;
+const OUT_OF_ORDER_LAYER_C: u16 = 7;
+const OUT_OF_ORDER_LAYER_D: u16 = 1;
+const OUT_OF_ORDER_LAYER_COUNT: usize = 4;
+const GOVERNANCE_PACK_LAYER_COUNT: usize = 4;
+const GOVERNANCE_ACCESS_BOOST_PER_READ: f32 = 3.0;
+const GOVERNANCE_WRITE_BOOST: f32 = 5.0;
+const GOVERNANCE_SALIENCE: f32 = 50.0;
+
+/// ATDD 35: Out-of-order stored layer cells are returned sorted by `layer_idx`.
+#[test]
+fn test_pack_layer_hydration_preserves_layer_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    // Write pack with deliberately out-of-order layer indices.
+    let pack = KVPack {
+        id: 0,
+        owner: TEST_PACK_OWNER_ONE,
+        retrieval_key: broad_key,
+        layers: vec![
+            KVLayerPayload {
+                layer_idx: OUT_OF_ORDER_LAYER_A,
+                data: vec![OUT_OF_ORDER_LAYER_A as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+            },
+            KVLayerPayload {
+                layer_idx: OUT_OF_ORDER_LAYER_B,
+                data: vec![OUT_OF_ORDER_LAYER_B as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+            },
+            KVLayerPayload {
+                layer_idx: OUT_OF_ORDER_LAYER_C,
+                data: vec![OUT_OF_ORDER_LAYER_C as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+            },
+            KVLayerPayload {
+                layer_idx: OUT_OF_ORDER_LAYER_D,
+                data: vec![OUT_OF_ORDER_LAYER_D as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+            },
+        ],
+        salience: TEST_PACK_SALIENCE,
+    };
+
+    engine.mem_write_pack(&pack).unwrap();
+
+    let results =
+        engine.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].pack.layers.len(), OUT_OF_ORDER_LAYER_COUNT);
+
+    // Layers must be sorted by layer_idx regardless of write order.
+    assert!(
+        results[0].pack.layers.windows(2).all(|pair| pair[0].layer_idx < pair[1].layer_idx),
+        "Layers must be sorted by layer_idx. Got: {:?}",
+        results[0].pack.layers.iter().map(|l| l.layer_idx).collect::<Vec<_>>()
+    );
+
+    // Verify exact order: 0, 1, 3, 7.
+    let layer_indices: Vec<u16> = results[0].pack.layers.iter().map(|l| l.layer_idx).collect();
+    assert_eq!(
+        layer_indices,
+        vec![
+            OUT_OF_ORDER_LAYER_B,
+            OUT_OF_ORDER_LAYER_D,
+            OUT_OF_ORDER_LAYER_A,
+            OUT_OF_ORDER_LAYER_C
+        ]
+    );
+}
+
+/// ATDD 36: Governance updates once per returned pack, not once per layer or candidate.
+#[test]
+fn test_pack_materialization_updates_governance_once_per_returned_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    let pack = KVPack {
+        id: 0,
+        owner: TEST_PACK_OWNER_ONE,
+        retrieval_key: broad_key,
+        layers: (0..GOVERNANCE_PACK_LAYER_COUNT as u16)
+            .map(|i| KVLayerPayload {
+                layer_idx: i,
+                data: vec![i as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+            })
+            .collect(),
+        salience: GOVERNANCE_SALIENCE,
+    };
+
+    let pack_id = engine.mem_write_pack(&pack).unwrap();
+
+    // Initial importance: salience + write boost = 50 + 5 = 55.
+    let importance_before_read = engine.pack_importance(pack_id).unwrap();
+    let expected_initial = GOVERNANCE_SALIENCE + GOVERNANCE_WRITE_BOOST;
+    assert!(
+        (importance_before_read - expected_initial).abs() < 1.0,
+        "Initial importance {importance_before_read} should be ≈{expected_initial}"
+    );
+
+    // Read the pack once — should trigger exactly one on_access (+3).
+    let _results =
+        engine.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
+
+    let importance_after_read = engine.pack_importance(pack_id).unwrap();
+    let expected_after_one_read = expected_initial + GOVERNANCE_ACCESS_BOOST_PER_READ;
+    assert!(
+        (importance_after_read - expected_after_one_read).abs() < 1.0,
+        "After one read, importance {importance_after_read} should be ≈{expected_after_one_read} \
+         (one on_access, not {} for {} layers)",
+        GOVERNANCE_ACCESS_BOOST_PER_READ * GOVERNANCE_PACK_LAYER_COUNT as f32,
+        GOVERNANCE_PACK_LAYER_COUNT
+    );
+}
+
 /// ATDD 34: Pack governance — importance decays across the whole pack.
 #[test]
 fn test_pack_governance() {
