@@ -898,6 +898,58 @@ fn test_engine_reopen_preserves_top5avg_behavior() {
     );
 }
 
+#[test]
+fn test_engine_encoded_query_uses_per_token_before_fixed_dim_fallbacks() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, _broad_key, _spike_key) = top5_broad_match_fixture();
+    write_top5_fixture(&mut engine);
+
+    // Specification: the encoded query must be scored as raw tokens by
+    // PerTokenRetriever(Top5Avg) before fixed-dim SLB/brute-force candidates
+    // can decide the result.
+    let results = engine.mem_read(&query, 1, Some(1)).unwrap();
+
+    assert_eq!(results[0].cell.id, 0);
+}
+
+#[test]
+fn test_engine_vamana_threshold_preserves_encoded_ranking() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open_with_vamana_threshold(dir.path(), 1).unwrap();
+    let (query, broad_key, spike_key) = top5_broad_match_fixture();
+
+    engine.mem_write(1, 0, &broad_key, vec![0.0; 8], 50.0, None).unwrap();
+    assert!(engine.has_vamana(), "first write should activate Vamana at threshold 1");
+    engine.mem_write(1, 0, &spike_key, vec![0.0; 8], 50.0, None).unwrap();
+
+    let results = engine.mem_read(&query, 2, Some(1)).unwrap();
+
+    assert_eq!(
+        results[0].cell.id, 0,
+        "Vamana activation must not let fixed-dim pooled scoring override Top5Avg"
+    );
+}
+
+#[test]
+fn test_engine_reopen_preserves_encoded_ranking_after_adapter_rebuild() {
+    let dir = tempfile::tempdir().unwrap();
+    let (query, _broad_key, _spike_key) = top5_broad_match_fixture();
+
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        write_top5_fixture(&mut engine);
+    }
+
+    let mut reopened = Engine::open(dir.path()).unwrap();
+    let results = reopened.mem_read(&query, 2, Some(1)).unwrap();
+
+    assert_eq!(
+        results[0].cell.id, 0,
+        "Adapter rebuild from persisted cells must preserve encoded ranking"
+    );
+}
+
 // -- Phase 29: KV Pack ATDD ──────────────────────────────────────────────────
 
 /// ATDD 30: Write a KV Pack, all layers stored atomically.
@@ -1076,6 +1128,83 @@ fn test_mem_read_pack_deduplicates_layer_cells_by_pack() {
 
     assert_eq!(results.len(), 1, "One multi-layer pack should appear once, not once per layer");
     assert_eq!(results[0].pack.layers.len(), 4);
+}
+
+#[test]
+fn test_mem_read_pack_preserves_pack_deduplication_after_adapter_rebuild() {
+    let dir = tempfile::tempdir().unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        engine.mem_write_pack(&test_pack(&[30.0, 31.0, 32.0, 33.0], broad_key)).unwrap();
+    }
+
+    let mut reopened = Engine::open(dir.path()).unwrap();
+    let results = reopened.mem_read_pack(&query, 5, Some(1)).unwrap();
+
+    assert_eq!(results.len(), 1, "Rebuilt pack index should still deduplicate by pack");
+    assert_eq!(results[0].pack.layers.len(), 4);
+}
+
+fn recall_at(rankings: &[Vec<u64>], expected: &[u64], k: usize) -> f32 {
+    let hits = rankings
+        .iter()
+        .zip(expected)
+        .filter(|(ranking, expected_id)| ranking.iter().take(k).any(|id| id == *expected_id))
+        .count();
+    hits as f32 / expected.len() as f32
+}
+
+fn worst_top1_concentration(rankings: &[Vec<u64>]) -> usize {
+    let mut counts = std::collections::HashMap::new();
+    for ranking in rankings {
+        if let Some(top1) = ranking.first() {
+            *counts.entry(*top1).or_insert(0usize) += 1;
+        }
+    }
+    counts.values().copied().max().unwrap_or(0)
+}
+
+fn synthetic_target_ids(cell_count: usize, query_count: usize) -> Vec<u64> {
+    (0..query_count).map(|idx| ((idx * 7 + 3) % cell_count) as u64).collect()
+}
+
+fn has_vamana_regression(before: &[Vec<u64>], after: &[Vec<u64>], expected: &[u64]) -> bool {
+    recall_at(after, expected, 5) < recall_at(before, expected, 5)
+}
+
+#[test]
+fn test_rust_retrieval_metrics_match_known_rankings() {
+    let rankings = vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]];
+    let expected = vec![1, 6, 10];
+
+    assert!((recall_at(&rankings, &expected, 1) - 1.0 / 3.0).abs() < f32::EPSILON);
+    assert!((recall_at(&rankings, &expected, 3) - 2.0 / 3.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_top1_concentration_flags_gravity_well() {
+    let rankings = vec![vec![87, 1], vec![87, 2], vec![87, 3], vec![6, 4]];
+
+    assert_eq!(worst_top1_concentration(&rankings), 3);
+}
+
+#[test]
+fn test_synthetic_corpus_builder_assigns_one_target_per_query() {
+    let targets = synthetic_target_ids(100, 30);
+
+    assert_eq!(targets.len(), 30);
+    assert!(targets.iter().all(|id| *id < 100));
+}
+
+#[test]
+fn test_correctness_report_detects_vamana_regression() {
+    let expected = vec![1, 2];
+    let before = vec![vec![1, 9, 8], vec![2, 7, 6]];
+    let after = vec![vec![9, 8, 1], vec![7, 6, 5]];
+
+    assert!(has_vamana_regression(&before, &after, &expected));
 }
 
 /// ATDD 34: Pack governance — importance decays across the whole pack.

@@ -74,6 +74,8 @@
 
 pub mod attention;
 pub mod int8_quant;
+#[doc(hidden)]
+pub mod key_view;
 pub mod per_token;
 pub mod pipeline;
 pub mod retriever;

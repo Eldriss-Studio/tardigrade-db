@@ -29,6 +29,7 @@ use tdb_core::{CellId, OwnerId};
 
 use crate::attention::RetrievalResult;
 use crate::int8_quant::{Int8Quantizer, QuantizedInt8Vec};
+use crate::key_view::RetrievalKeyView;
 use crate::retriever::Retriever;
 use crate::simd_distance::DotProduct;
 
@@ -197,8 +198,11 @@ impl Retriever for PerTokenRetriever {
         }
 
         // Decode query: could be per-token encoded or a single vector.
+        let Ok(query_view) = RetrievalKeyView::parse(query_key) else {
+            return Vec::new();
+        };
         let query_tokens: Vec<QuantizedInt8Vec> =
-            if let Some((n, d, data)) = decode_per_token_keys(query_key) {
+            if let Some((n, d, data)) = query_view.raw_tokens() {
                 // Per-token encoded query: quantize each token.
                 (0..n).map(|i| Int8Quantizer::quantize(&data[i * d..(i + 1) * d])).collect()
             } else {
@@ -259,7 +263,10 @@ impl Retriever for PerTokenRetriever {
 
     fn insert(&mut self, cell_id: CellId, owner: OwnerId, key: &[f32]) {
         // Try to decode as per-token encoded.
-        if let Some((n, d, data)) = decode_per_token_keys(key) {
+        let Ok(view) = RetrievalKeyView::parse(key) else {
+            return;
+        };
+        if let Some((n, d, data)) = view.raw_tokens() {
             if self.dim.is_none() {
                 self.dim = Some(d);
             }

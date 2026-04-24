@@ -28,7 +28,7 @@ use tdb_index::trace::{EdgeType, TraceGraph};
 use tdb_index::vamana::VamanaIndex;
 use tdb_index::wal::{Wal, WalEntry};
 use tdb_retrieval::attention::RetrievalResult;
-use tdb_retrieval::per_token::decode_per_token_keys;
+use tdb_retrieval::key_view::{fixed_dim_key, is_encoded_per_token_key};
 use tdb_retrieval::pipeline::RetrieverPipeline;
 use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::slb::SemanticLookasideBuffer;
@@ -43,21 +43,7 @@ const DEFAULT_SLB_CAPACITY: usize = 4096;
 /// If the key is per-token encoded (has header), averages all token vectors.
 /// If it's already a plain vector, returns it unchanged.
 fn mean_pool_key(key: &[f32]) -> Vec<f32> {
-    if let Some((n, d, data)) = decode_per_token_keys(key) {
-        let mut mean = vec![0.0f32; d];
-        for i in 0..n {
-            for j in 0..d {
-                mean[j] += data[i * d + j];
-            }
-        }
-        let inv_n = 1.0 / n as f32;
-        for v in &mut mean {
-            *v *= inv_n;
-        }
-        mean
-    } else {
-        key.to_vec()
-    }
+    fixed_dim_key(key).unwrap_or_default()
 }
 /// Default Vamana max degree.
 const DEFAULT_VAMANA_MAX_DEGREE: usize = 16;
@@ -480,7 +466,7 @@ impl Engine {
             return Ok(Vec::new());
         }
 
-        let is_per_token_query = decode_per_token_keys(query_key).is_some();
+        let is_per_token_query = is_encoded_per_token_key(query_key);
 
         // Phase 1: SLB hot cache (uses mean-pooled query for fixed-dim INT8 scoring).
         let slb_query = mean_pool_key(query_key);
@@ -733,7 +719,7 @@ impl Engine {
         owner_filter: Option<OwnerId>,
     ) -> Result<Vec<PackReadResult>> {
         // Per-token queries need pipeline first (same logic as mem_read).
-        let is_per_token = decode_per_token_keys(query_key).is_some();
+        let is_per_token = is_encoded_per_token_key(query_key);
         let slb_query = mean_pool_key(query_key);
         let mut candidates = Vec::new();
 
