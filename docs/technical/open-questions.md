@@ -128,3 +128,71 @@ Models fine-tuned from the same base (e.g., Llama 3 8B Instruct vs Llama 3 8B Ba
 1. Store from Llama 3 8B Base, inject into Llama 3 8B Instruct — same architecture, different fine-tune
 2. Store from Llama 3 8B, inject into Llama 3 70B — same family, different size
 3. Measure attention score distribution for injected cross-model KV
+
+---
+
+## Q6: Distribution and Production Deployment Model
+
+**Context:** TardigradeDB's engine stores, retrieves, and governs KV tensors. But capturing and injecting those tensors requires a model inference framework (`model.forward()`). This creates a deployment dependency that doesn't exist for traditional databases.
+
+### The Problem
+
+TardigradeDB is not a standalone database. It's a **memory subsystem for inference frameworks**. The right comparison isn't "Postgres vs TardigradeDB" — it's "LMCache vs TardigradeDB" or "vLLM's built-in prefix caching vs TardigradeDB."
+
+### What Works Today
+
+**HuggingFace Transformers (local/research):**
+```python
+pip install tardigrade-db
+from tardigrade_db import Engine
+from tardigrade_hooks import KnowledgePackStore
+
+engine = Engine("/data/agent-memory")
+kps = KnowledgePackStore(engine, model, tokenizer, owner=agent_id)
+kps.store("User prefers morning meetings before 10am")
+response, tokens, had_memory = kps.generate("When should we schedule?")
+```
+
+This works today. It's what experiments use. But HuggingFace Transformers is a research tool — nobody runs `model.generate()` in production at scale.
+
+### What Doesn't Work
+
+| Platform | Status | Why |
+|----------|--------|-----|
+| vLLM | Not supported | Manages its own paged KV cache. Can't inject DynamicCache into vLLM's generation loop. Needs a plugin. |
+| SGLang | Not supported | Same issue as vLLM. |
+| Ollama / LM Studio | Not supported | Don't expose KV cache internals. |
+| Cloud APIs (OpenAI, Anthropic) | Fundamentally incompatible | No access to KV cache at all. |
+
+### The Path to Production
+
+The comparable path is what LMCache did:
+1. Built the core KV cache engine
+2. Integrated it as a vLLM plugin (`pip install lmcache[vllm]`)
+3. Users configure it in their vLLM launch config
+
+TardigradeDB needs a **vLLM or SGLang integration** — a plugin that hooks into their KV cache manager to store/retrieve/inject. Without it, the only users are researchers running HuggingFace directly.
+
+### Distribution Options
+
+| Option | Model | Comparable to | Fits TardigradeDB? |
+|--------|-------|---------------|---------------------|
+| Embedded library | `pip install tardigrade-db` | SQLite, RocksDB, FAISS | Yes — current model |
+| Inference plugin | `pip install tardigrade-db[vllm]` | LMCache | Yes — production target |
+| Server process | Daemon with gRPC/REST API | Redis, Postgres | No — large tensor payloads make network hops wasteful |
+| Cloud service | Managed SaaS | Pinecone, Weaviate | No — needs access to model internals |
+
+### Recommended Strategy
+
+1. **Now:** Embedded library via `pip install tardigrade-db` (maturin wheel). Users bring their own HuggingFace model. KnowledgePackStore wraps the integration.
+
+2. **Next:** vLLM plugin. Hook into vLLM's `CacheEngine` to intercept KV cache writes (store to TardigradeDB) and reads (inject from TardigradeDB). This is where the product becomes usable in production.
+
+3. **Later:** SGLang adapter, direct Rust integration for custom inference stacks.
+
+### What Would Resolve This
+
+1. Ship PyPI package (#11) — basic `pip install` story
+2. Prototype vLLM plugin — can TardigradeDB's pack API interface with vLLM's paged attention?
+3. Study LMCache's vLLM integration code — they solved the same problem
+4. Determine if CacheBlend (which IS part of LMCache) could be used as the integration point
