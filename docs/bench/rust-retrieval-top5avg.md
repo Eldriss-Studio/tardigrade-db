@@ -98,6 +98,28 @@ Those candidates are reranked with the existing `Top5Avg` scorer.
 | `Engine::mem_read_pack` encoded path | 1,000 packs | pack dedup preserved | ~3.71 ms |
 | `Engine::mem_read_pack` encoded path | 10,000 packs | pack dedup preserved | ~8.84 ms |
 
+### Pack Reverse Index
+
+The next pack-read hardening step replaced the linear `cell_id -> pack_id`
+lookup with a private `PackDirectory` value object. The directory owns both
+`pack_id -> cell_ids` and `cell_id -> pack_id`, and it is rebuilt from persisted
+cells on `Engine::open`.
+
+Measured with:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo bench -p tdb-engine "mem_read_pack"
+```
+
+| Path | Size | Layers per pack | Correctness label | Latency |
+| --- | ---: | ---: | --- | ---: |
+| `Engine::mem_read_pack` encoded path | 100 packs | 1 | target true, dedup true | ~371 us |
+| `Engine::mem_read_pack` encoded path | 100 packs | 4 | target true, dedup true | ~1.00 ms |
+| `Engine::mem_read_pack` encoded path | 1,000 packs | 1 | target true, dedup true | ~3.47 ms |
+| `Engine::mem_read_pack` encoded path | 1,000 packs | 4 | target true, dedup true | ~4.81 ms |
+| `Engine::mem_read_pack` encoded path | 10,000 packs | 1 | target true, dedup true | ~8.39 ms |
+| `Engine::mem_read_pack` encoded path | 10,000 packs | 4 | target true, dedup true | ~17.06 ms |
+
 ## Validation
 
 The relevant Rust checks passed:
@@ -123,3 +145,9 @@ The retrieval-key contract is centralized and locked with ATDD. Correctness is c
 Candidate reduction is now the default encoded per-token path above 512 cells. It is still latent-only: no RAG, BM25, lexical index, or public API change. The 10K path is no longer dominated by scoring every stored token: `PerTokenRetriever` dropped from ~15.95 ms to ~1.75 ms, `Engine::mem_read` dropped from ~16.22 ms to ~3.90 ms, and `mem_read_pack` dropped from ~32.7 ms to ~8.84 ms.
 
 The remaining problem is pack overhead and mid-size engine overhead. Criterion showed the 1K `mem_read_pack` benchmark regressed while 10K improved sharply, which means candidate reduction solved the large linear scan but pack reconstruction still needs its own profiling pass.
+
+The reverse index fixed an obvious clean-code issue and gave a modest latency
+improvement for 1-layer packs: 1K improved from ~3.71 ms to ~3.47 ms, and 10K
+improved from ~8.84 ms to ~8.39 ms. It did not eliminate the pack-read overhead.
+The 4-layer benchmark shows that pack reconstruction and duplicate pack-cell
+retrieval are now the likely bottlenecks.

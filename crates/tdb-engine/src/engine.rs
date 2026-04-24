@@ -35,6 +35,8 @@ use tdb_retrieval::slb::SemanticLookasideBuffer;
 use tdb_storage::block_pool::BlockPool;
 use tdb_storage::synaptic_store::SynapticStore;
 
+use crate::pack_directory::PackDirectory;
+
 /// Default SLB capacity.
 const DEFAULT_SLB_CAPACITY: usize = 4096;
 
@@ -145,8 +147,8 @@ pub struct Engine {
     next_id: CellId,
     dir: PathBuf,
     vamana_threshold: usize,
-    /// Maps `PackId` to `Vec<CellId>` (retrieval key cell + layer payload cells).
-    pack_index: HashMap<PackId, Vec<CellId>>,
+    /// Private pack membership repository with forward and reverse lookup.
+    pack_directory: PackDirectory,
     next_pack_id: PackId,
     /// Key dimension (detected from first write, used for SLB/Vamana init).
     key_dim: Option<usize>,
@@ -247,25 +249,19 @@ impl Engine {
             slb.insert(cell_id, owner, &slb_key);
         }
 
-        // Rebuild pack index from persisted cells.
+        // Rebuild pack directory from persisted cells.
         // Pack cells store pack_id in token_span.0. PACK_RETRIEVAL_LAYER marks the key cell.
-        let mut pack_index: HashMap<PackId, Vec<CellId>> = HashMap::new();
-        let mut max_pack_id: PackId = 0;
+        let mut pack_cells = Vec::new();
         for cell_id in &cell_ids {
             if let Ok(cell) = pool.get(*cell_id) {
                 let stored_pack_id = cell.token_span.0;
                 if stored_pack_id > 0 || cell.layer == PACK_RETRIEVAL_LAYER {
-                    pack_index.entry(stored_pack_id).or_default().push(cell.id);
-                    if stored_pack_id >= max_pack_id {
-                        max_pack_id = stored_pack_id + 1;
-                    }
+                    pack_cells.push((stored_pack_id, cell.id));
                 }
             }
         }
-        // Sort each pack's cells: retrieval key first (PACK_RETRIEVAL_LAYER), then by layer.
-        for cells in pack_index.values_mut() {
-            cells.sort_unstable();
-        }
+        let pack_directory = PackDirectory::from_cells(pack_cells);
+        let next_pack_id = pack_directory.next_pack_id();
 
         Ok(Self {
             pool,
@@ -279,8 +275,8 @@ impl Engine {
             next_id,
             dir: dir.to_path_buf(),
             vamana_threshold,
-            pack_index,
-            next_pack_id: max_pack_id.max(1), // pack IDs start at 1 (0 = not a pack)
+            pack_directory,
+            next_pack_id,
             key_dim: if cell_ids.is_empty() { None } else { key_dim },
         })
     }
@@ -704,7 +700,7 @@ impl Engine {
             .insert(retrieval_cell_id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
 
         // Pack index.
-        self.pack_index.insert(pack_id, cell_ids);
+        self.pack_directory.insert_pack(pack_id, cell_ids);
 
         Ok(pack_id)
     }
@@ -761,11 +757,10 @@ impl Engine {
         let mut seen_packs: std::collections::HashSet<PackId> = std::collections::HashSet::new();
 
         for rr in candidates {
-            // Find the pack that contains this cell (any cell in the pack).
-            let pack_entry =
-                self.pack_index.iter().find(|(_, cell_ids)| cell_ids.contains(&rr.cell_id));
-
-            let Some((&found_pack_id, cell_ids)) = pack_entry else {
+            let Some(found_pack_id) = self.pack_directory.pack_for_cell(rr.cell_id) else {
+                continue;
+            };
+            let Some(cell_ids) = self.pack_directory.cell_ids(found_pack_id) else {
                 continue;
             };
 
@@ -831,12 +826,12 @@ impl Engine {
 
     /// Number of KV Packs stored.
     pub fn pack_count(&self) -> usize {
-        self.pack_index.len()
+        self.pack_directory.len()
     }
 
     /// Get the importance score of a pack.
     pub fn pack_importance(&self, pack_id: PackId) -> Option<f32> {
-        let cell_ids = self.pack_index.get(&pack_id)?;
+        let cell_ids = self.pack_directory.cell_ids(pack_id)?;
         let retrieval_cell_id = *cell_ids.first()?;
         self.governance.get(&retrieval_cell_id).map(|g| g.scorer.importance())
     }

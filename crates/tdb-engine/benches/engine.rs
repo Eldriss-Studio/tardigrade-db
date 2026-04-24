@@ -19,6 +19,8 @@ const DEFAULT_LAYER: u16 = 0;
 const DEFAULT_SALIENCE: f32 = 50.0;
 const PACK_SALIENCE: f32 = 80.0;
 const BENCH_CELL_COUNTS: [usize; 3] = [100, 1_000, 10_000];
+const PACK_LAYER_COUNTS: [usize; 2] = [1, 4];
+const PACK_TARGET_DIVISOR: usize = 2;
 const CANDIDATE_REDUCTION_THRESHOLD: usize = 512;
 const MIN_CANDIDATES: usize = 256;
 const CANDIDATE_MULTIPLIER: usize = 64;
@@ -264,31 +266,73 @@ fn bench_engine_read_pack_encoded_per_token(c: &mut Criterion) {
     // retrieval key shape matches the validated hidden-state Top5Avg path.
     let mut group = c.benchmark_group("Engine mem_read_pack — encoded per-token Top5Avg path");
     for pack_count in BENCH_CELL_COUNTS {
-        let dir = tempfile::tempdir().unwrap();
-        let mut engine = Engine::open(dir.path()).unwrap();
-        for pack_id in 0..pack_count {
-            let pack = KVPack {
-                id: 0,
-                owner: OWNER_ONE,
-                retrieval_key: encoded_cell(FIXTURE_DIM, pack_id, FIXTURE_TOKENS_PER_CELL),
-                layers: vec![KVLayerPayload {
-                    layer_idx: DEFAULT_LAYER,
-                    data: vec![pack_id as f32; FIXTURE_DIM],
-                }],
-                salience: PACK_SALIENCE,
-            };
-            engine.mem_write_pack(&pack).unwrap();
-        }
-        let query = encoded_cell(FIXTURE_DIM, pack_count / 2, FIXTURE_TOKENS_PER_CELL);
+        for layer_count in PACK_LAYER_COUNTS {
+            let dir = tempfile::tempdir().unwrap();
+            let mut engine = Engine::open(dir.path()).unwrap();
+            for pack_id in 0..pack_count {
+                engine.mem_write_pack(&bench_pack(pack_id, layer_count)).unwrap();
+            }
+            let target_pack = target_pack_id(pack_count);
+            let query = encoded_cell(FIXTURE_DIM, target_pack, FIXTURE_TOKENS_PER_CELL);
+            let report = pack_read_correctness_report(&mut engine, &query, target_pack);
 
-        group.bench_function(BenchmarkId::new("packs", pack_count), |bench| {
-            bench.iter(|| {
-                let _ =
-                    engine.mem_read_pack(black_box(&query), BENCH_TOP_K, Some(OWNER_ONE)).unwrap();
+            let bench_id = BenchmarkId::new(
+                format!(
+                    "target-{}-dedup-{}-layers-{}",
+                    report.target_top1, report.dedup_ok, layer_count
+                ),
+                pack_count,
+            );
+            group.bench_function(bench_id, |bench| {
+                bench.iter(|| {
+                    let _ = engine
+                        .mem_read_pack(black_box(&query), BENCH_TOP_K, Some(OWNER_ONE))
+                        .unwrap();
+                });
             });
-        });
+        }
     }
     group.finish();
+}
+
+struct PackReadCorrectnessReport {
+    target_top1: bool,
+    dedup_ok: bool,
+}
+
+fn bench_pack(pack_id: usize, layer_count: usize) -> KVPack {
+    KVPack {
+        id: 0,
+        owner: OWNER_ONE,
+        retrieval_key: encoded_cell(FIXTURE_DIM, pack_id, FIXTURE_TOKENS_PER_CELL),
+        layers: (0..layer_count)
+            .map(|layer_idx| KVLayerPayload {
+                layer_idx: DEFAULT_LAYER + layer_idx as u16,
+                data: vec![pack_id as f32; FIXTURE_DIM],
+            })
+            .collect(),
+        salience: PACK_SALIENCE,
+    }
+}
+
+fn target_pack_id(pack_count: usize) -> usize {
+    pack_count / PACK_TARGET_DIVISOR
+}
+
+fn pack_read_correctness_report(
+    engine: &mut Engine,
+    query: &[f32],
+    target_pack: usize,
+) -> PackReadCorrectnessReport {
+    let results = engine.mem_read_pack(query, BENCH_TOP_K, Some(OWNER_ONE)).unwrap();
+    let pack_ids: Vec<usize> =
+        results.iter().map(|result| result.pack.layers[0].data[0].round() as usize).collect();
+    let unique_pack_ids: std::collections::HashSet<usize> = pack_ids.iter().copied().collect();
+
+    PackReadCorrectnessReport {
+        target_top1: pack_ids.first().is_some_and(|pack_id| *pack_id == target_pack),
+        dedup_ok: unique_pack_ids.len() == pack_ids.len(),
+    }
 }
 
 criterion_group!(

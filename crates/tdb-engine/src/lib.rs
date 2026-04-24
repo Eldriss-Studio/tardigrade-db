@@ -170,4 +170,5 @@
 
 pub mod batch_cache;
 pub mod engine;
+pub(crate) mod pack_directory;
 pub mod scheduler;

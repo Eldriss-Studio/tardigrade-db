@@ -1198,20 +1198,33 @@ fn test_multiple_packs_retrieval_ranking() {
     assert_eq!(results[0].pack.layers[0].data[0] as i32, 1, "Cooking pack should rank first");
 }
 
+const TEST_PACK_OWNER_ONE: u64 = 1;
+const TEST_PACK_OWNER_TWO: u64 = 2;
+const TEST_PACK_LAYER_PAYLOAD_DIM: usize = 16;
+const TEST_PACK_SALIENCE: f32 = 80.0;
+const OWNER_ONE_LAYER_VALUE_CODE: i32 = 110;
+const OWNER_TWO_LAYER_VALUE_CODE: i32 = 220;
+const OWNER_ONE_LAYER_VALUE: f32 = OWNER_ONE_LAYER_VALUE_CODE as f32;
+const OWNER_TWO_LAYER_VALUE: f32 = OWNER_TWO_LAYER_VALUE_CODE as f32;
+
 fn test_pack(layer_values: &[f32], retrieval_key: Vec<f32>) -> KVPack {
+    test_pack_for_owner(TEST_PACK_OWNER_ONE, layer_values, retrieval_key)
+}
+
+fn test_pack_for_owner(owner: u64, layer_values: &[f32], retrieval_key: Vec<f32>) -> KVPack {
     KVPack {
         id: 0,
-        owner: 1,
+        owner,
         retrieval_key,
         layers: layer_values
             .iter()
             .enumerate()
             .map(|(layer_idx, value)| KVLayerPayload {
                 layer_idx: layer_idx as u16,
-                data: vec![*value; 16],
+                data: vec![*value; TEST_PACK_LAYER_PAYLOAD_DIM],
             })
             .collect(),
-        salience: 80.0,
+        salience: TEST_PACK_SALIENCE,
     }
 }
 
@@ -1306,6 +1319,103 @@ fn test_mem_read_pack_candidate_reduction_preserves_pack_deduplication() {
     let pack_ids: std::collections::HashSet<usize> =
         results.iter().map(|result| result.pack.layers[0].data[0].round() as usize).collect();
     assert_eq!(pack_ids.len(), results.len(), "candidate reduction must still deduplicate packs");
+}
+
+#[test]
+fn test_engine_reopen_rebuilds_pack_reverse_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        engine.mem_write_pack(&test_pack(&[30.0, 31.0, 32.0, 33.0], broad_key)).unwrap();
+    }
+
+    let mut reopened = Engine::open(dir.path()).unwrap();
+    let results =
+        reopened.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
+
+    assert_eq!(results.len(), 1, "reverse pack directory should rebuild after reopen");
+    assert_eq!(results[0].pack.layers.len(), 4);
+}
+
+#[test]
+fn test_mem_read_pack_reverse_lookup_preserves_ranking() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    for pack_id in 0..CANDIDATE_FIXTURE_CELL_COUNT {
+        engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: CANDIDATE_FIXTURE_OWNER,
+                retrieval_key: normalized_encoded_cell(
+                    CANDIDATE_FIXTURE_DIM,
+                    pack_id,
+                    CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+                ),
+                layers: vec![KVLayerPayload {
+                    layer_idx: CANDIDATE_FIXTURE_LAYER,
+                    data: vec![pack_id as f32; CANDIDATE_FIXTURE_DIM],
+                }],
+                salience: CANDIDATE_FIXTURE_PACK_SALIENCE,
+            })
+            .unwrap();
+    }
+
+    let query = normalized_encoded_cell(
+        CANDIDATE_FIXTURE_DIM,
+        CANDIDATE_FIXTURE_TARGET_CELL,
+        CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+    );
+    let results = engine
+        .mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(CANDIDATE_FIXTURE_OWNER))
+        .unwrap();
+
+    assert_eq!(results[0].pack.layers[0].data[0].round() as usize, CANDIDATE_FIXTURE_TARGET_CELL);
+}
+
+#[test]
+fn test_mem_read_pack_reverse_lookup_preserves_deduplication() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    engine.mem_write_pack(&test_pack(&[30.0, 31.0, 32.0, 33.0], broad_key)).unwrap();
+
+    let results =
+        engine.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
+
+    assert_eq!(results.len(), 1, "reverse lookup must preserve pack-level deduplication");
+    assert_eq!(results[0].pack.layers.len(), 4);
+}
+
+#[test]
+fn test_mem_read_pack_reverse_lookup_respects_owner_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    engine
+        .mem_write_pack(&test_pack_for_owner(
+            TEST_PACK_OWNER_ONE,
+            &[OWNER_ONE_LAYER_VALUE],
+            broad_key.clone(),
+        ))
+        .unwrap();
+    engine
+        .mem_write_pack(&test_pack_for_owner(
+            TEST_PACK_OWNER_TWO,
+            &[OWNER_TWO_LAYER_VALUE],
+            broad_key,
+        ))
+        .unwrap();
+
+    let results =
+        engine.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_TWO)).unwrap();
+
+    assert!(results.iter().all(|result| result.pack.owner == TEST_PACK_OWNER_TWO));
+    assert_eq!(results[0].pack.layers[0].data[0].round() as i32, OWNER_TWO_LAYER_VALUE_CODE);
 }
 
 fn recall_at(rankings: &[Vec<u64>], expected: &[u64], k: usize) -> f32 {
