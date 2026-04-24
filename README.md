@@ -6,7 +6,7 @@
 
 TardigradeDB is not a traditional database with tables and indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-> **Research status (April 23, 2026): experimental prototype**
+> **Research status (April 24, 2026): experimental prototype**
 >
 > TardigradeDB is a research experiment, not a production-ready database.
 > Current results are from controlled demos, experiments, and benchmarks.
@@ -33,13 +33,14 @@ The name *TardigradeDB* is a metaphor, and these are the development pillars beh
 
 At runtime, TardigradeDB acts like a memory engine for agents:
 
-1. It stores model KV activations durably (`mem_write`) in quantized form.
-2. It retrieves relevant past activations (`mem_read`) using latent-space scoring.
-3. It tracks causal links and importance so memory can evolve over time.
-4. It exposes the engine through Rust APIs and Python bindings.
-5. It ships a comparable benchmark harness (`tdb_bench`) for transparent system-to-system evaluation.
+1. It stores model KV activations durably (`mem_write`, `mem_write_pack`) in quantized form.
+2. It retrieves relevant past activations (`mem_read`, `mem_read_pack`) using per-token latent-space scoring with Top5Avg aggregation.
+3. It injects retrieved KV tensors directly into the model's attention cache — producing **byte-identical output** to having the text in the prompt, at **46% fewer prompt tokens**.
+4. It tracks causal links and importance so memory can evolve over time.
+5. It exposes the engine through Rust APIs and Python bindings (`KnowledgePackStore` for end-to-end injection).
+6. It ships a comparable benchmark harness (`tdb_bench`) for transparent system-to-system evaluation.
 
-If you only need one mental model: **capture memory state, persist it, and retrieve it later with attention-compatible relevance.**
+If you only need one mental model: **capture memory state, persist it, retrieve it later with attention-compatible relevance, and inject it directly into the model's attention cache.**
 
 ## Why TardigradeDB?
 
@@ -55,15 +56,17 @@ Semantic search (Mem0, Letta, Pinecone):
   query → same embedding model → vector → cosine similarity
   The embedding model is a translator between text and numbers.
   The LLM that is actually thinking never touches this process.
+  Retrieved text → re-tokenize → paste into prompt → consume context window
 
 TardigradeDB:
-  LLM is already thinking → K tensors exist as a byproduct → store
-  LLM thinks about query → K tensors exist as a byproduct → dot product
+  LLM is already thinking → hidden state tensors exist as a byproduct → store
+  LLM thinks about query → hidden state tensors → per-token Top5Avg scoring
+  Retrieved KV cache → inject directly into attention → zero prompt tokens consumed
   No translator. No separate model. The comparison happens in the same
   mathematical space the model uses to think. The search IS attention.
 ```
 
-Semantic search outsources retrieval to a separate system. TardigradeDB does retrieval inside the model's own attention mechanism — the model searches its own memories using the same math it uses to relate tokens during inference.
+Semantic search outsources retrieval to a separate system. TardigradeDB does retrieval inside the model's own representation space — the model searches its own memories using its internal activations. When a memory is found, it's injected as pre-computed KV tensors directly into the attention cache, consuming zero prompt tokens.
 
 ### Quick comparison
 
@@ -96,64 +99,27 @@ A raw KV cache is append-and-replay state for one running model session. Compare
 In short: TardigradeDB stores KV tensors, but is aiming to behave like a managed long-term memory kernel.
 These are architectural differentiators under active validation, not final production claims.
 
-### Real KV Cache Retrieval Result (April 23, 2026)
+### Retrieval: 100% Recall at 100 Memories (April 23, 2026)
 
-`experiments/sonia_real_kv_cache.py` compared storing hidden-state proxies vs storing actual KV cache key projections (`past_key_values`) on `Qwen/Qwen3-0.6B` across 16 diverse memories and 16 semantic queries.
+A series of experiments on Qwen3-0.6B tested different retrieval approaches. The progression from 31% to 100% recall revealed what works and what doesn't for latent-space retrieval:
 
-| What was stored | Mean-pool recall | Per-token recall | Unique top-1 memories |
-|-----------------|------------------|------------------|-----------------------|
-| Hidden states (proxy, wrong target) | 31.2% | 31.2% | not reported in this run |
-| Real KV cache (actual key projections) | 62.5% | 75.0% | 7 / 16 |
+| Method | Recall@5 (100 memories) | Notes |
+|--------|-------------------------|-------|
+| Hidden states mean-pool | 31% | Gravity well — one memory dominates |
+| K projections mean-pool | 63% | Better, but signal lost by averaging |
+| Q*K per-token max-sim | 40% | K vectors share common component |
+| Traditional RAG (e5-small-v2) | 100% | Embedding baseline |
+| **Hidden states + Top5Avg (engine pipeline)** | **100%** | **Through Q4, full pipeline** |
 
-Key outcomes from that run:
+What worked: storing **raw hidden states** per token (not K or Q projections) and scoring by **Top5Avg** — the mean of the top 5 highest dot products per cell. Hidden states contain all the information Q and K derive from, without the artifacts that make cross-sequence Q*K fail. Mean-pooling was the failure mode, not hidden states.
 
-- Switching from hidden states to real KV tensors doubled mean-pool recall (31.2% -> 62.5%).
-- Per-token recall more than doubled (31.2% -> 75.0%).
-- The top-1 "gravity well" collapsed: 7 different memories reached top-1 across 16 queries.
-- Remaining misses were limited to 4/16 queries in that setup (smoke-alarm cooking, doctor visit, first snow, Coco movie).
+The retrieval pipeline chains: **SLB (mean-pooled hot cache) → PerTokenRetriever (Top5Avg) → BruteForceRetriever (fallback)**.
 
-Primary takeaway: the retrieval architecture was not the core failure mode; storing the wrong representation was.
-
-### Per-Token Retrieval (Phase 22, April 23, 2026)
-
-The 75% ceiling was caused by mean-pooling queries: averaging all query tokens into one vector loses the distinguishing words. The `PerTokenRetriever` (based on FIER 2025 research) stores individual token K vectors and uses max-sim scoring — the best token-to-token match determines cell ranking.
-
-| Method | Recall@5 (synthetic benchmark) |
-|--------|-------------------------------|
-| Mean-pool (BruteForce) | 50% |
-| **Per-token (max-sim)** | **100%** |
-
-The per-token retriever is now wired into the engine pipeline and the Python KV hook emits per-token encoded keys.
-
-### Retrieval Evolution (What We Learned)
-
-A series of experiments revealed what works and what doesn't for latent-space retrieval:
-
-1. **Mean-pooling destroys signal.** Averaging all tokens into one vector collapses different memories into the same representation. This caused "gravity wells" where one memory dominated all queries regardless of content. Mean-pooled hidden states: 31% recall. Mean-pooled K projections: 62%.
-
-2. **Q*K projections don't work for cross-sequence retrieval.** K vectors share a massive common component across all sequences (position-0 dot product = 6281 for unrelated text). Q*K scoring (what attention does) improved things but still degraded to 40% at 100 memories.
-
-3. **Hidden states + per-token top-5 averaging = 100%.** Storing raw hidden states per token and scoring by the mean of the top 5 highest dot products achieves perfect recall at 100 memories — matching traditional embedding RAG. The hidden states contain all the information Q and K are derived from, without the artifacts that make Q*K fail cross-sequence.
-
-The retrieval pipeline now chains: **SLB (mean-pooled hot cache) → PerTokenRetriever (Top5Avg) → BruteForceRetriever (fallback)**.
-
-### 100-Memory Result (April 23, 2026)
-
-100 memories across 10 life domains, 30 queries (10 cross-domain, 20 within-domain):
-
-| Method | Recall@5 |
-|--------|----------|
-| Q*K per-token max-sim | 40% |
-| Traditional RAG (e5-small-v2) | 100% |
-| **Hidden states + Top5Avg (engine pipeline)** | **100%** |
-
-All 30 queries found at rank #1. No gravity well. 97ms average latency. Q4 quantization preserved the signal.
-
-Vague queries ("What have I been cooking?"): 87% latent vs 100% RAG (tested, 2 very generic queries missed).
+All 30 queries found at rank #1. No gravity well. 97ms average latency. Q4 quantization preserved the signal. Vague queries ("What have I been cooking?"): 87% latent vs 100% RAG.
 
 ### KV Injection: Byte-Identical to Text RAG (April 24, 2026)
 
-KV injection through the full TardigradeDB pipeline (Q4 quantized, persisted to disk, read back, reconstructed) produces **byte-identical output** to having the text in the prompt:
+Following the Knowledge Packs paper (arXiv 2604.03270), KV injection through the full TardigradeDB pipeline (Q4 quantized, persisted to disk, read back, reconstructed) produces **byte-identical output** to having the text in the prompt:
 
 | Path | Correct (10 novel facts) | Prompt Tokens |
 |------|--------------------------|---------------|
@@ -164,9 +130,22 @@ Same 2 misses on both paths. Identical responses character-for-character. **46% 
 
 Storage trade-off: 730 KB per memory (Q4 quantized KV cache) vs 65 bytes per memory (text). KV injection trades disk space for context window space — relevant when context windows are scarce or memories are numerous.
 
+Pipeline fidelity verified stage-by-stage: Q4 round-trip cosine similarity = 0.999 on KV tensors.
+
+### KV Pack API: Atomic Multi-Layer Storage (April 24, 2026)
+
+The Rust engine provides first-class `mem_write_pack` and `mem_read_pack` APIs. A KV Pack stores a complete multi-layer KV cache (e.g. 28 layers for Qwen3-0.6B) as a single atomic unit — one fsync, grouped retrieval, pack-level governance.
+
+The Python `KnowledgePackStore` wraps this API for end-to-end injection:
+1. Wrap fact in chat template → compute KV cache → `engine.mem_write_pack()` (single fsync)
+2. Compute query hidden states → `engine.mem_read_pack()` → reconstruct DynamicCache
+3. Clone cache → inject into `model.generate()` → byte-identical output
+
+This is the canonical path for using TardigradeDB with HuggingFace models.
+
 ### Why Python Exists in This Project
 
-The Rust kernel (storage, retrieval, governance, indexing — 131 tests) is a self-contained library. It does not need Python.
+The Rust kernel (storage, retrieval, governance, indexing — 142 tests) is a self-contained library. It does not need Python.
 
 Python exists for one reason: **to bridge TardigradeDB to model inference frameworks**. HuggingFace Transformers is the only practical way to access a model's KV cache (`past_key_values`) on local hardware. The Python layer (`tardigrade_hooks`) captures those tensors and feeds them to the Rust engine via PyO3 bindings.
 
@@ -217,12 +196,12 @@ Four-layer system treating memory as a managed OS resource:
 
 | Crate | Layer | Responsibility |
 |-------|-------|----------------|
-| `tdb-core` | — | Shared types, error definitions, memory cell & synaptic bank primitives |
+| `tdb-core` | — | Shared types: MemoryCell, KVPack, SynapticBank, Tier, error types |
 | `tdb-storage` | Storage | Quantized block pool, mmap arena, segment management |
-| `tdb-retrieval` | Retrieval | Latent-space attention, INT8 quantization, SLB, SIMD distance |
+| `tdb-retrieval` | Retrieval | Per-token retrieval (Top5Avg), SLB (INT8), SIMD distance, pipeline |
 | `tdb-index` | Organization | Vamana graph index, causal trace, write-ahead log |
 | `tdb-governance` | Governance | Importance scoring, maturity tiers, temporal decay |
-| `tdb-engine` | Orchestrator | Batch KV cache, prefill/decode scheduler, top-level engine |
+| `tdb-engine` | Orchestrator | Engine facade, pack API (`mem_write_pack`/`mem_read_pack`), scheduler |
 
 ## Requirements
 
@@ -308,7 +287,7 @@ cd tardigrade-db
 # Build Rust workspace
 cargo build --workspace
 
-# Run all Rust tests (101 unit/acceptance + 6 doctests)
+# Run all Rust tests (142 unit/acceptance + doctests)
 cargo nextest run --workspace --exclude tdb-python
 cargo test --doc --workspace --exclude tdb-python
 
@@ -317,7 +296,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install maturin numpy pytest
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
 
-# Run 10 Python tests
+# Run 81 Python tests
 pytest tests/python/ -v
 
 # Run the GPT-2 end-to-end demo
@@ -356,7 +335,7 @@ Two semantically related prompts find each other through **latent-space attentio
 
 ## Testing
 
-### Rust (107 tests)
+### Rust (142 tests)
 
 ```bash
 cargo nextest run --workspace --exclude tdb-python    # all unit/acceptance tests
@@ -366,7 +345,7 @@ cargo fmt --all -- --check                            # format check
 just test-crate tdb-storage                           # single crate
 ```
 
-### Python (10 tests)
+### Python (81 tests)
 
 ```bash
 source .venv/bin/activate
@@ -420,14 +399,14 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 | Layer | Crate | Tests | Coverage |
 |-------|-------|-------|----------|
-| Core types | `tdb-core` | 6 | Builder, SynapticBank dimensions, tier defaults |
-| Storage | `tdb-storage` | 11 | Q4 round-trip, segment rollover, persistence, SynapticStore |
-| Retrieval | `tdb-retrieval` | 17 | NEON INT8 dot product, SLB eviction, brute-force, owner filter |
-| Organization | `tdb-index` | 18 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
-| Governance | `tdb-governance` | 25 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | `tdb-engine` | 22 | End-to-end write/read, state rebuild, SLB chain, Vamana activation, WAL replay, throughput |
-| Docs | doctests | 8 | Crate-level usage examples |
-| Python | pytest | 10 | PyO3 bindings, hook ABC, HF adapter, WriteDecision |
+| Core types | `tdb-core` | 5 | Builder, SynapticBank, KVPack types, tier defaults |
+| Storage | `tdb-storage` | 12 | Q4 round-trip, segment rollover, persistence, SynapticStore |
+| Retrieval | `tdb-retrieval` | 36 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter |
+| Organization | `tdb-index` | 20 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
+| Governance | `tdb-governance` | 22 | Importance scoring, tier hysteresis, recency decay, sweep |
+| Engine | `tdb-engine` | 34 | Write/read, pack API, state rebuild, SLB chain, Vamana activation, throughput |
+| Docs | doctests | 10 | Crate-level usage examples |
+| Python | pytest | 81 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack round-trip, diagnostics, RAG baseline, sweep |
 
 ## Research Milestones Implemented
 
@@ -463,14 +442,15 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 - **Memento-pattern state rebuild** — On `Engine::open`, all in-memory state (retriever index, governance scores/tiers, ID counter) is reconstructed from durable sources (segments + WAL). The engine can crash at any point and recover.
 - **Governance computed before persistence** — On-disk importance and tier match the in-memory state, ensuring correct rebuild.
-- **Python bridge (PyO3)** — `tardigrade_db.Engine` class with `mem_write`, `mem_read`, `trace_ancestors`, `store_synapsis`, `load_synapsis`. Numpy arrays in, lists out.
-- **Inference hook framework** — `TardigradeHook` ABC (Template Method pattern) with `HuggingFaceHook` reference implementation. Norm-based salience heuristic, automatic KV capture/retrieval.
+- **Python bridge (PyO3)** — `tardigrade_db.Engine` class with `mem_write`, `mem_read`, `mem_write_pack`, `mem_read_pack`, `trace_ancestors`, `store_synapsis`, `load_synapsis`. Numpy arrays in, lists out.
+- **KV Pack API** — Atomic multi-layer KV storage (`mem_write_pack`/`mem_read_pack`). Stores all layers of a KV cache in a single fsync. Retrieves complete packs grouped by memory. Pack-level governance.
+- **Inference hook framework** — `TardigradeHook` ABC (Template Method pattern) with `HuggingFaceKVHook` (per-token Q/K projections with GQA expansion) and `KnowledgePackStore` (end-to-end injection via Knowledge Packs approach).
 
-### Proven in practice (proxy and real-KV paths)
+### Proven in practice
 
-The GPT-2 end-to-end demo validates the full persistence/retrieval loop with hidden-state proxy tensors for fast local verification.
-
-The April 23, 2026 Qwen3 experiment (`experiments/sonia_real_kv_cache.py`) validates the same retrieval idea using actual KV cache key projections (`past_key_values`), with substantially higher recall (up to 75.0% per-token in that run).
+- **GPT-2 end-to-end demo** validates the full persistence/retrieval loop with hidden-state proxy tensors.
+- **Qwen3-0.6B 100-memory experiment** achieves 100% recall through the full engine pipeline (Q4 quantized, per-token Top5Avg scoring).
+- **KV injection on Qwen3-0.6B** produces byte-identical output to text RAG on 10 novel facts (8/10 correct on both paths), with 46% fewer prompt tokens.
 
 ---
 
@@ -482,24 +462,29 @@ The April 23, 2026 Qwen3 experiment (`experiments/sonia_real_kv_cache.py`) valid
 - [x] NEON SIMD INT8 dot product (ARM) with scalar fallback
 - [x] Semantic Lookaside Buffer (LRU, INT8 quantized)
 - [x] Brute-force latent-space attention retrieval
+- [x] Per-token retrieval with Top5Avg scoring (100% recall at 100 memories)
 - [x] Vamana graph index with DiskANN robust pruning (batch + incremental)
 - [x] Trace causal graph with WAL durability
 - [x] Adaptive Knowledge Lifecycle (importance, tiers, decay)
 - [x] Engine facade with Memento-pattern crash recovery
-- [x] PyO3 Python bindings with numpy interop
-- [x] HuggingFace inference hook (ABC + reference implementation)
+- [x] KV Pack API — atomic multi-layer storage (`mem_write_pack`/`mem_read_pack`)
+- [x] Real KV cache injection — byte-identical to text RAG, 46% fewer prompt tokens
+- [x] Batch write / group commit — single fsync for N cells (~80us/cell amortized)
+- [x] PyO3 Python bindings with numpy interop (cell + pack APIs)
+- [x] HuggingFace KV hook (per-token Q/K projections, GQA expansion)
+- [x] KnowledgePackStore — end-to-end injection via Knowledge Packs approach
 - [x] SynapticBank (LoRA adapter) persistence
 - [x] Criterion benchmarks across all subsystems
-- [x] GPT-2 end-to-end demo
-- [x] 117 tests (107 Rust + 10 Python)
+- [x] GPT-2 end-to-end demo + Qwen3-0.6B injection experiments
+- [x] 223 tests (142 Rust + 81 Python)
 
 ### Next up
 
-- [ ] **Real KV cache injection** — `torch.nn.Module` wrapper that modifies attention KV cache in-place with retrieved cells. Currently we capture and retrieve, but don't inject back into the model.
-- [ ] **Batch write / group commit** — Buffer N writes, single fsync. Current per-write fsync (~5ms) limits throughput to ~200 writes/sec.
 - [ ] **PyPI packaging** — `pip install tardigrade-db` via maturin publish.
 - [ ] **Release-mode benchmark numbers** — Run `cargo bench`, publish actual performance data vs. spec targets.
 - [ ] **Background governance sweep** — Tokio timer task for autonomous AKL decay/eviction instead of manual `advance_days()`.
+- [ ] **Storage reduction** — 730 KB per memory is large. Investigate selective layer storage, INT8 KV, or FP16 for injection-critical layers.
+- [ ] **Multi-memory injection** — Knowledge Packs found naive concatenation of multiple KV caches fails. Test sequential recomputation.
 
 ### Future
 

@@ -15,6 +15,7 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
 import tardigrade_db
+from tardigrade_hooks.encoding import HEADER_SIZE, SENTINEL_IDX, N_TOKENS_IDX, DIM_IDX
 from tardigrade_hooks.hf_kv_hook import HuggingFaceKVHook
 from tardigrade_hooks.hook import MemoryCellHandle, WriteDecision
 
@@ -94,15 +95,15 @@ def test_kv_hook_extracts_real_k_projections(gpt2, tokenizer, engine):
     assert decision.should_write is True
     assert decision.key is not None
 
-    # Per-token encoded: 3 header floats (sentinel, n, d) + N_tokens * kv_dim.
+    # Per-token encoded: 64-float Q4-safe header + N_tokens * kv_dim.
     kv_dim = gpt2.config.n_head * (gpt2.config.n_embd // gpt2.config.n_head)
     assert len(decision.key) > kv_dim, "Per-token key should be larger than single-token dim"
-    # Decode header: sentinel + token_count + dim as plain f32.
-    assert decision.key[0] < -1.0e8, "Header should start with sentinel"
-    n_tokens = int(round(decision.key[1]))
-    dim_from_header = int(round(decision.key[2]))
+    # Decode Q4-safe header: sentinel at [0], n_tokens at [32], dim at [33].
+    assert decision.key[SENTINEL_IDX] < -1.0e8, "Header should start with sentinel"
+    n_tokens = int(round(decision.key[N_TOKENS_IDX]))
+    dim_from_header = int(round(decision.key[DIM_IDX]))
     assert dim_from_header == kv_dim, f"Header dim {dim_from_header} should match kv_dim {kv_dim}"
-    assert len(decision.key) == 3 + n_tokens * kv_dim
+    assert len(decision.key) == HEADER_SIZE + n_tokens * kv_dim
     assert decision.key.dtype == np.float32
 
 
@@ -129,10 +130,10 @@ def test_kv_hook_prefill_sends_encoded_per_token_q_query():
     hook.on_prefill(layer=0, model_hidden_states=hidden)
 
     assert recorder.query_key is not None
-    assert recorder.query_key[0] < -1.0e8
-    assert int(round(recorder.query_key[1])) == 2  # skips position 0
-    assert int(round(recorder.query_key[2])) == q_dim
-    assert len(recorder.query_key) == 3 + 2 * q_dim
+    assert recorder.query_key[SENTINEL_IDX] < -1.0e8
+    assert int(round(recorder.query_key[N_TOKENS_IDX])) == 2  # skips position 0
+    assert int(round(recorder.query_key[DIM_IDX])) == q_dim
+    assert len(recorder.query_key) == HEADER_SIZE + 2 * q_dim
 
 
 def test_kv_hook_expands_gqa_k_for_retrieval_but_keeps_payload_compact():
@@ -162,9 +163,9 @@ def test_kv_hook_expands_gqa_k_for_retrieval_but_keeps_payload_compact():
     decision = hook.on_generate(layer=0, past_key_values=cache, model_hidden_states=hidden)
 
     assert decision.should_write is True
-    assert int(round(decision.key[1])) == seq - 1
-    assert int(round(decision.key[2])) == q_dim
-    assert len(decision.key) == 3 + (seq - 1) * q_dim
+    assert int(round(decision.key[N_TOKENS_IDX])) == seq - 1
+    assert int(round(decision.key[DIM_IDX])) == q_dim
+    assert len(decision.key) == HEADER_SIZE + (seq - 1) * q_dim
     assert len(decision.value) == 2 * seq * kv_dim
 
 

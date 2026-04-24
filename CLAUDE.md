@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All implementation phases complete. 187+ tests (136 Rust + 51+ Python). KV Pack API in Rust engine for atomic multi-layer KV storage and retrieval. KV injection validated byte-identical to text RAG (8/10 novel facts through full Q4 pipeline). Hidden states + Top5Avg retrieval at 96-100% recall.
+**Status:** All implementation phases complete. 223 tests (142 Rust + 81 Python). KV Pack API in Rust engine for atomic multi-layer KV storage and retrieval. KV injection validated byte-identical to text RAG (8/10 novel facts through full Q4 pipeline). Hidden states + Top5Avg retrieval at 96-100% recall. `KnowledgePackStore` is the canonical injection path.
 
 ## Build & Test
 
@@ -25,7 +25,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install transformers
 ```
 
-### Rust tests (107 tests)
+### Rust tests (142 tests)
 
 ```bash
 cargo build --workspace                              # build all crates
@@ -39,7 +39,7 @@ cargo test test_rebuild_retriever                     # run a single test by nam
 
 Note: `tdb-python` is excluded from `cargo test/clippy` because PyO3 needs `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` on Python 3.14.
 
-### Python tests (10 tests)
+### Python tests (81 tests)
 
 ```bash
 source .venv/bin/activate
@@ -67,27 +67,24 @@ Captures KV cache from GPT-2 inference on *"The capital of France is"*, then ret
 
 ### Test breakdown by phase
 
-| Phase | Crate | Tests | What's covered |
+| Layer | Crate | Tests | What's covered |
 |-------|-------|-------|----------------|
-| 1 | tdb-storage | 8 | Q4 quantization round-trip, segment rollover, persistence, fidelity |
-| 2 | tdb-retrieval | 17 | NEON INT8 dot product, SLB LRU eviction, brute-force retrieval, owner filter |
-| 3 | tdb-index | 13 | Vamana recall, trace causal chains, WAL crash recovery, concurrent R/W |
-| 4 | tdb-governance | 25 | Importance scoring, tier hysteresis, recency decay, sweep eviction |
-| 5-8 | tdb-engine | 21 | Write/read round-trip, governance integration, state rebuild on reopen, SLB chain, Vamana activation, trace WAL replay, throughput baselines |
-| 9 | tdb-index | 5 | Incremental Vamana, robust prune diversity, batch parity |
-| 0 | tdb-core | 6 | Builder defaults, SynapticBank dimensions |
-| 11 | tdb-storage | 3 | SynapticStore round-trip, multiple owners, persistence |
-| — | tdb-engine | 1 | Engine synapsis API |
-| — | doctests | 8 | Crate-level usage examples |
-| — | Python | 10 | PyO3 bindings, hook ABC, HF adapter, WriteDecision, MemoryCellHandle |
+| Core | tdb-core | 5 | Builder, SynapticBank, KVPack types, tier defaults |
+| Storage | tdb-storage | 12 | Q4 round-trip, segment rollover, persistence, SynapticStore |
+| Retrieval | tdb-retrieval | 36 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter |
+| Organization | tdb-index | 20 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
+| Governance | tdb-governance | 22 | Importance scoring, tier hysteresis, recency decay, sweep |
+| Engine | tdb-engine | 34 | Write/read, pack API, state rebuild, SLB chain, Vamana activation, throughput |
+| Docs | doctests | 10 | Crate-level usage examples |
+| Python | pytest | 81 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, diagnostics, RAG baseline, sweep |
 
 ## Crate Structure
 
 Rust workspace with strict dependency ordering:
 
-- **tdb-core** — Shared types: `MemoryCell`, `SynapticBankEntry`, `Tier`, error types. No dependencies on other tdb crates.
+- **tdb-core** — Shared types: `MemoryCell`, `KVPack`, `SynapticBankEntry`, `Tier`, error types. No dependencies on other tdb crates.
 - **tdb-storage** — Block pool, mmap arena, Q4/Q8 quantization. Depends on tdb-core.
-- **tdb-retrieval** — SLB, SIMD brute-force matmul, attention scoring. Depends on tdb-core, tdb-storage.
+- **tdb-retrieval** — Per-token retrieval (Top5Avg), SLB, SIMD brute-force matmul, retriever pipeline. Depends on tdb-core, tdb-storage.
 - **tdb-index** — Vamana graph (DiskANN-style), Trace causal graph, WAL. Depends on tdb-core, tdb-storage.
 - **tdb-governance** — AKL: importance scoring, tier state machine, recency decay. Depends on tdb-core.
 - **tdb-engine** — Top-level orchestrator, scheduler, batch cache. Depends on all above.
@@ -99,7 +96,7 @@ Four-layer system treating memory as a managed OS resource:
 
 1. **Storage Layer** — Persistent quantized KV-cache block pool. 4-bit (Q4) quantized custom mmap arena (`safetensors` retained for import/export only). GPU DMA for direct NVMe→GPU transfers bypassing CPU. Decoupled position encoding for safe historical KV block reuse. Includes a sidecar blob arena (append-only, mmap-backed) with generational GC.
 
-2. **Retrieval Layer** — Latent space attention, not text search. Multi-Token Aggregation (MemArt) computes attention scores directly against compressed keys in latent space (91-135x prefill reduction). Semantic Lookaside Buffer (SLB) for sub-5μs retrieval using INT8 scalar quantization with NEON SDOT intrinsics. RelayCaching reuses decode-phase KV caches across agents to cut TTFT by up to 4.7x.
+2. **Retrieval Layer** — Per-token latent-space scoring, not text search. PerTokenRetriever with Top5Avg scoring computes dot products between individual query and memory hidden-state tokens (100% recall at 100 memories). Semantic Lookaside Buffer (SLB) for sub-5μs retrieval using INT8 scalar quantization with NEON SDOT intrinsics. Three-stage pipeline: SLB → PerTokenRetriever → BruteForceRetriever.
 
 3. **Organization Layer** — Neuro-symbolic dual topology. Atlas Index: SIMD-accelerated Page-Clustered Vector Index (small-world graph + B+ Tree disk locality). Trace: episodic graph tracking causal relationships between KV blocks. Decoupled WAL for crash recovery with <1% overhead. Epoch-based reclamation for lock-free concurrent reads.
 

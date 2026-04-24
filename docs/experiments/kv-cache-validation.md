@@ -355,10 +355,16 @@ The earlier 0/10 injection results had three causes:
 | `experiments/novel_facts_corpus.py` | 10 invented facts for injection testing |
 | `experiments/corpus_100.py` | 100-memory corpus (10 domains × 10 memories + 15 vague queries) |
 
-## Next Steps
+## What's Been Done Since (April 24, 2026)
 
-1. **Storage reduction** — 730 KB per memory is impractical at scale. Investigate: selective layer storage (not all 28 layers), INT8 instead of Q4 for KV, or FP16 for injection-critical layers.
-2. **End-to-end automation** — Wire the working Knowledge Packs-style injection (chat template, clone, inject) into the MemoryInjector so it's not manual experiment code.
-3. **Multi-memory injection** — Knowledge Packs found naive concatenation of multiple KV caches fails (-6%). Their solution: sequential recomputation. Test whether TardigradeDB's single-memory injection scales to 5 memories per query.
-4. **False positive calibration** — Score threshold for "I don't remember."
-5. **Larger model validation** — Current results on Qwen3-0.6B. Test on 3B+ to verify scaling.
+1. **End-to-end automation** — `KnowledgePackStore` wraps the full pipeline (chat template → KV computation → storage → retrieval → DynamicCache reconstruction → injection). No more manual experiment code.
+2. **Rust KV Pack API** — `mem_write_pack`/`mem_read_pack` in the engine provide atomic multi-layer KV storage with single fsync and grouped retrieval. Pack-level governance.
+3. **Header encoding consolidation** — Shared `encoding.py` with Q4-safe 64-byte header constants. No more magic numbers.
+4. **Test coverage** — 223 tests (142 Rust + 81 Python), up from 117.
+
+## Remaining Open Questions
+
+1. **Storage reduction** — 730 KB per memory is large. Investigate: selective layer storage (not all 28 layers), INT8 instead of Q4 for KV, or FP16 for injection-critical layers.
+2. **Multi-memory injection** — Knowledge Packs found naive concatenation of multiple KV caches fails (-6%). Their solution: sequential recomputation. Test whether TardigradeDB's single-memory injection scales to 5 memories per query.
+3. **False positive calibration** — Score threshold for "I don't remember."
+4. **Larger model validation** — Current results on Qwen3-0.6B. Test on 3B+ to verify scaling.
