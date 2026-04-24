@@ -21,6 +21,7 @@ const PACK_SALIENCE: f32 = 80.0;
 const BENCH_CELL_COUNTS: [usize; 3] = [100, 1_000, 10_000];
 const PACK_LAYER_COUNTS: [usize; 2] = [1, 4];
 const PACK_TARGET_DIVISOR: usize = 2;
+const INDEXED_CELLS_PER_PACK: usize = 1;
 const CANDIDATE_REDUCTION_THRESHOLD: usize = 512;
 const MIN_CANDIDATES: usize = 256;
 const CANDIDATE_MULTIPLIER: usize = 64;
@@ -278,8 +279,8 @@ fn bench_engine_read_pack_encoded_per_token(c: &mut Criterion) {
 
             let bench_id = BenchmarkId::new(
                 format!(
-                    "target-{}-dedup-{}-layers-{}",
-                    report.target_top1, report.dedup_ok, layer_count
+                    "target-{}-dedup-{}-layers-{}-indexed-{}",
+                    report.target_top1, report.dedup_ok, layer_count, INDEXED_CELLS_PER_PACK
                 ),
                 pack_count,
             );

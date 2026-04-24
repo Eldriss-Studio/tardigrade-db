@@ -133,7 +133,7 @@ cargo fmt --all -- --check
 Result:
 
 ```text
-97 tests passed, 3 skipped
+108 tests passed, 3 skipped
 clippy passed
 format check passed
 ```
@@ -151,3 +151,29 @@ improvement for 1-layer packs: 1K improved from ~3.71 ms to ~3.47 ms, and 10K
 improved from ~8.84 ms to ~8.39 ms. It did not eliminate the pack-read overhead.
 The 4-layer benchmark shows that pack reconstruction and duplicate pack-cell
 retrieval are now the likely bottlenecks.
+
+### Pack Key-Only Indexing
+
+Pack key-only indexing keeps all pack cells persisted but indexes only the pack
+retrieval cell. Layer payload cells remain available for reconstruction through
+the pack directory, but they no longer create duplicate retrieval candidates.
+
+Measured with:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo bench -p tdb-engine "mem_read_pack"
+```
+
+| Path | Size | Layers per pack | Correctness label | Latency |
+| --- | ---: | ---: | --- | ---: |
+| `Engine::mem_read_pack` encoded path | 100 packs | 1 | target true, dedup true, indexed 1 | ~237 us |
+| `Engine::mem_read_pack` encoded path | 100 packs | 4 | target true, dedup true, indexed 1 | ~533 us |
+| `Engine::mem_read_pack` encoded path | 1,000 packs | 1 | target true, dedup true, indexed 1 | ~1.64 ms |
+| `Engine::mem_read_pack` encoded path | 1,000 packs | 4 | target true, dedup true, indexed 1 | ~2.06 ms |
+| `Engine::mem_read_pack` encoded path | 10,000 packs | 1 | target true, dedup true, indexed 1 | ~6.11 ms |
+| `Engine::mem_read_pack` encoded path | 10,000 packs | 4 | target true, dedup true, indexed 1 | ~6.60 ms |
+
+Key-only indexing confirms duplicate pack-cell retrieval was a real bottleneck:
+10K 4-layer reads improved from ~17.06 ms to ~6.60 ms. The remaining latency is
+now much less sensitive to layer count, which means the next pack-read plan
+should profile residual retrieval cost and storage hydration instead of dedup.

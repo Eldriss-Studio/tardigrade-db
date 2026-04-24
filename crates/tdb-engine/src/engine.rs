@@ -47,6 +47,11 @@ const DEFAULT_SLB_CAPACITY: usize = 4096;
 fn mean_pool_key(key: &[f32]) -> Vec<f32> {
     fixed_dim_key(key).unwrap_or_default()
 }
+
+fn should_index_for_retrieval(cell: &MemoryCell) -> bool {
+    cell.token_span.0 == 0 || cell.layer == PACK_RETRIEVAL_LAYER
+}
+
 /// Default Vamana max degree.
 const DEFAULT_VAMANA_MAX_DEGREE: usize = 16;
 /// Default cell count threshold before activating Vamana.
@@ -222,15 +227,15 @@ impl Engine {
         for cell_id in &cell_ids {
             let cell = pool.get(*cell_id)?;
 
-            // Index all cells for retrieval (including pack payload cells).
-            // This gives the scorer more candidates for discrimination.
-            let slb_key = mean_pool_key(&cell.key);
-            if key_dim.is_none() {
-                key_dim = Some(slb_key.len());
-            }
+            if should_index_for_retrieval(&cell) {
+                let slb_key = mean_pool_key(&cell.key);
+                if key_dim.is_none() {
+                    key_dim = Some(slb_key.len());
+                }
 
-            pipeline.insert(cell.id, cell.owner, &cell.key);
-            slb_entries.push((cell.id, cell.owner, slb_key));
+                pipeline.insert(cell.id, cell.owner, &cell.key);
+                slb_entries.push((cell.id, cell.owner, slb_key));
+            }
 
             let scorer = ImportanceScorer::new(cell.meta.importance);
             let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
@@ -686,14 +691,11 @@ impl Engine {
         // Persist atomically (single fsync).
         self.pool.append_batch(&cells)?;
 
-        // Index retrieval key for search — insert for EVERY cell in the pack
-        // (not just the retrieval cell) to give the scorer more candidates.
-        // This matches the old 28-cells-per-memory approach that achieves 8/10.
+        // Index only the retrieval cell. Layer payload cells are persisted for
+        // reconstruction, not search signal.
         let slb_key = mean_pool_key(&pack.retrieval_key);
-        for &cid in &cell_ids {
-            self.pipeline.insert(cid, pack.owner, &pack.retrieval_key);
-            self.slb.insert(cid, pack.owner, &slb_key);
-        }
+        self.pipeline.insert(retrieval_cell_id, pack.owner, &pack.retrieval_key);
+        self.slb.insert(retrieval_cell_id, pack.owner, &slb_key);
 
         // Governance for the pack (tracked on retrieval cell).
         self.governance

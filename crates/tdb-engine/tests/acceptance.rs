@@ -1206,6 +1206,7 @@ const OWNER_ONE_LAYER_VALUE_CODE: i32 = 110;
 const OWNER_TWO_LAYER_VALUE_CODE: i32 = 220;
 const OWNER_ONE_LAYER_VALUE: f32 = OWNER_ONE_LAYER_VALUE_CODE as f32;
 const OWNER_TWO_LAYER_VALUE: f32 = OWNER_TWO_LAYER_VALUE_CODE as f32;
+const KEY_ONLY_INDEX_QUERY_K: usize = 8;
 
 fn test_pack(layer_values: &[f32], retrieval_key: Vec<f32>) -> KVPack {
     test_pack_for_owner(TEST_PACK_OWNER_ONE, layer_values, retrieval_key)
@@ -1392,6 +1393,124 @@ fn test_mem_read_pack_reverse_lookup_preserves_deduplication() {
 
 #[test]
 fn test_mem_read_pack_reverse_lookup_respects_owner_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    engine
+        .mem_write_pack(&test_pack_for_owner(
+            TEST_PACK_OWNER_ONE,
+            &[OWNER_ONE_LAYER_VALUE],
+            broad_key.clone(),
+        ))
+        .unwrap();
+    engine
+        .mem_write_pack(&test_pack_for_owner(
+            TEST_PACK_OWNER_TWO,
+            &[OWNER_TWO_LAYER_VALUE],
+            broad_key,
+        ))
+        .unwrap();
+
+    let results =
+        engine.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_TWO)).unwrap();
+
+    assert!(results.iter().all(|result| result.pack.owner == TEST_PACK_OWNER_TWO));
+    assert_eq!(results[0].pack.layers[0].data[0].round() as i32, OWNER_TWO_LAYER_VALUE_CODE);
+}
+
+#[test]
+fn test_mem_read_pack_indexes_only_retrieval_cell() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    engine.mem_write_pack(&test_pack(&[30.0, 31.0, 32.0, 33.0], broad_key)).unwrap();
+
+    let results =
+        engine.mem_read(&query, KEY_ONLY_INDEX_QUERY_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
+
+    assert_eq!(results.len(), 1, "pack layer payload cells must not be separately indexed");
+    assert!(results[0].cell.value.is_empty(), "only the pack retrieval cell should be retrieved");
+}
+
+#[test]
+fn test_mem_read_pack_key_only_index_preserves_complete_reconstruction() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    engine.mem_write_pack(&test_pack(&[30.0, 31.0, 32.0, 33.0], broad_key)).unwrap();
+
+    let results =
+        engine.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].pack.layers.len(), 4);
+    assert!(
+        results[0].pack.layers.windows(2).all(|layers| layers[0].layer_idx < layers[1].layer_idx)
+    );
+}
+
+#[test]
+fn test_reopen_rebuild_indexes_only_pack_retrieval_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        engine.mem_write_pack(&test_pack(&[30.0, 31.0, 32.0, 33.0], broad_key)).unwrap();
+    }
+
+    let mut reopened = Engine::open(dir.path()).unwrap();
+    let results =
+        reopened.mem_read(&query, KEY_ONLY_INDEX_QUERY_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
+
+    assert_eq!(results.len(), 1, "rebuild must not index layer payload cells");
+    assert!(
+        results[0].cell.value.is_empty(),
+        "rebuilt retrieval index should expose retrieval cell only"
+    );
+}
+
+#[test]
+fn test_key_only_index_preserves_1000_pack_ranking() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    for pack_id in 0..CANDIDATE_FIXTURE_CELL_COUNT {
+        engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: CANDIDATE_FIXTURE_OWNER,
+                retrieval_key: normalized_encoded_cell(
+                    CANDIDATE_FIXTURE_DIM,
+                    pack_id,
+                    CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+                ),
+                layers: vec![KVLayerPayload {
+                    layer_idx: CANDIDATE_FIXTURE_LAYER,
+                    data: vec![pack_id as f32; CANDIDATE_FIXTURE_DIM],
+                }],
+                salience: CANDIDATE_FIXTURE_PACK_SALIENCE,
+            })
+            .unwrap();
+    }
+
+    let query = normalized_encoded_cell(
+        CANDIDATE_FIXTURE_DIM,
+        CANDIDATE_FIXTURE_TARGET_CELL,
+        CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+    );
+    let results = engine
+        .mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(CANDIDATE_FIXTURE_OWNER))
+        .unwrap();
+
+    assert_eq!(results[0].pack.layers[0].data[0].round() as usize, CANDIDATE_FIXTURE_TARGET_CELL);
+}
+
+#[test]
+fn test_key_only_index_preserves_owner_filter() {
     let dir = tempfile::tempdir().unwrap();
     let mut engine = Engine::open(dir.path()).unwrap();
     let (query, broad_key, _spike_key) = top5_broad_match_fixture();
