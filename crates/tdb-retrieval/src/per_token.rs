@@ -96,16 +96,23 @@ impl Default for PerTokenRetriever {
     }
 }
 
-/// Sentinel value marking the start of a per-token encoded header.
-/// Chosen to be a large negative value that survives Q4 quantization
-/// and is unlikely to appear in real K vectors.
+/// Header spans two Q4 groups (64 floats) to keep sentinel and metadata
+/// in separate quantization groups. Q4 uses groups of 32 floats; the
+/// sentinel (-1e9) would crush metadata values if they shared a group.
+///
+/// Layout:
+///   Group 0 (indices 0-31):  [SENTINEL, 0, 0, ..., 0]  (sentinel dominates)
+///   Group 1 (indices 32-63): `[n_tokens, dim, 0, ..., 0]` (metadata preserved)
+///   Data (index 64+):        [token vectors]
+const HEADER_SIZE: usize = 64;
+
+/// Sentinel value at position 0 marking a per-token encoded key.
 const HEADER_SENTINEL: f32 = -1.0e9;
 
 /// Encode multiple per-token K vectors into a flat f32 slice with header.
 ///
-/// Format: `[SENTINEL, token_count_as_f32, dim_as_f32, k0_0, ..., k0_D, k1_0, ...]`
-///
-/// The sentinel value survives Q4 quantization (unlike bit-cast denorms).
+/// The header spans 64 floats (two Q4 groups) so sentinel and metadata
+/// are quantized independently.
 pub fn encode_per_token_keys(token_keys: &[&[f32]]) -> Vec<f32> {
     if token_keys.is_empty() {
         return Vec::new();
@@ -113,14 +120,18 @@ pub fn encode_per_token_keys(token_keys: &[&[f32]]) -> Vec<f32> {
 
     let n = token_keys.len();
     let d = token_keys[0].len();
-    let mut encoded = Vec::with_capacity(3 + n * d);
+    let mut encoded = Vec::with_capacity(HEADER_SIZE + n * d);
 
-    // Header: sentinel + token count + dimension as plain f32 values.
+    // Group 0: sentinel only (indices 0-31).
     encoded.push(HEADER_SENTINEL);
+    encoded.resize(32, 0.0);
+
+    // Group 1: metadata (indices 32-63).
     encoded.push(n as f32);
     encoded.push(d as f32);
+    encoded.resize(HEADER_SIZE, 0.0);
 
-    // Concatenated token vectors.
+    // Data: concatenated token vectors (index 64+).
     for tk in token_keys {
         encoded.extend_from_slice(tk);
     }
@@ -130,25 +141,26 @@ pub fn encode_per_token_keys(token_keys: &[&[f32]]) -> Vec<f32> {
 
 /// Decode a per-token encoded key slice into token count, dim, and flat data.
 ///
-/// Returns `None` if the slice doesn't start with the sentinel or sizes don't match.
+/// Returns `None` if the slice doesn't have the sentinel or sizes don't match.
 pub fn decode_per_token_keys(encoded: &[f32]) -> Option<(usize, usize, &[f32])> {
-    if encoded.len() < 3 {
+    if encoded.len() < HEADER_SIZE {
         return None;
     }
 
-    // Check sentinel (allow some Q4 quantization tolerance).
+    // Check sentinel in group 0.
     if encoded[0] > -1.0e8 {
         return None;
     }
 
-    let n = encoded[1].round() as usize;
-    let d = encoded[2].round() as usize;
+    // Metadata in group 1 (indices 32, 33).
+    let n = encoded[32].round() as usize;
+    let d = encoded[33].round() as usize;
 
     if n == 0 || d == 0 {
         return None;
     }
 
-    let data = &encoded[3..];
+    let data = &encoded[HEADER_SIZE..];
     if data.len() != n * d {
         return None;
     }

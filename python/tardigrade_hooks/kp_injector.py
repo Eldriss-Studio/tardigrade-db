@@ -67,11 +67,14 @@ class KnowledgePackStore:
         kv = out.past_key_values
 
         # Retrieval key: hidden states at query_layer (per-token, skip pos 0)
-        # Encoded with sentinel header for PerTokenRetriever
+        # Q4-safe header: padded to 32 floats so sentinel doesn't crush metadata
         hidden = out.hidden_states[self.query_layer][0]  # (seq, hidden_size)
         h_tokens = hidden[1:].numpy().astype(np.float32)  # skip pos 0
         n_tok = len(h_tokens)
-        header = np.array([-1.0e9, float(n_tok), float(self.hidden_size)], dtype=np.float32)
+        header = np.zeros(64, dtype=np.float32)
+        header[0] = -1.0e9  # sentinel in group 0
+        header[32] = float(n_tok)  # n_tokens in group 1
+        header[33] = float(self.hidden_size)  # dim in group 1
         retrieval_key = np.concatenate([header, h_tokens.ravel()])
 
         # Build layer payloads for pack API
@@ -108,7 +111,10 @@ class KnowledgePackStore:
         hidden = query_out.hidden_states[self.query_layer][0]
         h_tokens = hidden[1:].numpy().astype(np.float32)
         n_tok = len(h_tokens)
-        header = np.array([-1.0e9, float(n_tok), float(self.hidden_size)], dtype=np.float32)
+        header = np.zeros(32, dtype=np.float32)
+        header[0] = -1.0e9
+        header[1] = float(n_tok)
+        header[2] = float(self.hidden_size)
         query_key = np.concatenate([header, h_tokens.ravel()])
 
         # Retrieve via Rust pack API (returns complete pack with all layers)

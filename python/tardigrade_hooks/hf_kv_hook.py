@@ -121,9 +121,17 @@ class HuggingFaceKVHook(TardigradeHook):
         return expanded.reshape(-1, self.q_dim).astype(np.float32)
 
     def _encode_per_token(self, token_vecs, dim):
-        """Encode per-token vectors with sentinel header."""
+        """Encode per-token vectors with Q4-safe sentinel header.
+
+        Header spans 64 floats (two Q4 groups): sentinel in group 0,
+        metadata (n_tokens, dim) in group 1. Prevents sentinel from
+        crushing metadata during Q4 quantization.
+        """
         n = len(token_vecs)
-        header = np.array([-1.0e9, float(n), float(dim)], dtype=np.float32)
+        header = np.zeros(64, dtype=np.float32)
+        header[0] = -1.0e9  # sentinel in group 0
+        header[32] = float(n)  # n_tokens in group 1
+        header[33] = float(dim)  # dim in group 1
         return np.concatenate([header, token_vecs.ravel()])
 
     def _extract_kv_payload(self, past_key_values, layer_idx):
