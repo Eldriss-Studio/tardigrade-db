@@ -36,6 +36,9 @@ use tdb_storage::block_pool::BlockPool;
 use tdb_storage::synaptic_store::SynapticStore;
 
 use crate::pack_directory::PackDirectory;
+use crate::pack_materialization::{
+    PackAccessSnapshot, PackCandidate, build_pack_read_result, keep_first_ranked_pack_candidates,
+};
 
 /// Default SLB capacity.
 const DEFAULT_SLB_CAPACITY: usize = 4096;
@@ -56,6 +59,7 @@ fn should_index_for_retrieval(cell: &MemoryCell) -> bool {
 const DEFAULT_VAMANA_MAX_DEGREE: usize = 16;
 /// Default cell count threshold before activating Vamana.
 const DEFAULT_VAMANA_THRESHOLD: usize = 10_000;
+const PACK_RETRIEVAL_CELL_COUNT: usize = 1;
 
 /// Adapter: wraps `VamanaIndex` (from `tdb-index`) to implement `Retriever` (from `tdb-retrieval`).
 ///
@@ -716,13 +720,31 @@ impl Engine {
         k: usize,
         owner_filter: Option<OwnerId>,
     ) -> Result<Vec<PackReadResult>> {
+        let candidates = self.collect_pack_candidates(query_key, k, owner_filter);
+        let candidates = self.deduplicate_pack_candidates(candidates, k, owner_filter);
+        let mut results = Vec::with_capacity(k);
+
+        for candidate in &candidates {
+            let layers = self.hydrate_pack_layers(&candidate.cell_ids)?;
+            let access = self.apply_pack_access_governance(candidate.retrieval_cell_id);
+            results.push(build_pack_read_result(candidate, layers, access));
+        }
+
+        Ok(results)
+    }
+
+    fn collect_pack_candidates(
+        &mut self,
+        query_key: &[f32],
+        k: usize,
+        owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
         // Per-token queries need pipeline first (same logic as mem_read).
         let is_per_token = is_encoded_per_token_key(query_key);
         let slb_query = mean_pool_key(query_key);
         let mut candidates = Vec::new();
 
         if is_per_token {
-            // Pipeline first for per-token scoring, then SLB as fallback.
             let cold = self.pipeline.query(query_key, k * 4, owner_filter);
             let mut seen: std::collections::HashSet<CellId> = std::collections::HashSet::new();
             for r in cold {
@@ -753,77 +775,60 @@ impl Engine {
         }
 
         candidates
+    }
+
+    fn deduplicate_pack_candidates(
+        &self,
+        mut retrieval_results: Vec<RetrievalResult>,
+        k: usize,
+        owner_filter: Option<OwnerId>,
+    ) -> Vec<PackCandidate> {
+        retrieval_results
             .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
-        let mut results = Vec::with_capacity(k);
-        let mut seen_packs: std::collections::HashSet<PackId> = std::collections::HashSet::new();
-
-        for rr in candidates {
-            let Some(found_pack_id) = self.pack_directory.pack_for_cell(rr.cell_id) else {
-                continue;
-            };
-            let Some(cell_ids) = self.pack_directory.cell_ids(found_pack_id) else {
-                continue;
-            };
-
-            // Deduplicate: skip if this pack already in results.
-            if !seen_packs.insert(found_pack_id) {
-                continue;
-            }
-
-            // Owner filter.
-            if owner_filter.is_some_and(|f| f != rr.owner) {
-                continue;
-            }
-
-            // Load layer payloads from pool.
-            let mut layers = Vec::new();
-            for &cid in &cell_ids[1..] {
-                match self.pool.get(cid) {
-                    Ok(cell) => {
-                        if cell.layer != PACK_RETRIEVAL_LAYER {
-                            layers.push(KVLayerPayload { layer_idx: cell.layer, data: cell.value });
-                        }
-                    }
-                    Err(TardigradeError::CellNotFound(_)) => {}
-                    Err(e) => return Err(e),
+        let candidates = retrieval_results
+            .into_iter()
+            .filter_map(|rr| {
+                let pack_id = self.pack_directory.pack_for_cell(rr.cell_id)?;
+                let cell_ids = self.pack_directory.cell_ids(pack_id)?;
+                if owner_filter.is_some_and(|filter_owner| filter_owner != rr.owner) {
+                    return None;
                 }
-            }
+                Some(PackCandidate::new(pack_id, rr.cell_id, rr.owner, rr.score, cell_ids.to_vec()))
+            })
+            .collect();
 
-            // Governance boost on access.
-            if let Some(gov) = self.governance.get_mut(&rr.cell_id) {
-                gov.scorer.on_access();
-                gov.tier_sm.evaluate(gov.scorer.importance());
-            }
+        keep_first_ranked_pack_candidates(candidates, k)
+    }
 
-            let tier =
-                self.governance.get(&rr.cell_id).map_or(Tier::Draft, |g| g.tier_sm.current());
+    fn hydrate_pack_layers(&self, cell_ids: &[CellId]) -> Result<Vec<KVLayerPayload>> {
+        let layer_cell_count = cell_ids.len().saturating_sub(PACK_RETRIEVAL_CELL_COUNT);
+        let mut layers = Vec::with_capacity(layer_cell_count);
 
-            let decay_factor = self
-                .governance
-                .get(&rr.cell_id)
-                .map_or(1.0, |g| recency_decay(g.days_since_update));
-
-            layers.sort_by_key(|l| l.layer_idx);
-
-            results.push(PackReadResult {
-                pack: KVPack {
-                    id: found_pack_id,
-                    owner: rr.owner,
-                    retrieval_key: vec![], // not returned to save memory
-                    layers,
-                    salience: 0.0,
-                },
-                score: rr.score * decay_factor,
-                tier,
-            });
-
-            if results.len() >= k {
-                break;
+        for &cell_id in cell_ids.iter().skip(PACK_RETRIEVAL_CELL_COUNT) {
+            match self.pool.get(cell_id) {
+                Ok(cell) => layers.push(KVLayerPayload { layer_idx: cell.layer, data: cell.value }),
+                Err(TardigradeError::CellNotFound(_)) => {}
+                Err(e) => return Err(e),
             }
         }
 
-        Ok(results)
+        layers.sort_by_key(|layer| layer.layer_idx);
+        Ok(layers)
+    }
+
+    fn apply_pack_access_governance(&mut self, retrieval_cell_id: CellId) -> PackAccessSnapshot {
+        let Some(gov) = self.governance.get_mut(&retrieval_cell_id) else {
+            return PackAccessSnapshot { tier: Tier::Draft, decay_factor: 1.0 };
+        };
+
+        gov.scorer.on_access();
+        gov.tier_sm.evaluate(gov.scorer.importance());
+
+        PackAccessSnapshot {
+            tier: gov.tier_sm.current(),
+            decay_factor: recency_decay(gov.days_since_update),
+        }
     }
 
     /// Number of KV Packs stored.

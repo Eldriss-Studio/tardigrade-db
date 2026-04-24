@@ -171,6 +171,7 @@
 pub mod batch_cache;
 pub mod engine;
 pub(crate) mod pack_directory;
+pub(crate) mod pack_materialization;
 #[cfg(test)]
 pub(crate) mod pack_read_profile;
 pub mod scheduler;
