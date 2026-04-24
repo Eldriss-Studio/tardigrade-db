@@ -187,7 +187,7 @@ def main():
     print(f"\n  Loading {MODEL_NAME}...", end=" ", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME, torch_dtype=torch.float32, attn_implementation="eager",
+        MODEL_NAME, dtype=torch.float32, attn_implementation="eager",
     )
     model.eval()
     n_layers = model.config.num_hidden_layers

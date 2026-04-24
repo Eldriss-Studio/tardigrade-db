@@ -65,7 +65,7 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL)
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL, torch_dtype=torch.float32, attn_implementation="eager")
+        MODEL, dtype=torch.float32, attn_implementation="eager")
     model.eval()
     n_layers = model.config.num_hidden_layers
 

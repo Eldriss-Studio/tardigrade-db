@@ -79,8 +79,8 @@ def run_model(model_name, friendly_name, query_layer_ratio=0.67):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        output_hidden_states=True,
-        torch_dtype=torch.float32,
+
+        dtype=torch.float32,
         attn_implementation="eager",
     )
     model.eval()
