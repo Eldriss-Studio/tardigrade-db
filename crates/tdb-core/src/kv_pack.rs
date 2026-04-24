@@ -42,7 +42,9 @@ pub struct KVPack {
     /// Agent/user that owns this memory.
     pub owner: OwnerId,
     /// Per-token encoded hidden state summary for retrieval scoring.
-    /// Format: `[sentinel(-1e9), n_tokens, dim, token_0, ..., token_n]`
+    ///
+    /// The encoded key uses the retrieval crate's 64-float Q4-safe header:
+    /// sentinel at index 0, metadata at indices 32 and 33, token data at 64+.
     pub retrieval_key: Vec<f32>,
     /// Per-layer K+V payloads for injection.
     pub layers: Vec<KVLayerPayload>,

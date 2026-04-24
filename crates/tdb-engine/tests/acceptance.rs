@@ -815,6 +815,89 @@ fn test_engine_per_token_query_cannot_be_satisfied_by_slb_only() {
     );
 }
 
+#[test]
+fn test_vamana_handles_encoded_per_token_keys_after_activation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open_with_vamana_threshold(dir.path(), 1).unwrap();
+
+    let make_tokens = |offset: usize| -> Vec<Vec<f32>> {
+        (0..8)
+            .map(|token| {
+                (0..128).map(|dim| ((offset + token * 17 + dim * 7) as f32 * 0.013).sin()).collect()
+            })
+            .collect()
+    };
+    let first_tokens = make_tokens(0);
+    let second_tokens = make_tokens(10_000);
+    let first_refs: Vec<&[f32]> = first_tokens.iter().map(Vec::as_slice).collect();
+    let second_refs: Vec<&[f32]> = second_tokens.iter().map(Vec::as_slice).collect();
+    let first = encode_per_token_keys(&first_refs);
+    let second = encode_per_token_keys(&second_refs);
+
+    engine.mem_write(1, 0, &first, vec![0.0; 128], 50.0, None).unwrap();
+    assert!(engine.has_vamana(), "First encoded write should activate Vamana");
+
+    engine.mem_write(1, 0, &second, vec![0.0; 128], 50.0, None).unwrap();
+    let results = engine.mem_read(&second, 2, Some(1)).unwrap();
+
+    assert!(!results.is_empty(), "Encoded keys must remain readable after Vamana activation");
+}
+
+fn top5_broad_match_fixture() -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    // Object Mother / Fixture Builder: one query, one broad match, one spike.
+    // Specification: Top5Avg must prefer broad coverage over one isolated max.
+    let query = [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let broad = [0.6f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let spike = [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let orthogonal = [0.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+    (
+        encode_per_token_keys(&[&query]),
+        encode_per_token_keys(&[&broad, &broad, &broad, &broad, &broad]),
+        encode_per_token_keys(&[&spike, &orthogonal, &orthogonal, &orthogonal, &orthogonal]),
+    )
+}
+
+fn write_top5_fixture(engine: &mut Engine) {
+    let (_query, broad_key, spike_key) = top5_broad_match_fixture();
+    engine.mem_write(1, 0, &broad_key, vec![0.0; 8], 50.0, None).unwrap();
+    engine.mem_write(1, 0, &spike_key, vec![0.0; 8], 50.0, None).unwrap();
+}
+
+#[test]
+fn test_engine_default_pipeline_uses_top5avg() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, _broad_key, _spike_key) = top5_broad_match_fixture();
+    write_top5_fixture(&mut engine);
+
+    let results = engine.mem_read(&query, 2, Some(1)).unwrap();
+
+    assert_eq!(
+        results[0].cell.id, 0,
+        "Engine default pipeline should use Top5Avg: broad match must beat a single spike"
+    );
+}
+
+#[test]
+fn test_engine_reopen_preserves_top5avg_behavior() {
+    let dir = tempfile::tempdir().unwrap();
+    let (query, _broad_key, _spike_key) = top5_broad_match_fixture();
+
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        write_top5_fixture(&mut engine);
+    }
+
+    let mut reopened = Engine::open(dir.path()).unwrap();
+    let results = reopened.mem_read(&query, 2, Some(1)).unwrap();
+
+    assert_eq!(
+        results[0].cell.id, 0,
+        "Rebuilt pipeline after reopen should preserve Top5Avg behavior"
+    );
+}
+
 // -- Phase 29: KV Pack ATDD ──────────────────────────────────────────────────
 
 /// ATDD 30: Write a KV Pack, all layers stored atomically.
@@ -944,6 +1027,55 @@ fn test_multiple_packs_retrieval_ranking() {
     assert_eq!(results.len(), 2);
     // Pack 0 (cooking) should rank first.
     assert_eq!(results[0].pack.layers[0].data[0] as i32, 1, "Cooking pack should rank first");
+}
+
+fn test_pack(layer_values: &[f32], retrieval_key: Vec<f32>) -> KVPack {
+    KVPack {
+        id: 0,
+        owner: 1,
+        retrieval_key,
+        layers: layer_values
+            .iter()
+            .enumerate()
+            .map(|(layer_idx, value)| KVLayerPayload {
+                layer_idx: layer_idx as u16,
+                data: vec![*value; 16],
+            })
+            .collect(),
+        salience: 80.0,
+    }
+}
+
+#[test]
+fn test_mem_read_pack_uses_per_token_pipeline_before_slb() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, spike_key) = top5_broad_match_fixture();
+
+    engine.mem_write_pack(&test_pack(&[10.0, 10.1, 10.2], broad_key)).unwrap();
+    engine.mem_write_pack(&test_pack(&[20.0, 20.1, 20.2], spike_key)).unwrap();
+
+    let results = engine.mem_read_pack(&query, 1, Some(1)).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].pack.layers[0].data[0] as i32, 10,
+        "mem_read_pack should use per-token Top5Avg scoring before SLB fallback"
+    );
+}
+
+#[test]
+fn test_mem_read_pack_deduplicates_layer_cells_by_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    engine.mem_write_pack(&test_pack(&[30.0, 31.0, 32.0, 33.0], broad_key)).unwrap();
+
+    let results = engine.mem_read_pack(&query, 5, Some(1)).unwrap();
+
+    assert_eq!(results.len(), 1, "One multi-layer pack should appear once, not once per layer");
+    assert_eq!(results[0].pack.layers.len(), 4);
 }
 
 /// ATDD 34: Pack governance — importance decays across the whole pack.

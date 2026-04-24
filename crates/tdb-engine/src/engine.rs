@@ -6,10 +6,12 @@
 //! ## Retrieval Pipeline (Chain of Responsibility)
 //!
 //! ```text
-//! query → SLB (INT8, sub-5μs) → Vamana (graph ANN) → BruteForce (exact)
+//! encoded query → PerTokenRetriever(Top5Avg) → SLB fallback → Vamana/BruteForce fallback
+//! plain query   → SLB hot cache → RetrieverPipeline fallback
 //! ```
 //!
-//! Each stage returns results or passes to the next. Results are merged by `CellId`.
+//! Encoded per-token keys are mean-pooled before they enter fixed-dimension
+//! stages such as SLB, Vamana, and brute-force fallback.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -78,15 +80,17 @@ impl Retriever for VamanaAdapter {
         k: usize,
         _owner_filter: Option<OwnerId>,
     ) -> Vec<RetrievalResult> {
+        let query = mean_pool_key(query_key);
         self.inner
-            .query(query_key, k)
+            .query(&query, k)
             .into_iter()
             .map(|(cell_id, score)| RetrievalResult { cell_id, owner: 0, score })
             .collect()
     }
 
     fn insert(&mut self, cell_id: CellId, _owner: OwnerId, key: &[f32]) {
-        self.inner.insert(cell_id, key);
+        let key = mean_pool_key(key);
+        self.inner.insert(cell_id, &key);
     }
 
     fn len(&self) -> usize {
@@ -461,8 +465,11 @@ impl Engine {
 
     /// Read the top-k most relevant cells for a query key.
     ///
-    /// Two-phase retrieval: SLB (hot cache) then [`RetrieverPipeline`] (cold path).
-    /// Results are merged, deduplicated, scored with recency decay, and filtered by owner.
+    /// Encoded per-token queries run the [`RetrieverPipeline`] first so
+    /// `PerTokenRetriever(Top5Avg)` scores the raw token matrix. The SLB uses
+    /// mean-pooled summaries only as a fallback/hot cache because it requires
+    /// fixed-size vectors. Results are merged, deduplicated, scored with
+    /// recency decay, and filtered by owner.
     pub fn mem_read(
         &mut self,
         query_key: &[f32],
@@ -856,7 +863,8 @@ impl Engine {
         let cell_ids: Vec<CellId> = self.pool.iter_cell_ids().collect();
         for cell_id in &cell_ids {
             let cell = self.pool.get(*cell_id)?;
-            vamana.insert(cell.id, &cell.key);
+            let key = mean_pool_key(&cell.key);
+            vamana.insert(cell.id, &key);
         }
         vamana.build();
 

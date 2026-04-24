@@ -1,22 +1,26 @@
 //! Per-token retriever — Inverted Multi-Key Index pattern.
 //!
-//! Stores individual token K vectors (INT8 quantized) mapped back to their
-//! parent `CellId`. Retrieval uses max-sim aggregation: for each cell, the
-//! score is the maximum dot product across all query-token / stored-token
-//! pairs. This preserves token-level discriminative signal that mean-pooling
-//! destroys.
+//! Stores individual token vectors (INT8 quantized) mapped back to their
+//! parent `CellId`. Retrieval uses a pluggable scoring [`ScoringMode`]:
+//! max-sim for exact token spikes, or Top-5 average for broader matches across
+//! multiple query/stored token pairs. This preserves token-level discriminative
+//! signal that mean-pooling destroys.
 //!
-//! Based on FIER (2025) and max-sim scoring, adapted for
-//! the `Retriever` trait.
+//! Based on the Inverted Multi-Key Index pattern from latent retrieval systems,
+//! adapted for the `Retriever` trait.
 //!
 //! ## Encoding Convention
 //!
-//! Per-token keys are packed into a flat `&[f32]` slice with a 2-float header:
+//! Per-token keys are packed into a flat `&[f32]` slice with a 64-float
+//! Q4-safe header:
 //!
 //! ```text
-//! [token_count as f32::from_bits(N)]
-//! [dimension as f32::from_bits(D)]
-//! [N × D floats: concatenated per-token K vectors]
+//! [0]      sentinel = -1e9
+//! [1..31]  zeros
+//! [32]     token_count
+//! [33]     dimension
+//! [34..63] zeros
+//! [64..]   N × D floats: concatenated per-token vectors
 //! ```
 
 use std::collections::HashMap;
@@ -153,14 +157,27 @@ pub fn decode_per_token_keys(encoded: &[f32]) -> Option<(usize, usize, &[f32])> 
     }
 
     // Metadata in group 1 (indices 32, 33).
-    let n = encoded[32].round() as usize;
+    let encoded_n = encoded[32].round() as usize;
     let d = encoded[33].round() as usize;
 
-    if n == 0 || d == 0 {
+    if d == 0 {
         return None;
     }
 
     let data = &encoded[HEADER_SIZE..];
+    let n = if encoded_n == 0 {
+        if !data.len().is_multiple_of(d) {
+            return None;
+        }
+        data.len() / d
+    } else {
+        encoded_n
+    };
+
+    if n == 0 {
+        return None;
+    }
+
     if data.len() != n * d {
         return None;
     }

@@ -2,7 +2,9 @@ use std::time::{Duration, Instant};
 
 use tdb_retrieval::attention::BruteForceRetriever;
 use tdb_retrieval::int8_quant::Int8Quantizer;
-use tdb_retrieval::per_token::{PerTokenRetriever, ScoringMode, encode_per_token_keys};
+use tdb_retrieval::per_token::{
+    PerTokenRetriever, ScoringMode, decode_per_token_keys, encode_per_token_keys,
+};
 use tdb_retrieval::pipeline::RetrieverPipeline;
 use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::simd_distance::DotProduct;
@@ -609,6 +611,25 @@ fn test_per_token_insert_and_exact_match() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].cell_id, 42);
     assert!(results[0].score > 0.0);
+}
+
+#[test]
+fn test_decode_per_token_infers_count_when_q4_rounds_metadata_to_zero() {
+    let n = 8usize;
+    let d = 128usize;
+    let mut encoded = vec![0.0f32; 64 + n * d];
+    encoded[0] = -1.0e9;
+    encoded[32] = 0.0; // Simulates Q4 round-trip crushing a small token count.
+    encoded[33] = d as f32;
+    for (idx, value) in encoded[64..].iter_mut().enumerate() {
+        *value = (idx as f32 * 0.01).sin();
+    }
+
+    let decoded = decode_per_token_keys(&encoded).expect("decoder should infer n from data len");
+
+    assert_eq!(decoded.0, n);
+    assert_eq!(decoded.1, d);
+    assert_eq!(decoded.2.len(), n * d);
 }
 
 /// ATDD 2: Per-token beats mean-pool on discriminative queries.

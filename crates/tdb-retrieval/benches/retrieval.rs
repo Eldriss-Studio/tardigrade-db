@@ -1,6 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use tdb_retrieval::int8_quant::Int8Quantizer;
+use tdb_retrieval::per_token::{PerTokenRetriever, ScoringMode, encode_per_token_keys};
+use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::simd_distance::DotProduct;
 
 fn bench_f32_dot(c: &mut Criterion) {
@@ -52,5 +54,51 @@ fn bench_slb_query(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_f32_dot, bench_int8_dot, bench_slb_query);
+fn token_vector(dim: usize, cell_id: usize, token_id: usize) -> Vec<f32> {
+    (0..dim)
+        .map(|d| {
+            let phase = (cell_id * 31 + token_id * 17 + d * 7) as f32 * 0.013;
+            phase.sin() * 0.5 + phase.cos() * 0.25
+        })
+        .collect()
+}
+
+fn encoded_cell(dim: usize, cell_id: usize, tokens_per_cell: usize) -> Vec<f32> {
+    let tokens: Vec<Vec<f32>> =
+        (0..tokens_per_cell).map(|token_id| token_vector(dim, cell_id, token_id)).collect();
+    let refs: Vec<&[f32]> = tokens.iter().map(Vec::as_slice).collect();
+    encode_per_token_keys(&refs)
+}
+
+fn bench_per_token_top5avg_query(c: &mut Criterion) {
+    // Template Method benchmark flow:
+    // build deterministic encoded corpus → populate strategy → query → measure.
+    let mut group = c.benchmark_group("PerTokenRetriever Top5Avg query — encoded per-token keys");
+    let dim = 128;
+    let tokens_per_cell = 8;
+
+    for cell_count in [100usize, 1_000, 10_000] {
+        let mut retriever = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
+        for cell_id in 0..cell_count {
+            let encoded = encoded_cell(dim, cell_id, tokens_per_cell);
+            retriever.insert(cell_id as u64, 1, &encoded);
+        }
+        let query = encoded_cell(dim, cell_count / 2, tokens_per_cell);
+
+        group.bench_function(BenchmarkId::new("cells", cell_count), |bench| {
+            bench.iter(|| {
+                let _ = retriever.query(black_box(&query), 5, Some(1));
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_f32_dot,
+    bench_int8_dot,
+    bench_slb_query,
+    bench_per_token_top5avg_query
+);
 criterion_main!(benches);
