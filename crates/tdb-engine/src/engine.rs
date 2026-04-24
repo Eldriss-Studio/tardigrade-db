@@ -725,18 +725,38 @@ impl Engine {
         k: usize,
         owner_filter: Option<OwnerId>,
     ) -> Result<Vec<PackReadResult>> {
-        // Search using the retrieval pipeline (same as mem_read).
+        // Per-token queries need pipeline first (same logic as mem_read).
+        let is_per_token = decode_per_token_keys(query_key).is_some();
         let slb_query = mean_pool_key(query_key);
-        let mut candidates =
-            if self.slb.is_empty() { Vec::new() } else { self.slb.query(&slb_query, k * 2) };
+        let mut candidates = Vec::new();
 
-        if candidates.len() < k {
-            let cold = self.pipeline.query(query_key, k * 2, owner_filter);
-            let seen: std::collections::HashSet<CellId> =
-                candidates.iter().map(|r| r.cell_id).collect();
+        if is_per_token {
+            // Pipeline first for per-token scoring, then SLB as fallback.
+            let cold = self.pipeline.query(query_key, k * 4, owner_filter);
+            let mut seen: std::collections::HashSet<CellId> = std::collections::HashSet::new();
             for r in cold {
-                if !seen.contains(&r.cell_id) {
+                if seen.insert(r.cell_id) {
                     candidates.push(r);
+                }
+            }
+            if candidates.len() < k && !self.slb.is_empty() {
+                for r in self.slb.query(&slb_query, k * 2) {
+                    if seen.insert(r.cell_id) {
+                        candidates.push(r);
+                    }
+                }
+            }
+        } else {
+            candidates =
+                if self.slb.is_empty() { Vec::new() } else { self.slb.query(&slb_query, k * 2) };
+            if candidates.len() < k {
+                let cold = self.pipeline.query(query_key, k * 2, owner_filter);
+                let seen: std::collections::HashSet<CellId> =
+                    candidates.iter().map(|r| r.cell_id).collect();
+                for r in cold {
+                    if !seen.contains(&r.cell_id) {
+                        candidates.push(r);
+                    }
                 }
             }
         }
