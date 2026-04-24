@@ -30,23 +30,22 @@ class HuggingFaceKVHook(TardigradeHook):
     Requires the model object for access to q_proj/k_proj weights.
     """
 
-    def __init__(self, engine, owner=1, k=5, model_config=None, model=None):
+    def __init__(self, engine, owner=1, k=5, model_config=None, model=None, use_hidden_states=False):
         self.engine = engine
         self.owner = owner
         self.k = k
         self.model = model
+        self.use_hidden_states = use_hidden_states
 
         if model_config is not None:
+            self.hidden_size = model_config.hidden_size
             self.num_kv_heads = getattr(model_config, "num_key_value_heads", None)
             if self.num_kv_heads is None:
                 self.num_kv_heads = model_config.num_attention_heads
             self.num_q_heads = model_config.num_attention_heads
-            # head_dim: prefer explicit config, else derive from hidden_size
             self.head_dim = getattr(model_config, "head_dim", model_config.hidden_size // self.num_q_heads)
             self.gqa_ratio = self.num_q_heads // self.num_kv_heads
-            # For per-token encoding: K dim (what we store)
             self.kv_dim = self.num_kv_heads * self.head_dim
-            # Q dim after GQA expansion (what we query with)
             self.q_dim = self.num_q_heads * self.head_dim
         else:
             self.num_kv_heads = None
@@ -139,23 +138,28 @@ class HuggingFaceKVHook(TardigradeHook):
         return np.concatenate([k_flat.ravel(), v_flat.ravel()])
 
     def on_generate(self, layer, past_key_values=None, hidden_states=None, model_hidden_states=None):
-        """Store per-token K projections (without RoPE, skip position 0).
+        """Store per-token vectors (skip position 0).
 
-        Requires either model_hidden_states (from output_hidden_states=True)
-        or falls back to past_key_values K (with RoPE, less ideal).
+        Mode depends on use_hidden_states:
+          False: stores K projections (without RoPE) for Q*K scoring
+          True:  stores raw hidden states for symmetric scoring
         """
-        if past_key_values is None:
+        if past_key_values is None and model_hidden_states is None:
             return WriteDecision(should_write=False)
 
-        # Try K projection without RoPE (preferred)
-        k_tokens = None
+        tokens = None
         if model_hidden_states is not None:
             h = model_hidden_states[0] if model_hidden_states.ndim == 3 else model_hidden_states
-            k_tokens = self._project_k(h, layer)
 
-        if k_tokens is not None and len(k_tokens) > 0:
-            per_token_key = self._encode_per_token(k_tokens, k_tokens.shape[1])
-        else:
+            if self.use_hidden_states:
+                # Raw hidden states — symmetric, no projection
+                tokens = h[1:].detach().cpu().numpy().astype(np.float32)
+            else:
+                tokens = self._project_k(h, layer)
+
+        if tokens is not None and len(tokens) > 0:
+            per_token_key = self._encode_per_token(tokens, tokens.shape[1])
+        elif past_key_values is not None:
             # Fallback: use K from cache (has RoPE, skip pos 0)
             lc = past_key_values.layers[layer]
             k = lc.keys[0]
@@ -164,6 +168,8 @@ class HuggingFaceKVHook(TardigradeHook):
             k_flat = k.permute(1, 0, 2).reshape(s, kv_dim)[1:].detach().cpu().numpy().astype(np.float32)
             k_flat = self._expand_k_tokens_for_gqa(k_flat)
             per_token_key = self._encode_per_token(k_flat, k_flat.shape[1])
+        else:
+            return WriteDecision(should_write=False)
 
         flat_kv = self._extract_kv_payload(past_key_values, layer)
 
@@ -178,23 +184,26 @@ class HuggingFaceKVHook(TardigradeHook):
         )
 
     def on_prefill(self, layer, past_key_values=None, query_states=None, model_hidden_states=None):
-        """Query with per-token Q projections (Q*K scoring).
+        """Query with per-token vectors.
 
-        Uses Q projection (without RoPE) for queries against stored K vectors.
-        Query keys keep the full Q-head dimensionality. Stored K retrieval
-        keys are expanded to that same dimensionality on write.
+        Mode depends on use_hidden_states:
+          False: Q projection for Q*K scoring
+          True:  raw hidden states for symmetric scoring
         """
         if past_key_values is None and model_hidden_states is None:
             return []
 
-        # Get Q projection (preferred) or fallback to K
-        q_tokens = None
+        tokens = None
         if model_hidden_states is not None:
             h = model_hidden_states[0] if model_hidden_states.ndim == 3 else model_hidden_states
-            q_tokens = self._project_q(h, layer)
 
-        if q_tokens is not None and len(q_tokens) > 0:
-            query_key = self._encode_per_token(q_tokens, q_tokens.shape[1])
+            if self.use_hidden_states:
+                tokens = h[1:].detach().cpu().numpy().astype(np.float32)
+            else:
+                tokens = self._project_q(h, layer)
+
+        if tokens is not None and len(tokens) > 0:
+            query_key = self._encode_per_token(tokens, tokens.shape[1])
         elif past_key_values is not None:
             # Fallback: use K from cache
             lc = past_key_values.layers[layer]

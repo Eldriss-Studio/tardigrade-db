@@ -202,9 +202,13 @@ impl Engine {
         }
 
         // Rebuild derived state from persisted cells (Memento pattern).
-        // Pipeline: PerTokenRetriever (per-token max-sim) → BruteForceRetriever (fallback).
+        // Pipeline: PerTokenRetriever (Top5Avg) → BruteForceRetriever (fallback).
         let mut pipeline = RetrieverPipeline::new();
-        pipeline.add_stage(Box::new(tdb_retrieval::per_token::PerTokenRetriever::new()));
+        pipeline.add_stage(Box::new(
+            tdb_retrieval::per_token::PerTokenRetriever::with_scoring_mode(
+                tdb_retrieval::per_token::ScoringMode::Top5Avg,
+            ),
+        ));
         pipeline.add_stage(Box::new(tdb_retrieval::attention::BruteForceRetriever::new()));
 
         let mut governance = HashMap::new();

@@ -794,12 +794,12 @@ fn test_engine_per_token_query_cannot_be_satisfied_by_slb_only() {
 
     let target = [1.0f32, 0.0];
     let zero = [0.0f32, 0.0];
-    let negative = [-1.0f32, 0.0];
-    let near_miss = [0.9f32, 0.0];
+    let slight = [0.3f32, 0.0];
+    let near_miss = [0.5f32, 0.0];
 
-    // Cell 0 has the exact token but a poor mean-pooled summary.
-    let encoded_target = encode_per_token_keys(&[&target, &negative, &negative]);
-    // Cell 1 has a better mean-pooled summary but no exact token.
+    // Cell 0 has the exact token + moderate tokens (wins on Top5Avg and MaxSim).
+    let encoded_target = encode_per_token_keys(&[&target, &slight, &slight]);
+    // Cell 1 has a moderate token but no strong match.
     let encoded_slb_trap = encode_per_token_keys(&[&near_miss]);
 
     engine.mem_write(1, 0, &encoded_target, vec![0.0; 2], 50.0, None).unwrap();
