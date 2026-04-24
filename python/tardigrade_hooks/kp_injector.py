@@ -111,10 +111,10 @@ class KnowledgePackStore:
         hidden = query_out.hidden_states[self.query_layer][0]
         h_tokens = hidden[1:].numpy().astype(np.float32)
         n_tok = len(h_tokens)
-        header = np.zeros(32, dtype=np.float32)
-        header[0] = -1.0e9
-        header[1] = float(n_tok)
-        header[2] = float(self.hidden_size)
+        header = np.zeros(64, dtype=np.float32)
+        header[0] = -1.0e9  # sentinel in group 0
+        header[32] = float(n_tok)  # n_tokens in group 1
+        header[33] = float(self.hidden_size)  # dim in group 1
         query_key = np.concatenate([header, h_tokens.ravel()])
 
         # Retrieve via Rust pack API (returns complete pack with all layers)
