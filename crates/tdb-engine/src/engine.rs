@@ -230,20 +230,15 @@ impl Engine {
         for cell_id in &cell_ids {
             let cell = pool.get(*cell_id)?;
 
-            // Pack payload cells (non-retrieval layers of a pack) should NOT be indexed
-            // for retrieval — only the retrieval key cell (PACK_RETRIEVAL_LAYER) or
-            // regular (non-pack) cells should be indexed.
-            let is_pack_payload = cell.token_span.0 > 0 && cell.layer != PACK_RETRIEVAL_LAYER;
-
-            if !is_pack_payload {
-                let slb_key = mean_pool_key(&cell.key);
-                if key_dim.is_none() {
-                    key_dim = Some(slb_key.len());
-                }
-
-                pipeline.insert(cell.id, cell.owner, &cell.key);
-                slb_entries.push((cell.id, cell.owner, slb_key));
+            // Index all cells for retrieval (including pack payload cells).
+            // This gives the scorer more candidates for discrimination.
+            let slb_key = mean_pool_key(&cell.key);
+            if key_dim.is_none() {
+                key_dim = Some(slb_key.len());
             }
+
+            pipeline.insert(cell.id, cell.owner, &cell.key);
+            slb_entries.push((cell.id, cell.owner, slb_key));
 
             let scorer = ImportanceScorer::new(cell.meta.importance);
             let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
@@ -658,15 +653,13 @@ impl Engine {
         let mut tier_sm = TierStateMachine::new();
         tier_sm.evaluate(scorer.importance());
 
-        // Store mean-pooled key in the cell (survives Q4). The per-token encoded
-        // key is only used for in-memory retriever insert, not persisted.
-        let cell_key = mean_pool_key(&pack.retrieval_key);
+        // Store full per-token encoded key in the cell (for PerTokenRetriever scoring).
         cells.push(
             MemoryCellBuilder::new(
                 retrieval_cell_id,
                 pack.owner,
                 PACK_RETRIEVAL_LAYER,
-                cell_key,
+                pack.retrieval_key.clone(),
                 vec![], // no value for retrieval cell
             )
             .importance(scorer.importance())
@@ -683,13 +676,12 @@ impl Engine {
             let cell_id = self.next_id;
             self.next_id += 1;
 
-            let layer_cell_key = mean_pool_key(&pack.retrieval_key);
             cells.push(
                 MemoryCellBuilder::new(
                     cell_id,
                     pack.owner,
                     layer.layer_idx,
-                    layer_cell_key,
+                    pack.retrieval_key.clone(),
                     layer.data.clone(),
                 )
                 .importance(scorer.importance())
@@ -705,10 +697,14 @@ impl Engine {
         // Persist atomically (single fsync).
         self.pool.append_batch(&cells)?;
 
-        // Index retrieval key for search.
-        self.pipeline.insert(retrieval_cell_id, pack.owner, &pack.retrieval_key);
+        // Index retrieval key for search — insert for EVERY cell in the pack
+        // (not just the retrieval cell) to give the scorer more candidates.
+        // This matches the old 28-cells-per-memory approach that achieves 8/10.
         let slb_key = mean_pool_key(&pack.retrieval_key);
-        self.slb.insert(retrieval_cell_id, pack.owner, &slb_key);
+        for &cid in &cell_ids {
+            self.pipeline.insert(cid, pack.owner, &pack.retrieval_key);
+            self.slb.insert(cid, pack.owner, &slb_key);
+        }
 
         // Governance for the pack (tracked on retrieval cell).
         self.governance
@@ -749,16 +745,21 @@ impl Engine {
             .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut results = Vec::with_capacity(k);
+        let mut seen_packs: std::collections::HashSet<PackId> = std::collections::HashSet::new();
+
         for rr in candidates {
-            // Find the pack that contains this retrieval cell.
-            let pack_entry = self
-                .pack_index
-                .iter()
-                .find(|(_, cell_ids)| cell_ids.first().copied() == Some(rr.cell_id));
+            // Find the pack that contains this cell (any cell in the pack).
+            let pack_entry =
+                self.pack_index.iter().find(|(_, cell_ids)| cell_ids.contains(&rr.cell_id));
 
             let Some((&found_pack_id, cell_ids)) = pack_entry else {
                 continue;
             };
+
+            // Deduplicate: skip if this pack already in results.
+            if !seen_packs.insert(found_pack_id) {
+                continue;
+            }
 
             // Owner filter.
             if owner_filter.is_some_and(|f| f != rr.owner) {
