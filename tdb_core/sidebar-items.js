@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["error","memory_cell","synaptic_bank","types"]};
+window.SIDEBAR_ITEMS = {"mod":["error","kv_pack","memory_cell","synaptic_bank","types"]};

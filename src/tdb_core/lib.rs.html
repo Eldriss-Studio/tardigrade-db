@@ -120,12 +120,14 @@
 <a href=#85 id=85 data-nosnippet>85</a></span><span class="attr">#![deny(unsafe_code)]
 <a href=#86 id=86 data-nosnippet>86</a>
 <a href=#87 id=87 data-nosnippet>87</a></span><span class="kw">pub mod </span>error;
-<a href=#88 id=88 data-nosnippet>88</a><span class="kw">pub mod </span>memory_cell;
-<a href=#89 id=89 data-nosnippet>89</a><span class="kw">pub mod </span>synaptic_bank;
-<a href=#90 id=90 data-nosnippet>90</a><span class="kw">pub mod </span>types;
-<a href=#91 id=91 data-nosnippet>91</a>
-<a href=#92 id=92 data-nosnippet>92</a><span class="kw">pub use </span>error::TardigradeError;
-<a href=#93 id=93 data-nosnippet>93</a><span class="kw">pub use </span>memory_cell::MemoryCell;
-<a href=#94 id=94 data-nosnippet>94</a><span class="kw">pub use </span>synaptic_bank::SynapticBankEntry;
-<a href=#95 id=95 data-nosnippet>95</a><span class="kw">pub use </span>types::{CellId, LayerId, OwnerId, SynapticId, TagBits, Tier};
+<a href=#88 id=88 data-nosnippet>88</a><span class="kw">pub mod </span>kv_pack;
+<a href=#89 id=89 data-nosnippet>89</a><span class="kw">pub mod </span>memory_cell;
+<a href=#90 id=90 data-nosnippet>90</a><span class="kw">pub mod </span>synaptic_bank;
+<a href=#91 id=91 data-nosnippet>91</a><span class="kw">pub mod </span>types;
+<a href=#92 id=92 data-nosnippet>92</a>
+<a href=#93 id=93 data-nosnippet>93</a><span class="kw">pub use </span>error::TardigradeError;
+<a href=#94 id=94 data-nosnippet>94</a><span class="kw">pub use </span>kv_pack::{KVLayerPayload, KVPack, PackId, PackReadResult};
+<a href=#95 id=95 data-nosnippet>95</a><span class="kw">pub use </span>memory_cell::MemoryCell;
+<a href=#96 id=96 data-nosnippet>96</a><span class="kw">pub use </span>synaptic_bank::SynapticBankEntry;
+<a href=#97 id=97 data-nosnippet>97</a><span class="kw">pub use </span>types::{CellId, LayerId, OwnerId, SynapticId, TagBits, Tier};
 </code></pre></div></section></main></body></html>
