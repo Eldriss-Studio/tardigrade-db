@@ -264,28 +264,101 @@ Q4 quantization did not destroy the hidden state signal. The Top5Avg scorer surv
 - Storing K projections (not hidden states) was a wrong turn — hidden states are better for cross-sequence retrieval
 - Per-token scoring with top-5 averaging outperforms max-sim and all Q*K variants
 
-## What's Not Yet Tested
+## KV Injection Validation (April 23-24, 2026)
 
-- **Vague queries** — All test queries use specific vocabulary that overlaps with stored memories ("The sourdough starter I named Fernando"). Real agent queries would be vaguer ("What have I been cooking lately?"). This is the critical unknown.
-- **Storage efficiency** — A 30-token memory stored as hidden states is ~90KB after Q4 vs ~50 bytes as text. Whether the latent approach's speed advantage on injection justifies 1000x storage overhead hasn't been measured.
-- **Injection quality** — The injection pipeline (Phase 18) exists but hasn't been tested with hidden-state-retrieved memories on actual generation quality.
-- **False positive calibration** — The diagnostic showed 10% false positive rate on negative queries. A production system needs a score threshold to say "I don't remember."
-- **Layer sensitivity** — The current layer choice (67% depth) works but the diagnostic showed other layers can be better or worse. No automatic layer selection exists.
+### Direct Injection: Byte-Identical to Text RAG
+
+The Knowledge Packs paper (arXiv 2604.03270) proves that for causal transformers, KV injection is mathematically equivalent to text-in-prompt. We confirmed this empirically:
+
+| Path | Correct | Output |
+|---|---|---|
+| Text RAG (paste memory into prompt) | 8/10 | Reference |
+| KV Injection (inject past_key_values) | 8/10 | **Byte-identical to Text RAG** |
+
+Same 2 misses on both paths (model limitation, not injection limitation). Every response is character-for-character identical between injection and text RAG.
+
+**Requirements for correct injection** (discovered through failures):
+1. Wrap facts in chat template before computing KV cache
+2. Clone the DynamicCache before injection (avoid in-place mutation)
+3. Let HuggingFace handle position_ids automatically (don't set manually)
+4. Generate enough tokens (Qwen3 needs 80+ for thinking phase)
+
+### Pipeline Fidelity: Q4 Survives
+
+Stage-by-stage diagnostic (`experiments/kv_pipeline_debug.py`):
+
+| Stage | Cosine Similarity | Correct? |
+|---|---|---|
+| Direct injection (no storage) | 1.000 | Yes |
+| Extract + reconstruct (no Q4) | 1.000 | Yes |
+| Through TardigradeDB (Q4 round-trip) | **0.999** | **Yes** |
+
+Q4 quantization does not destroy the KV signal. The full pipeline — store, Q4 quantize, persist, read, dequantize, reshape, inject — produces the correct answer.
+
+### Cost Measurement
+
+Measured on 10 novel facts through full TardigradeDB engine pipeline (Qwen3-0.6B):
+
+| Metric | Injection | Text RAG |
+|---|---|---|
+| Correct | 8/10 | 8/10 |
+| Total prompt tokens | 235 | 438 |
+| Avg tokens per query | 23 | 43 |
+| **Token savings** | **46%** | baseline |
+
+| Metric | KV Cache (Q4) | Raw Text |
+|---|---|---|
+| Total storage | 7,300 KB | 0.6 KB |
+| Per memory | 730 KB | 65 bytes |
+| **Storage ratio** | **11,402x larger** | baseline |
+
+**The trade-off:** Each saved prompt token costs ~37 KB of disk storage. KV injection saves 46% of prompt tokens at the cost of 11,000x more disk space per memory.
+
+**When this trade-off makes sense:**
+- Long conversations where context window is scarce (8K-32K models)
+- Agents with many memories retrieved per turn (5+ memories × 50+ tokens each)
+- Scenarios where re-tokenization latency matters (real-time generation)
+- NOT for small memory counts or unlimited context windows
+
+### What Went Wrong Before
+
+The earlier 0/10 injection results had three causes:
+1. **Mean-pooled hidden states as KV values** — hidden states are not KV cache tensors. Reshaping them to KV format crashes the attention mechanism.
+2. **No chat template** — instruction-tuned models (Qwen3, Llama) require their special tokens. Raw text without template causes 6-7% accuracy loss (Knowledge Packs finding).
+3. **Too few generation tokens** — Qwen3 starts with `<think>` before answering. 30 tokens cut off before the answer.
+
+## What's Now Validated (Complete List)
+
+- **Retrieval:** Hidden states + Top5Avg = 100% recall at 100 memories (96% with vague queries)
+- **Injection:** KV injection = byte-identical to text RAG (8/10 on novel facts, same as RAG)
+- **Pipeline:** Q4 quantization preserves KV signal (cosine 0.999) through full storage round-trip
+- **Token savings:** 46% fewer prompt tokens consumed vs text RAG
+- **No other system ships this:** vLLM, SGLang, LMCache only support prefix caching, not cross-context KV injection
+
+## What's Not Yet Solved
+
+- **Storage efficiency** — 730 KB per memory vs 65 bytes text (11,402x). May need FP16 or selective layer storage to reduce.
+- **Vague query retrieval** — 87% vs RAG's 100% on natural queries
+- **False positive calibration** — 10% false positive rate on negative queries
+- **End-to-end automation** — Working pipeline is manual scripts, not automated through engine API
+- **Multi-memory composition** — Knowledge Packs shows naive concatenation of multiple KV caches fails; needs sequential recomputation
 
 ## Experiment Scripts
 
 | Script | What it tests |
 |---|---|
-| `experiments/scale_100_hidden_top5.py` | **Hidden + Top5Avg through engine** — the 100% result |
+| `experiments/kv_pipeline_debug.py` | **Pipeline diagnostic** — stage-by-stage fidelity (all stages PASS) |
+| `experiments/injection_vs_text_rag.py` | Injection vs text RAG on novel facts |
+| `experiments/scale_100_hidden_top5.py` | Hidden + Top5Avg through engine — 100% retrieval |
+| `experiments/scale_100_vague_vs_rag.py` | Vague queries — latent 96% vs RAG 100% |
 | `experiments/scale_100_qk_diagnostics.py` | Full diagnostic suite — rank depth, oracle, layer/head sweep |
-| `experiments/scale_100_qk.py` | Q*K retrieval at 100-memory density (40% baseline) |
-| `experiments/scale_100_rag_baseline.py` | Traditional embedding RAG baseline (100%) |
-| `experiments/corpus_100.py` | 100-memory corpus (10 domains x 10 memories) |
-| `experiments/sonia_per_token_pipeline.py` | Q*K pipeline on 16 memories |
+| `experiments/novel_facts_corpus.py` | 10 invented facts for injection testing |
+| `experiments/corpus_100.py` | 100-memory corpus (10 domains × 10 memories + 15 vague queries) |
 
 ## Next Steps
 
-1. **Vague query test** — Add 10-15 natural queries ("What have I been cooking?", "How is Lucia?") alongside specific ones. Run both hidden state retrieval AND traditional RAG on the same queries. This is the test that determines whether the latent approach works for real agent use.
-2. **Storage efficiency measurement** — Compare: tensor storage size vs text size, injection latency vs re-tokenization latency. Quantify the actual trade-off.
-3. **False positive calibration** — Establish a score threshold for "I don't remember" based on the negative query score distribution.
-4. **Injection quality test** — Verify that hidden-state-retrieved memories, when injected via the Phase 18 MemoryInjector, improve generation quality vs text re-tokenization.
+1. **Storage reduction** — 730 KB per memory is impractical at scale. Investigate: selective layer storage (not all 28 layers), INT8 instead of Q4 for KV, or FP16 for injection-critical layers.
+2. **End-to-end automation** — Wire the working Knowledge Packs-style injection (chat template, clone, inject) into the MemoryInjector so it's not manual experiment code.
+3. **Multi-memory injection** — Knowledge Packs found naive concatenation of multiple KV caches fails (-6%). Their solution: sequential recomputation. Test whether TardigradeDB's single-memory injection scales to 5 memories per query.
+4. **False positive calibration** — Score threshold for "I don't remember."
+5. **Larger model validation** — Current results on Qwen3-0.6B. Test on 3B+ to verify scaling.

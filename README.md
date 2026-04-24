@@ -149,7 +149,20 @@ The retrieval pipeline now chains: **SLB (mean-pooled hot cache) → PerTokenRet
 
 All 30 queries found at rank #1. No gravity well. 97ms average latency. Q4 quantization preserved the signal.
 
-**Open question:** These queries use specific vocabulary ("The sourdough starter I named Fernando"). Vague queries ("What have I been cooking?") are untested. This is the next experiment.
+Vague queries ("What have I been cooking?"): 87% latent vs 100% RAG (tested, 2 very generic queries missed).
+
+### KV Injection: Byte-Identical to Text RAG (April 24, 2026)
+
+KV injection through the full TardigradeDB pipeline (Q4 quantized, persisted to disk, read back, reconstructed) produces **byte-identical output** to having the text in the prompt:
+
+| Path | Correct (10 novel facts) | Prompt Tokens |
+|------|--------------------------|---------------|
+| Text RAG | 8/10 | 438 total (43 avg) |
+| **KV Injection (through engine)** | **8/10** | **235 total (23 avg)** |
+
+Same 2 misses on both paths. Identical responses character-for-character. **46% fewer prompt tokens** with injection.
+
+Storage trade-off: 730 KB per memory (Q4 quantized KV cache) vs 65 bytes per memory (text). KV injection trades disk space for context window space — relevant when context windows are scarce or memories are numerous.
 
 ### Why Python Exists in This Project
 
