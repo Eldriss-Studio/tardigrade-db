@@ -174,32 +174,69 @@ This comparison is retrieval-only. It does not test whether KV injection after r
 - **Signal-to-noise is near zero** — cannot threshold "I don't remember"
 - **Within-domain retrieval is weak** (35%) — shared vocabulary between domains causes confusion
 
-## What Would Need to Change
+## Q*K Signal Audit (April 23, 2026)
 
-The retrieval scoring needs to move from raw dot product to something closer to actual attention:
+A comprehensive diagnostic audit answered the question: is the correct memory present in the latent signal, or is Q*K itself not good enough?
 
-1. **Softmax normalization** — attention uses `softmax(Q*K^T / sqrt(d_k))`, not raw `Q*K`. The softmax sharpens the score distribution, making the best match stand out instead of being lost in a sea of high-magnitude noise.
-2. **Per-head scoring** — different attention heads encode different relationships. Concatenating all heads into one vector and doing a single dot product loses the head-specific signal.
-3. **Score normalization by memory length** — longer memories have more tokens and more chances for spurious high-scoring matches. Normalizing by token count would reduce this bias.
+### Rank-Depth Analysis
 
-These are retrieval engine changes in Rust (`tdb-retrieval`), not model or storage changes.
+The correct memories ARE in the signal — they're just ranked too low with the current scorer:
+
+| Cutoff | Recall |
+|---|---|
+| R@5 (current) | 63.3% |
+| R@20 | 76.7% |
+| R@50 | 93.3% |
+| R@100 | **100%** |
+
+Every correct memory is recoverable if you look deep enough. The problem is ranking, not representation.
+
+### Scorer Comparison
+
+| Scorer | Recall@5 | Notes |
+|---|---|---|
+| per_head_max (current best Q*K) | 63.3% | Current engine scorer |
+| cosine_sum_max (ColBERT-style) | 53.3% | Tested and rejected — worse |
+| Latent oracle (best of all scorers) | 80.0% | Signal exists across scorers |
+| Layer 14 colbert_sum | 100% | But 80% negative false positive rate |
+| Best individual head | 100% | But 40% negative false positive rate |
+| **Hidden states + top5_pair_avg** | **100%** | **10% negative false positive rate** |
+| Traditional RAG (e5-small-v2) | 100% | Baseline |
+
+### Key Finding
+
+**Hidden states + top5_pair_avg achieves 100% recall with only 10% false positive rate.** This matches traditional RAG on retrieval quality while using latent representations.
+
+This is ironic — hidden states were abandoned early (31% recall with mean-pooling). But mean-pooling was the problem, not hidden states. Per-token hidden states with top-5 pair averaging achieves perfect recall.
+
+### Diagnostic Verdict
+
+```
+LAYER_OR_HEAD_PROBLEM
+```
+
+The correct memories are present in the latent signal. The current default layer (18) and scorer (per_head_max) are a poor combination. The best path found is hidden states at the right layer with top5_pair_avg scoring.
+
+### What This Means
+
+1. The latent signal is strong enough — no architecture pivot needed
+2. The current scorer and layer choice are the bottleneck, not the approach
+3. The remaining problem is false positive rejection (telling "genuine match" from "not in memory")
+4. Hidden states with smarter aggregation outperform Q/K projections for cross-sequence retrieval
 
 ## Experiment Scripts
 
 | Script | What it tests |
 |---|---|
-| `experiments/sonia_per_token_pipeline.py` | **Q*K pipeline** end-to-end, latest approach |
-| `experiments/sonia_real_kv_cache.py` | K*K real KV cache (mean-pool + per-token) |
-| `experiments/sonia_production_sim.py` | Hidden states comparison |
-| `experiments/maya_kv_tensors_comparison.py` | GPT-2 vs Qwen3, hidden states, Maya |
-| `experiments/sonia_real_kv_3b.py` | Qwen2.5-3B, same as sonia_real_kv_cache |
+| `experiments/scale_100_qk_diagnostics.py` | **Full diagnostic suite** — rank depth, oracle, layer/head sweep, hidden states |
 | `experiments/scale_100_qk.py` | Q*K retrieval at 100-memory density |
-| `experiments/scale_100_qk_diagnostics.py` | Diagnostic scorer comparison for 100-memory collapse |
-| `experiments/scale_100_rag_baseline.py` | Traditional embedding RAG retrieval baseline |
+| `experiments/scale_100_rag_baseline.py` | Traditional embedding RAG baseline |
+| `experiments/sonia_per_token_pipeline.py` | Q*K pipeline end-to-end |
+| `experiments/sonia_real_kv_cache.py` | K*K real KV cache |
+| `experiments/corpus_100.py` | 100-memory corpus (10 domains x 10 memories) |
 
 ## Next Steps
 
-1. **Softmax-normalized scoring** — Replace raw dot product with `softmax(Q*K^T / sqrt(d_k))` in the retriever. This is the single biggest gap between current scoring and real attention.
-2. **Per-head scoring** — Score per attention head instead of concatenating. Different heads capture different relationships.
-3. **Length normalization** — Divide cell scores by token count to prevent longer memories from dominating.
-4. **Re-evaluate at 100 memories** after scoring improvements.
+1. **Validate hidden states + top5_pair_avg through the engine pipeline** on the 100-memory corpus. The diagnostic ran outside the engine — need to confirm it holds through Q4 quantization and the full retrieval path.
+2. **False positive calibration** — The 10% negFP rate means 1 in 10 "I don't remember" queries incorrectly matches. Calibrate a score threshold to reduce this.
+3. **Layer selection** — Test whether the optimal layer can be detected automatically or if it needs to be configured per model.

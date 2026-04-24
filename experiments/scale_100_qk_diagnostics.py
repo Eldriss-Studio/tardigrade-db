@@ -101,6 +101,77 @@ class Metrics:
     shuffled_recall_at_5: float
 
 
+@dataclass(frozen=True)
+class RankDepthResult:
+    recall_at: dict[int, float]
+    ranks_by_query: dict[int, int | None]
+    median_rank: float | None
+    worst_rank: int | None
+    unrecovered_query_ids: list[int]
+    recall_by_qtype: dict[str, dict[int, float]]
+
+
+@dataclass(frozen=True)
+class OracleResult:
+    recall_at: dict[int, float]
+    rescued_by_query: dict[int, str | None]
+    unrescued_query_ids: list[int]
+
+
+@dataclass(frozen=True)
+class LayerSweepResult:
+    layer_fraction: float
+    layer_idx: int
+    best_scorer: str
+    metrics: Metrics
+
+
+@dataclass(frozen=True)
+class HeadSweepResult:
+    head_index: int
+    metrics: Metrics
+
+
+@dataclass(frozen=True)
+class ProjectionPlan:
+    mode: str
+    query_projection: str
+    memory_projection: str
+    scorer_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ProjectionComparison:
+    left_name: str
+    right_name: str
+    recall_at_5_delta: float
+    gravity_delta: int
+    negative_fp_delta: float
+
+
+@dataclass(frozen=True)
+class DecisionReport:
+    verdict: str
+    reason: str
+    key_metrics: dict[str, float]
+
+
+LATENT_SCORERS = (
+    "max_sim",
+    "colbert_sum",
+    "top5_pair_avg",
+    "cosine_max",
+    "cosine_sum_max",
+    "mean_centered",
+    "per_head_max",
+)
+LAYER_SWEEP_FRACTIONS = (0.25, 0.50, 0.67, 0.75, 0.90)
+RUST_RECALL_GATE = 0.70
+RUST_GRAVITY_GATE = 3
+RUST_NEGATIVE_FP_GATE = 0.10
+CURRENT_PER_HEAD_BASELINE_RECALL_AT_5 = 0.633
+
+
 def normalize_rows(values: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     norms = np.linalg.norm(values, axis=1, keepdims=True)
     return values / np.maximum(norms, eps)
@@ -158,6 +229,14 @@ def cosine_max_score(query: TensorItem, memory: TensorItem) -> RankingEntry:
     return RankingEntry(memory.item_id, float(np.max(scores)), trace)
 
 
+def cosine_sum_max_score(query: TensorItem, memory: TensorItem) -> RankingEntry:
+    q = normalize_rows(query.vectors)
+    k = normalize_rows(memory.vectors)
+    scores = pairwise_dot(q, k, scale=False)
+    trace = best_pair_trace(scores, query.tokens, memory.tokens)
+    return RankingEntry(memory.item_id, float(np.max(scores, axis=1).sum()), trace)
+
+
 def centered_max_score(query: TensorItem, memory: TensorItem, center: np.ndarray) -> RankingEntry:
     q = query.vectors - center
     k = memory.vectors - center
@@ -187,6 +266,20 @@ def per_head_max_score(
             best_trace = best_pair_trace(scores, query.tokens, memory.tokens, head)
 
     return RankingEntry(memory.item_id, float(np.mean(head_scores)), best_trace)
+
+
+def per_head_single_score(
+    query: TensorItem,
+    memory: TensorItem,
+    num_heads: int,
+    head_dim: int,
+    head_index: int,
+) -> RankingEntry:
+    q = query.vectors.reshape(query.vectors.shape[0], num_heads, head_dim)
+    k = memory.vectors.reshape(memory.vectors.shape[0], num_heads, head_dim)
+    scores = (q[:, head_index, :] @ k[:, head_index, :].T) / math.sqrt(head_dim)
+    trace = best_pair_trace(scores, query.tokens, memory.tokens, head_index)
+    return RankingEntry(memory.item_id, float(np.max(scores)), trace)
 
 
 def lexical_tokens(text: str) -> list[str]:
@@ -238,6 +331,14 @@ def reciprocal_rank(ranking: list[int], expected: Iterable[int]) -> float:
     return 0.0
 
 
+def expected_rank(ranking: list[RankingEntry], expected: Iterable[int]) -> int | None:
+    expected_set = set(expected)
+    for idx, entry in enumerate(ranking, start=1):
+        if entry.cell_id in expected_set:
+            return idx
+    return None
+
+
 def random_recall_at_k(num_memories: int, expected_count: int, k: int) -> float:
     if expected_count <= 0:
         return 0.0
@@ -260,6 +361,91 @@ def domain_confusion(rows: list[tuple[int, int]]) -> np.ndarray:
     for expected_domain, predicted_domain in rows:
         matrix[expected_domain, predicted_domain] += 1
     return matrix
+
+
+def compute_rank_depth(
+    rankings_by_query: dict[int, list[RankingEntry]],
+    queries: list[TensorItem],
+    cutoffs: tuple[int, ...] = (1, 3, 5, 10, 20, 50, 100),
+    unrecovered_cutoff: int = 50,
+) -> RankDepthResult:
+    positives = [q for q in queries if q.qtype != "negative"]
+    ranks_by_query = {
+        query.item_id: expected_rank(rankings_by_query.get(query.item_id, []), query.expected)
+        for query in positives
+    }
+    found_ranks = [rank for rank in ranks_by_query.values() if rank is not None]
+
+    recall_at = {}
+    for cutoff in cutoffs:
+        hits = sum(rank is not None and rank <= cutoff for rank in ranks_by_query.values())
+        recall_at[cutoff] = hits / max(len(positives), 1)
+
+    recall_by_qtype = {}
+    for qtype in sorted({q.qtype for q in positives}):
+        subset = [q for q in positives if q.qtype == qtype]
+        recall_by_qtype[qtype] = {}
+        for cutoff in cutoffs:
+            hits = sum(
+                ranks_by_query[q.item_id] is not None and ranks_by_query[q.item_id] <= cutoff
+                for q in subset
+            )
+            recall_by_qtype[qtype][cutoff] = hits / max(len(subset), 1)
+
+    unrecovered = [
+        query_id
+        for query_id, rank in ranks_by_query.items()
+        if rank is None or rank > unrecovered_cutoff
+    ]
+
+    return RankDepthResult(
+        recall_at=recall_at,
+        ranks_by_query=ranks_by_query,
+        median_rank=float(np.median(found_ranks)) if found_ranks else None,
+        worst_rank=max(found_ranks) if found_ranks else None,
+        unrecovered_query_ids=unrecovered,
+        recall_by_qtype=recall_by_qtype,
+    )
+
+
+def compute_oracle_result(
+    rankings_by_scorer: dict[str, dict[int, list[RankingEntry]]],
+    queries: list[TensorItem],
+    topks: tuple[int, ...] = (1, 3, 5, 10),
+) -> OracleResult:
+    positives = [q for q in queries if q.qtype != "negative"]
+    recall_at = {}
+    rescued_by_query = {}
+    unrescued_query_ids = []
+
+    for query in positives:
+        best_scorer = None
+        best_rank = None
+        for scorer_name, rankings_by_query in rankings_by_scorer.items():
+            rank = expected_rank(rankings_by_query.get(query.item_id, []), query.expected)
+            if rank is not None and (best_rank is None or rank < best_rank):
+                best_rank = rank
+                best_scorer = scorer_name
+        rescued_by_query[query.item_id] = best_scorer
+        if best_scorer is None:
+            unrescued_query_ids.append(query.item_id)
+
+    for cutoff in topks:
+        hits = 0
+        for query in positives:
+            if any(
+                (rank := expected_rank(rankings_by_query.get(query.item_id, []), query.expected)) is not None
+                and rank <= cutoff
+                for rankings_by_query in rankings_by_scorer.values()
+            ):
+                hits += 1
+        recall_at[cutoff] = hits / max(len(positives), 1)
+
+    return OracleResult(
+        recall_at=recall_at,
+        rescued_by_query=rescued_by_query,
+        unrescued_query_ids=unrescued_query_ids,
+    )
 
 
 def compute_metrics(
@@ -326,6 +512,139 @@ def compute_metrics(
     )
 
 
+def oracle_metrics(oracle: OracleResult) -> Metrics:
+    return Metrics(
+        recall_at=oracle.recall_at,
+        mrr=0.0,
+        unique_top1=0,
+        worst_top1_cell=-1,
+        worst_top1_count=0,
+        negative_false_positive_rate=0.0,
+        score_gap=0.0,
+        shuffled_recall_at_5=0.0,
+    )
+
+
+def layer_fraction_to_index(num_layers: int, fraction: float) -> int:
+    if num_layers <= 0:
+        raise ValueError("num_layers must be positive")
+    clamped = min(max(fraction, 0.0), 1.0)
+    return min(int(num_layers * clamped), num_layers - 1)
+
+
+def select_best_layer(results: list[LayerSweepResult]) -> LayerSweepResult:
+    if not results:
+        raise ValueError("at least one layer result is required")
+    return max(results, key=lambda result: (result.metrics.recall_at.get(5, 0.0), result.metrics.mrr))
+
+
+def order_heads_by_metric(results: list[HeadSweepResult]) -> list[HeadSweepResult]:
+    return sorted(results, key=lambda result: (result.metrics.recall_at.get(5, 0.0), result.metrics.mrr), reverse=True)
+
+
+def projection_plan(mode: str) -> ProjectionPlan:
+    scorer_names = ("max_sim", "top5_pair_avg", "cosine_max", "cosine_sum_max")
+    if mode == "qk":
+        return ProjectionPlan(mode, "q", "k", scorer_names)
+    if mode == "hidden":
+        return ProjectionPlan(mode, "hidden", "hidden", scorer_names)
+    if mode == "hidden_cosine":
+        return ProjectionPlan(mode, "hidden", "hidden", ("cosine_max", "cosine_sum_max"))
+    raise ValueError(f"unknown projection mode: {mode}")
+
+
+def compare_projection_metrics(
+    left_name: str,
+    left: Metrics,
+    right_name: str,
+    right: Metrics,
+) -> ProjectionComparison:
+    return ProjectionComparison(
+        left_name=left_name,
+        right_name=right_name,
+        recall_at_5_delta=right.recall_at.get(5, 0.0) - left.recall_at.get(5, 0.0),
+        gravity_delta=right.worst_top1_count - left.worst_top1_count,
+        negative_fp_delta=right.negative_false_positive_rate - left.negative_false_positive_rate,
+    )
+
+
+def build_decision_report(
+    current: Metrics,
+    current_baseline_recall_at_5: float = CURRENT_PER_HEAD_BASELINE_RECALL_AT_5,
+    rank_depth_recall_at_50: float | None = None,
+    oracle: Metrics | None = None,
+    best_layer: Metrics | None = None,
+    hidden: Metrics | None = None,
+    deterministic_tensors: bool = True,
+) -> DecisionReport:
+    current_recall = current.recall_at.get(5, 0.0)
+    key_metrics = {
+        "current_recall_at_5": current_recall,
+        "current_gravity": float(current.worst_top1_count),
+        "current_negative_fp": current.negative_false_positive_rate,
+    }
+
+    rust_candidate = current
+    if best_layer is not None and best_layer.recall_at.get(5, 0.0) > current_recall:
+        rust_candidate = best_layer
+
+    if hidden is not None:
+        key_metrics["hidden_recall_at_5"] = hidden.recall_at.get(5, 0.0)
+    if best_layer is not None:
+        key_metrics["best_layer_recall_at_5"] = best_layer.recall_at.get(5, 0.0)
+    if rank_depth_recall_at_50 is not None:
+        key_metrics["rank_depth_recall_at_50"] = rank_depth_recall_at_50
+    if oracle is not None:
+        key_metrics["oracle_recall_at_5"] = oracle.recall_at.get(5, 0.0)
+
+    candidate_recall = rust_candidate.recall_at.get(5, 0.0)
+    if (
+        candidate_recall >= RUST_RECALL_GATE
+        and candidate_recall > current_baseline_recall_at_5
+        and rust_candidate.worst_top1_count <= RUST_GRAVITY_GATE
+        and rust_candidate.negative_false_positive_rate <= RUST_NEGATIVE_FP_GATE
+        and deterministic_tensors
+    ):
+        return DecisionReport(
+            "READY_FOR_RUST_EXPERIMENT",
+            "Best latent result clears the recall, gravity, negative-query, and repeatability gates.",
+            key_metrics,
+        )
+
+    if best_layer is not None:
+        layer_recall = best_layer.recall_at.get(5, 0.0)
+        if layer_recall - current_recall >= 0.10:
+            return DecisionReport(
+                "LAYER_OR_HEAD_PROBLEM",
+                "A different layer or head setting materially beats the current diagnostic layer.",
+                key_metrics,
+            )
+
+    if hidden is not None:
+        hidden_recall = hidden.recall_at.get(5, 0.0)
+        if hidden_recall >= 0.70 and hidden_recall - current_recall >= 0.20:
+            return DecisionReport(
+                "QK_SPECIFIC_PROBLEM",
+                "Hidden-state retrieval is much stronger than Q/K retrieval on the same corpus.",
+                key_metrics,
+            )
+
+    if rank_depth_recall_at_50 is not None and oracle is not None:
+        oracle_recall = oracle.recall_at.get(5, 0.0)
+        if rank_depth_recall_at_50 >= 0.80 and oracle_recall - current_recall >= 0.10:
+            return DecisionReport(
+                "SCORING_PROBLEM",
+                "Correct memories are often buried and an oracle over latent scorers recovers many of them.",
+                key_metrics,
+            )
+
+    return DecisionReport(
+        "LATENT_SIGNAL_WEAK",
+        "Current latent diagnostics remain far behind the lexical/RAG ceiling.",
+        key_metrics,
+    )
+
+
 def print_metrics_table(results: dict[str, Metrics]) -> None:
     print("\n  -- Scorer Comparison --")
     print(
@@ -347,6 +666,100 @@ def print_metrics_table(results: dict[str, Metrics]) -> None:
             f"{metrics.score_gap:9.2f} "
             f"{metrics.shuffled_recall_at_5 * 100:7.1f}%"
         )
+
+
+def print_rank_depth_report(scorer_name: str, depth: RankDepthResult, queries: list[TensorItem]) -> None:
+    print(f"\n  -- Rank Depth ({scorer_name}) --")
+    rendered = " ".join(
+        f"R@{cutoff}={depth.recall_at[cutoff] * 100:.1f}%"
+        for cutoff in sorted(depth.recall_at)
+    )
+    print(f"  {rendered}")
+    median = f"{depth.median_rank:.1f}" if depth.median_rank is not None else "n/a"
+    worst = str(depth.worst_rank) if depth.worst_rank is not None else "n/a"
+    print(f"  Median expected rank: {median} | worst expected rank: {worst}")
+    for qtype, recall_at in sorted(depth.recall_by_qtype.items()):
+        print(f"  {qtype:<12} R@5={recall_at.get(5, 0.0) * 100:5.1f}% R@50={recall_at.get(50, 0.0) * 100:5.1f}%")
+    query_by_id = {q.item_id: q for q in queries}
+    if depth.unrecovered_query_ids:
+        print("  Not recovered by top-50:")
+        for query_id in depth.unrecovered_query_ids[:10]:
+            query = query_by_id[query_id]
+            print(f"    q{query_id:02d} expected={query.expected} type={query.qtype} text={query.text}")
+        if len(depth.unrecovered_query_ids) > 10:
+            print(f"    ... {len(depth.unrecovered_query_ids) - 10} more")
+    else:
+        print("  Every positive query is recovered by top-50.")
+
+
+def print_oracle_report(oracle: OracleResult, queries: list[TensorItem]) -> None:
+    print("\n  -- Latent Oracle --")
+    rendered = " ".join(
+        f"R@{cutoff}={oracle.recall_at[cutoff] * 100:.1f}%"
+        for cutoff in sorted(oracle.recall_at)
+    )
+    print(f"  {rendered}")
+    print(f"  Gap to RAG ceiling at R@5: {(1.0 - oracle.recall_at.get(5, 0.0)) * 100:.1f} points")
+    rescue_counts = Counter(scorer for scorer in oracle.rescued_by_query.values() if scorer is not None)
+    if rescue_counts:
+        rendered_rescues = ", ".join(f"{name}={count}" for name, count in rescue_counts.most_common())
+        print(f"  Rescued by scorer: {rendered_rescues}")
+    if oracle.unrescued_query_ids:
+        query_by_id = {q.item_id: q for q in queries}
+        print("  Not rescued by any latent scorer:")
+        for query_id in oracle.unrescued_query_ids[:10]:
+            query = query_by_id[query_id]
+            print(f"    q{query_id:02d} expected={query.expected} type={query.qtype} text={query.text}")
+        if len(oracle.unrescued_query_ids) > 10:
+            print(f"    ... {len(oracle.unrescued_query_ids) - 10} more")
+    else:
+        print("  Every positive query is rescued by at least one latent scorer.")
+
+
+def print_layer_sweep_report(results: list[LayerSweepResult]) -> None:
+    print("\n  -- Layer Sweep --")
+    print(f"  {'frac':>5} {'layer':>5} {'best scorer':<18} {'R@5':>6} {'MRR':>6} {'worst':>8} {'negFP':>7}")
+    for result in results:
+        metrics = result.metrics
+        print(
+            f"  {result.layer_fraction:5.2f} "
+            f"{result.layer_idx:5d} "
+            f"{result.best_scorer:<18} "
+            f"{metrics.recall_at.get(5, 0.0) * 100:5.1f}% "
+            f"{metrics.mrr:6.3f} "
+            f"{metrics.worst_top1_cell}:{metrics.worst_top1_count:<4d} "
+            f"{metrics.negative_false_positive_rate * 100:6.1f}%"
+        )
+
+
+def print_head_sweep_report(results: list[HeadSweepResult], limit: int = 8) -> None:
+    print("\n  -- Head Sweep (best layer) --")
+    print(f"  {'head':>5} {'R@5':>6} {'MRR':>6} {'uniq':>6} {'worst':>8} {'negFP':>7}")
+    for result in order_heads_by_metric(results)[:limit]:
+        metrics = result.metrics
+        print(
+            f"  {result.head_index:5d} "
+            f"{metrics.recall_at.get(5, 0.0) * 100:5.1f}% "
+            f"{metrics.mrr:6.3f} "
+            f"{metrics.unique_top1:6d} "
+            f"{metrics.worst_top1_cell}:{metrics.worst_top1_count:<4d} "
+            f"{metrics.negative_false_positive_rate * 100:6.1f}%"
+        )
+
+
+def print_projection_comparison(comparison: ProjectionComparison) -> None:
+    print(f"\n  -- Projection Comparison ({comparison.left_name} -> {comparison.right_name}) --")
+    print(f"  R@5 delta:     {comparison.recall_at_5_delta * 100:+.1f} points")
+    print(f"  Gravity delta: {comparison.gravity_delta:+d} top-1 repeats")
+    print(f"  NegFP delta:   {comparison.negative_fp_delta * 100:+.1f} points")
+
+
+def print_decision_report(report: DecisionReport) -> None:
+    print("\n--- FINAL DIAGNOSTIC DECISION ---")
+    print(f"  Verdict: {report.verdict}")
+    print(f"  Reason:  {report.reason}")
+    for name, value in report.key_metrics.items():
+        print(f"  {name}: {value:.3f}")
 
 
 def print_domain_confusion(rankings: dict[int, list[RankingEntry]], queries: list[TensorItem]) -> None:
@@ -443,6 +856,8 @@ def project_item(
                 projected = projected.view(-1, num_kv_heads * head_dim)
             vectors = projected[1:].detach().cpu().numpy().astype(np.float32)
             vectors = expand_k_for_gqa(vectors, num_kv_heads, gqa_ratio, head_dim)
+        elif projection == "hidden":
+            vectors = hidden[1:].detach().cpu().numpy().astype(np.float32)
         else:
             raise ValueError(f"unknown projection: {projection}")
 
@@ -456,27 +871,101 @@ def build_rankings(
     queries: list[TensorItem],
     num_heads: int,
     head_dim: int,
+    scorer_names: tuple[str, ...] = LATENT_SCORERS,
+    include_bm25: bool = True,
 ) -> dict[str, dict[int, list[RankingEntry]]]:
     center = np.concatenate([m.vectors for m in memories], axis=0).mean(axis=0, keepdims=True)
     memory_texts = [m.text for m in memories]
-    scorers: dict[str, Callable[[TensorItem, TensorItem], RankingEntry]] = {
+    available_scorers: dict[str, Callable[[TensorItem, TensorItem], RankingEntry]] = {
         "max_sim": max_sim_score,
         "colbert_sum": colbert_sum_score,
         "top5_pair_avg": lambda q, m: topn_avg_score(q, m, 5),
         "cosine_max": cosine_max_score,
+        "cosine_sum_max": cosine_sum_max_score,
         "mean_centered": lambda q, m: centered_max_score(q, m, center),
         "per_head_max": lambda q, m: per_head_max_score(q, m, num_heads, head_dim),
     }
+    scorers = {name: available_scorers[name] for name in scorer_names}
 
     rankings = {
         name: {query.item_id: rank_with_scorer(query, memories, scorer) for query in queries}
         for name, scorer in scorers.items()
     }
-    rankings["bm25"] = {
-        query.item_id: bm25_rank(query.text, memory_texts)
-        for query in queries
-    }
+    if include_bm25:
+        rankings["bm25"] = {
+            query.item_id: bm25_rank(query.text, memory_texts)
+            for query in queries
+        }
     return rankings
+
+
+def project_corpus(
+    model,
+    tokenizer,
+    layer_idx: int,
+    mode: str,
+) -> tuple[list[TensorItem], list[TensorItem], ProjectionPlan]:
+    plan = projection_plan(mode)
+    memories = [
+        project_item(idx, text, model, tokenizer, layer_idx, plan.memory_projection)
+        for idx, text in enumerate(MEMORIES)
+    ]
+    queries = [
+        project_item(idx, text, model, tokenizer, layer_idx, plan.query_projection, tuple(expected), qtype)
+        for idx, (text, expected, qtype) in enumerate(ALL_QUERIES)
+    ]
+    return memories, queries, plan
+
+
+def score_projection_mode(
+    memories: list[TensorItem],
+    queries: list[TensorItem],
+    num_heads: int,
+    head_dim: int,
+    plan: ProjectionPlan,
+) -> tuple[dict[str, dict[int, list[RankingEntry]]], dict[str, Metrics]]:
+    rankings = build_rankings(
+        memories,
+        queries,
+        num_heads,
+        head_dim,
+        scorer_names=plan.scorer_names,
+        include_bm25=False,
+    )
+    metrics = {name: compute_metrics(ranking, queries, len(memories)) for name, ranking in rankings.items()}
+    return rankings, metrics
+
+
+def run_layer_sweep(
+    model,
+    tokenizer,
+    num_layers: int,
+    num_heads: int,
+    head_dim: int,
+) -> list[LayerSweepResult]:
+    results = []
+    for fraction in LAYER_SWEEP_FRACTIONS:
+        layer_idx = layer_fraction_to_index(num_layers, fraction)
+        memories, queries, _ = project_corpus(model, tokenizer, layer_idx, "qk")
+        rankings = build_rankings(memories, queries, num_heads, head_dim, include_bm25=False)
+        metrics = {name: compute_metrics(ranking, queries, len(memories)) for name, ranking in rankings.items()}
+        best_name = max(metrics, key=lambda name: (metrics[name].recall_at.get(5, 0.0), metrics[name].mrr))
+        results.append(LayerSweepResult(fraction, layer_idx, best_name, metrics[best_name]))
+    return results
+
+
+def run_head_sweep(
+    memories: list[TensorItem],
+    queries: list[TensorItem],
+    num_heads: int,
+    head_dim: int,
+) -> list[HeadSweepResult]:
+    results = []
+    for head_index in range(num_heads):
+        scorer = lambda q, m, idx=head_index: per_head_single_score(q, m, num_heads, head_dim, idx)
+        rankings = {query.item_id: rank_with_scorer(query, memories, scorer) for query in queries}
+        results.append(HeadSweepResult(head_index, compute_metrics(rankings, queries, len(memories))))
+    return results
 
 
 def print_random_baseline(queries: list[TensorItem], num_memories: int) -> None:
@@ -506,18 +995,8 @@ def main() -> None:
     print(f"OK ({model.config.num_hidden_layers}L, layer={layer_idx}, heads={num_heads}, head_dim={head_dim})")
 
     started = time.time()
-    print("\n--- PROJECTING MEMORIES ---")
-    memories = []
-    for idx, text in enumerate(MEMORIES):
-        memories.append(project_item(idx, text, model, tokenizer, layer_idx, "k"))
-        if (idx + 1) % 25 == 0:
-            print(f"  {idx + 1}/100 projected")
-
-    print("\n--- PROJECTING QUERIES ---")
-    queries = [
-        project_item(idx, text, model, tokenizer, layer_idx, "q", tuple(expected), qtype)
-        for idx, (text, expected, qtype) in enumerate(ALL_QUERIES)
-    ]
+    print("\n--- PROJECTING CURRENT Q/K LAYER ---")
+    memories, queries, _ = project_corpus(model, tokenizer, layer_idx, "qk")
     print(f"  Projection time: {time.time() - started:.1f}s")
 
     print("\n--- SCORING ---")
@@ -541,22 +1020,63 @@ def main() -> None:
     best_latent_metrics = metrics[best_latent]
     bm25_metrics = metrics["bm25"]
 
-    print("\n--- DECISION GATE ---")
+    print("\n--- BURIED-CORRECTNESS AUDIT ---")
+    rank_depth = compute_rank_depth(rankings[best_latent], queries)
+    print_rank_depth_report(best_latent, rank_depth, queries)
+
+    latent_rankings = {name: rankings[name] for name in latent_names}
+    oracle = compute_oracle_result(latent_rankings, queries)
+    print_oracle_report(oracle, queries)
+
+    print("\n--- LAYER AND HEAD AUDIT ---")
+    layer_started = time.time()
+    layer_results = run_layer_sweep(model, tokenizer, model.config.num_hidden_layers, num_heads, head_dim)
+    print(f"  Layer sweep time: {time.time() - layer_started:.1f}s")
+    print_layer_sweep_report(layer_results)
+    best_layer = select_best_layer(layer_results)
+
+    if best_layer.layer_idx == layer_idx:
+        head_memories, head_queries = memories, queries
+    else:
+        head_memories, head_queries, _ = project_corpus(model, tokenizer, best_layer.layer_idx, "qk")
+    head_results = run_head_sweep(head_memories, head_queries, num_heads, head_dim)
+    print_head_sweep_report(head_results)
+
+    print("\n--- HIDDEN-STATE AUDIT ---")
+    hidden_started = time.time()
+    hidden_memories, hidden_queries, hidden_plan = project_corpus(model, tokenizer, layer_idx, "hidden")
+    hidden_rankings, hidden_metrics = score_projection_mode(
+        hidden_memories,
+        hidden_queries,
+        num_heads,
+        head_dim,
+        hidden_plan,
+    )
+    print(f"  Hidden projection/scoring time: {time.time() - hidden_started:.1f}s")
+    print_metrics_table({f"hidden:{name}": metric for name, metric in hidden_metrics.items()})
+    best_hidden = max(hidden_metrics, key=lambda name: hidden_metrics[name].recall_at[5])
+    hidden_comparison = compare_projection_metrics(
+        best_latent,
+        best_latent_metrics,
+        f"hidden:{best_hidden}",
+        hidden_metrics[best_hidden],
+    )
+    print_projection_comparison(hidden_comparison)
+
+    print("\n--- SUMMARY ---")
     print(f"  Best latent scorer: {best_latent} ({best_latent_metrics.recall_at[5] * 100:.1f}% R@5)")
     print(f"  BM25 scorer:        {bm25_metrics.recall_at[5] * 100:.1f}% R@5")
+    print(f"  Best layer result:  layer={best_layer.layer_idx} {best_layer.best_scorer} ({best_layer.metrics.recall_at[5] * 100:.1f}% R@5)")
+    print(f"  Best hidden result: {best_hidden} ({hidden_metrics[best_hidden].recall_at[5] * 100:.1f}% R@5)")
 
-    clears_gate = (
-        best_latent_metrics.recall_at[5] >= 0.70
-        and best_latent_metrics.worst_top1_count <= 3
-        and best_latent_metrics.negative_false_positive_rate <= 0.10
+    decision = build_decision_report(
+        current=best_latent_metrics,
+        rank_depth_recall_at_50=rank_depth.recall_at.get(50, 0.0),
+        oracle=oracle_metrics(oracle),
+        best_layer=best_layer.metrics,
+        hidden=hidden_metrics[best_hidden],
     )
-    if clears_gate:
-        verdict = "IMPLEMENT_LATENT_SCORER_IN_RUST"
-    elif bm25_metrics.recall_at[5] > best_latent_metrics.recall_at[5]:
-        verdict = "PLAN_HYBRID_CANDIDATE_RERANK"
-    else:
-        verdict = "REVISE_CORPUS_OR_REPRESENTATION"
-    print(f"  Verdict: {verdict}")
+    print_decision_report(decision)
 
 
 if __name__ == "__main__":

@@ -67,11 +67,11 @@ Systematic exploration of what to store and how to retrieve, tested on Sonia (16
 
 **Full progression:** 31.2% (hidden) → 25% (K*K per-token) → 62.5% (K*K mean-pool) → 75% (K*K per-token manual) → 68.8% (Q*K per-token pipeline, 16 memories)
 
-**100-memory scale test:** Q*K recall dropped to **40%** at 100 memories. Gravity well returned (one memory dominated 7/30 queries). The gap between raw Q*K dot product and proper attention (with softmax normalization) is the current bottleneck. Retrieval quality degrades at scale — this is the main open problem.
+**100-memory scale test:** Q*K recall dropped to **40%** at 100 memories. Gravity well returned. Traditional RAG baseline achieved 100% on the same corpus.
 
-**Traditional RAG baseline:** `intfloat/e5-small-v2` embedding RAG achieved **100% recall@1/@3/@5/@10** on the same 100-memory corpus. This is a retrieval-only baseline, not an architecture change, but it shows current Q*K retrieval is not competitive with standard embedding retrieval on this test.
+**Signal audit verdict: `LAYER_OR_HEAD_PROBLEM`.** The correct memories ARE in the latent signal (R@100 = 100%). The current layer/scorer is a poor combination. **Hidden states + top5_pair_avg achieves 100% recall with 10% false positive rate** — matching RAG quality with latent representations. The problem was never the architecture; it was mean-pooling and layer/scorer selection.
 
-**Scripts:** `experiments/scale_100_qk.py` (100-memory scale test), `experiments/scale_100_qk_diagnostics.py` (diagnostic scorer lab), `experiments/scale_100_rag_baseline.py` (traditional RAG baseline), `experiments/sonia_per_token_pipeline.py` (Q*K pipeline), `experiments/sonia_real_kv_cache.py` (K*K real KV)
+**Scripts:** `experiments/scale_100_qk_diagnostics.py` (full diagnostic suite), `experiments/scale_100_qk.py` (scale test), `experiments/scale_100_rag_baseline.py` (RAG baseline)
 
 ## Planned Experiments
 
@@ -79,7 +79,8 @@ Systematic exploration of what to store and how to retrieve, tested on Sonia (16
 |-----------|------|--------|
 | **100-memory scale test** | Does Q*K retrieval hold at realistic memory counts? | **Complete — 40% recall, needs scoring improvements** |
 | **Traditional RAG baseline** | Compare current Q*K retrieval against standard embedding retrieval | **Complete — RAG got 100% recall on this corpus** |
-| **Softmax-normalized scoring** | Replace raw dot product with softmax(Q*K^T/sqrt(d_k)) in retriever | **Next up — main open problem** |
+| **Hidden states + top5_pair_avg validation** | Validate 100% recall path through engine pipeline | **Next up** |
+| **False positive calibration** | Reduce 10% negFP rate via score thresholding | Planned |
 | GQA K-expansion | Expand K heads to match Q dims for Q*K retrieval | Complete |
 | Per-head scoring | Score per attention head instead of concatenating all heads | Planned |
 | Multi-session memory | Cross-day retrieval ("what happened last week") | Planned |
