@@ -57,10 +57,10 @@ def kps(engine, gpt2, tokenizer):
 def test_kp_store_creates_pack_for_all_layers(kps, engine):
     """GIVEN KnowledgePackStore with GPT-2 (12 layers),
     WHEN store("some fact"),
-    THEN pack_count == 1 and store() returns n_layers."""
-    n = kps.store("The wifi password is mango-cathedral-7")
+    THEN pack_count == 1 and store() returns a pack_id."""
+    pack_id = kps.store("The wifi password is mango-cathedral-7")
 
-    assert n == 12
+    assert isinstance(pack_id, int)
     assert engine.pack_count() == 1
 
 

@@ -49,6 +49,10 @@ class KnowledgePackStore:
 
         # Pack ID -> original fact text (for sequential recomputation)
         self._text_registry = {}
+        # Pack ID -> cached pack dict (for trace-linked retrieval)
+        self._pack_data = {}
+        # Pack ID -> set of linked pack IDs (Python-side trace graph)
+        self._trace_links = {}
 
     def store(self, fact_text, salience=80.0):
         """Store a fact's KV cache across all layers.
@@ -57,7 +61,7 @@ class KnowledgePackStore:
         Stores hidden states as retrieval key (for Top5Avg matching)
         and full K+V payload as injection value (per layer).
 
-        Returns the number of cells written (= n_layers).
+        Returns the pack_id assigned by the engine.
         """
         # Chat template wrapping
         messages = [{"role": "system", "content": fact_text}]
@@ -92,10 +96,19 @@ class KnowledgePackStore:
             self.owner, retrieval_key, layer_payloads, salience
         )
 
-        # Register fact text for sequential recomputation
+        # Register fact text and cache pack data for trace-linked retrieval
         self._text_registry[pack_id] = fact_text
+        self._pack_data[pack_id] = {
+            "pack_id": pack_id,
+            "owner": self.owner,
+            "score": 0.0,
+            "layers": [
+                {"layer_idx": li, "data": payload.tolist()}
+                for li, payload in layer_payloads
+            ],
+        }
 
-        return self.n_layers
+        return pack_id
 
     def retrieve_and_inject(self, query_text):
         """Retrieve the best matching memory and build a DynamicCache.
@@ -182,6 +195,115 @@ class KnowledgePackStore:
             return text, q_len, False
 
         # Clone cache to avoid in-place mutation
+        clone = DynamicCache()
+        for li in range(len(cache.layers)):
+            layer = cache.layers[li]
+            clone.update(layer.keys.clone(), layer.values.clone(), li)
+
+        with torch.no_grad():
+            out = self.model.generate(
+                query_ids,
+                past_key_values=clone,
+                attention_mask=attn_mask,
+                **gen_kwargs,
+            )
+
+        text = self.tokenizer.decode(out[0][q_len:], skip_special_tokens=True).strip()
+        return text, q_len, True
+
+    # -- Trace-linked storage and retrieval ------------------------------------
+
+    def store_linked(self, facts, salience=80.0):
+        """Store related facts and link them for multi-hop retrieval.
+
+        Creates bidirectional links between all packs so that retrieving
+        any one of them discovers the rest via trace traversal.
+
+        Returns list of pack_ids.
+        """
+        pack_ids = []
+        for fact in facts:
+            pack_id = self.store(fact, salience)
+            pack_ids.append(pack_id)
+
+        for pid in pack_ids:
+            self._trace_links.setdefault(pid, set()).update(
+                p for p in pack_ids if p != pid
+            )
+
+        return pack_ids
+
+    def retrieve_with_trace(self, query_text, k=1, composer=None):
+        """Retrieve memories, follow trace links to find related packs.
+
+        Returns (cache, query_ids, attention_mask) or (None, query_ids, None).
+        """
+        if composer is None:
+            composer = NaiveConcatComposer()
+
+        query_input = self.tokenizer.encode(query_text, return_tensors="pt")
+        with torch.no_grad():
+            query_out = self.model(query_input, output_hidden_states=True)
+
+        hidden = query_out.hidden_states[self.query_layer][0]
+        h_tokens = hidden[1:].numpy().astype(np.float32)
+        query_key = encode_per_token(h_tokens, self.hidden_size)
+
+        packs = self.engine.mem_read_pack(query_key, k, self.owner)
+        if not packs:
+            return None, query_input, None
+
+        # Follow trace links to discover related packs
+        retrieved_ids = {p["pack_id"] for p in packs}
+        linked_ids = set()
+        for p in packs:
+            linked_ids.update(self._trace_links.get(p["pack_id"], set()))
+
+        for pid in linked_ids - retrieved_ids:
+            if pid in self._pack_data:
+                packs.append(self._pack_data[pid])
+
+        cache = composer.compose(
+            packs, self.num_kv_heads, self.head_dim, self.kv_dim, self.n_layers
+        )
+
+        fact_messages = [{"role": "system", "content": "placeholder"}]
+        fact_fmt = self.tokenizer.apply_chat_template(
+            fact_messages, tokenize=False, add_generation_prompt=False
+        )
+        messages = [
+            {"role": "system", "content": "placeholder"},
+            {"role": "user", "content": query_text},
+        ]
+        full_fmt = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        full_ids = self.tokenizer.encode(full_fmt, return_tensors="pt")
+        fact_len = len(self.tokenizer.encode(fact_fmt))
+        query_ids = full_ids[:, fact_len:]
+
+        kv_len = cache.get_seq_length()
+        q_len = query_ids.shape[1]
+        attention_mask = torch.ones(1, kv_len + q_len, dtype=torch.long)
+
+        return cache, query_ids, attention_mask
+
+    def generate_with_trace(self, query_text, k=1, composer=None, **gen_kwargs):
+        """Full pipeline: retrieve + trace hop + compose + inject + generate.
+
+        Returns (generated_text, prompt_tokens, had_memory).
+        """
+        cache, query_ids, attn_mask = self.retrieve_with_trace(
+            query_text, k=k, composer=composer
+        )
+        q_len = query_ids.shape[1]
+
+        if cache is None:
+            with torch.no_grad():
+                out = self.model.generate(query_ids, **gen_kwargs)
+            text = self.tokenizer.decode(out[0][q_len:], skip_special_tokens=True).strip()
+            return text, q_len, False
+
         clone = DynamicCache()
         for li in range(len(cache.layers)):
             layer = cache.layers[li]
