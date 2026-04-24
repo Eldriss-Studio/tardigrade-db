@@ -82,3 +82,71 @@ This preserves TardigradeDB's value in two ways:
 | `python/tardigrade_hooks/multi_composer.py` | NaiveConcatComposer + SequentialRecomputeComposer |
 | `python/tardigrade_hooks/kp_injector.py` | `retrieve_and_inject_multi()`, `generate_multi()` |
 | `tests/python/test_kp_multi_inject.py` | 7 ATDD structural tests |
+
+## Phase 30A: RoPE Position Correction (April 24, 2026)
+
+CacheBlend (EuroSys 2025 Best Paper) showed that RoPE position corruption causes accuracy loss when concatenating independently-computed KV caches. We implemented `RoPECorrectedConcatComposer` using the existing `RoPEPositionEncoder.remap_keys()` to unrotate K vectors at old positions and re-rotate at contiguous new positions.
+
+**Result: 3/10 — identical to naive concat.** Position correction made zero difference. Same 3 queries pass, same 7 fail with identical hallucinated responses.
+
+This proved position corruption is NOT the primary failure mode.
+
+## Retrieval Diagnostic: The Real Problem (April 24, 2026)
+
+A retrieval diagnostic (`experiments/multi_memory_retrieval_debug.py`) revealed the actual cause of failure:
+
+**0/10 queries retrieved all needed packs.** `mem_read_pack` returned only 1 pack per query. Every query found the "linking" fact but never the "detail" fact:
+
+| Query | Found | Never Retrieved |
+|-------|-------|-----------------|
+| "wifi password for apartment 4B?" | "Sonia's wifi password is mango-7" | "Sonia lives in apartment 4B" |
+| "car does Lucia's instructor drive?" | "Lucia's instructor is Tomoko" | "Tomoko drives Honda Civic" |
+| "cat of neighbor who brought pierogi?" | "Mrs. Kowalski brought pierogi" | "Mrs. Kowalski's cat is Whiskers" |
+| ... (same pattern for all 10) | linking fact found | detail fact MISSING |
+
+**The Phase 30 multi-memory injection experiment was actually testing single-memory injection on cross-referencing queries.** The 3/10 result is expected for single-memory — the model gets one fact but not the one with the actual answer. RoPE correction, HKVD recomputation, and all injection-layer fixes are irrelevant when the needed packs were never retrieved.
+
+### Root Cause: Multi-Hop Retrieval
+
+The retriever scores by query-to-memory similarity. "What car does Lucia's instructor drive?" is semantically close to "Lucia's instructor is Tomoko" but NOT to "Tomoko drives a Honda Civic." The second fact relates to the query only through the entity "Tomoko" — a reasoning hop the retriever can't make.
+
+### RAG Comparison
+
+Standard embedding RAG (e5-small-v2) was tested on the same corpus:
+
+| Retriever | All facts found (top-k) | Partial | Detail fact rank when missed |
+|-----------|------------------------|---------|------------------------------|
+| TardigradeDB (latent, Top5Avg) | **0/10** | 10/10 | Not in top-5 |
+| RAG (e5-small-v2, cosine) | **5/10** | 5/10 | Rank #3 or #4 |
+
+RAG does better (5/10 vs 0/10) because embedding similarity captures entity-name overlap that latent hidden states miss. RAG's failures are marginal — the right fact is rank 3-4, so increasing k from 2 to 4 would recover most. TardigradeDB's failures are total — the right fact doesn't appear in top-5 at all.
+
+Multi-hop is partially universal (both fail), but RAG handles it significantly better.
+
+### What This Means
+
+1. Multi-memory injection was never tested — only 1 pack was injected per query
+2. The injection mechanism (naive concat, RoPE correction) may work fine with correct packs — untested
+3. The fix is in the retrieval layer, not the injection layer
+4. Options: increase k, two-stage retrieval, or Trace graph traversal (link related facts at storage time)
+
+## Remaining Experiments
+
+| Experiment | Purpose | Status |
+|------------|---------|--------|
+| Oracle injection | Manually inject correct packs to verify injection works | Planned |
+| Higher-k retrieval | Test if missing facts appear at k=10/20 | Planned |
+| Trace-linked retrieval | Link related facts via causal graph, follow edges on retrieval | Planned |
+
+## Updated File List
+
+| Script | What it tests |
+|--------|---------------|
+| `experiments/multi_memory_corpus.py` | 10 cross-referencing fact sets |
+| `experiments/multi_memory_experiment.py` | Naive concat vs sequential recompute vs text RAG |
+| `experiments/multi_memory_rope_corrected.py` | RoPE-corrected concat vs naive vs text RAG |
+| `experiments/multi_memory_retrieval_debug.py` | TardigradeDB retrieval diagnostic (which packs found?) |
+| `experiments/multi_memory_rag_retrieval_debug.py` | RAG retrieval diagnostic (e5-small-v2 comparison) |
+| `python/tardigrade_hooks/multi_composer.py` | NaiveConcatComposer, SequentialRecomputeComposer, RoPECorrectedConcatComposer |
+| `tests/python/test_kp_multi_inject.py` | 7 ATDD structural tests for multi-memory injection |
+| `tests/python/test_rope_corrected_composer.py` | 7 ATDD tests for RoPE-corrected composer |
