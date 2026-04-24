@@ -74,17 +74,20 @@ class KnowledgePackStore:
         header = np.array([-1.0e9, float(n_tok), float(self.hidden_size)], dtype=np.float32)
         retrieval_key = np.concatenate([header, h_tokens.ravel()])
 
-        # Store KV payload per layer
+        # Build layer payloads for pack API
+        layer_payloads = []
         for li in range(self.n_layers):
             k = kv.layers[li].keys[0]   # (heads, seq, head_dim)
             v = kv.layers[li].values[0]
             k_np = k.permute(1, 0, 2).reshape(seq_len, self.kv_dim).detach().cpu().numpy().astype(np.float32)
             v_np = v.permute(1, 0, 2).reshape(seq_len, self.kv_dim).detach().cpu().numpy().astype(np.float32)
             payload = np.concatenate([k_np.ravel(), v_np.ravel()])
+            layer_payloads.append((li, payload))
 
-            self.engine.mem_write(
-                self.owner, li, retrieval_key, payload, salience, None
-            )
+        # Single atomic write via Rust pack API (one fsync for all layers)
+        self.engine.mem_write_pack(
+            self.owner, retrieval_key, layer_payloads, salience
+        )
 
         return self.n_layers
 
@@ -108,35 +111,30 @@ class KnowledgePackStore:
         header = np.array([-1.0e9, float(n_tok), float(self.hidden_size)], dtype=np.float32)
         query_key = np.concatenate([header, h_tokens.ravel()])
 
-        # Retrieve from engine
-        results = self.engine.mem_read(query_key, self.n_layers, self.owner)
-        if not results:
+        # Retrieve via Rust pack API (returns complete pack with all layers)
+        packs = self.engine.mem_read_pack(query_key, 1, self.owner)
+        if not packs:
             return None, query_input, None
 
-        # Group by layer
-        by_layer = {}
-        for r in results:
-            if r.layer not in by_layer:
-                by_layer[r.layer] = np.array(r.value(), dtype=np.float32)
-
-        if len(by_layer) < self.n_layers:
+        pack = packs[0]
+        layers = pack["layers"]
+        if len(layers) < self.n_layers:
             return None, query_input, None
 
-        # Reconstruct DynamicCache
-        # Detect seq_len from payload size
-        sample = by_layer[0]
-        half = len(sample) // 2
+        # Reconstruct DynamicCache from pack layers
+        sample_data = np.array(layers[0]["data"], dtype=np.float32)
+        half = len(sample_data) // 2
         seq_len = half // self.kv_dim
 
         cache = DynamicCache()
-        for li in range(self.n_layers):
-            val = by_layer[li]
+        for layer_info in sorted(layers, key=lambda l: l["layer_idx"]):
+            val = np.array(layer_info["data"], dtype=np.float32)
             half = len(val) // 2
             kt = torch.tensor(val[:half]).reshape(1, seq_len, self.num_kv_heads, self.head_dim)
-            kt = kt.permute(0, 2, 1, 3)  # (1, heads, seq, head_dim)
+            kt = kt.permute(0, 2, 1, 3)
             vt = torch.tensor(val[half:]).reshape(1, seq_len, self.num_kv_heads, self.head_dim)
             vt = vt.permute(0, 2, 1, 3)
-            cache.update(kt, vt, li)
+            cache.update(kt, vt, layer_info["layer_idx"])
 
         # Build query_ids as continuation of the stored fact
         # The stored fact used system template. The query should use user template.

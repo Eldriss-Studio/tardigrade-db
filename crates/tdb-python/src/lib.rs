@@ -219,6 +219,90 @@ impl Engine {
         self.inner.advance_days(days);
     }
 
+    /// Store a complete multi-layer KV cache as a single atomic pack.
+    ///
+    /// Returns the assigned pack ID.
+    fn mem_write_pack(
+        &mut self,
+        owner: u64,
+        retrieval_key: PyReadonlyArray1<'_, f32>,
+        layer_payloads: Vec<(u16, PyReadonlyArray1<'_, f32>)>,
+        salience: f32,
+    ) -> PyResult<u64> {
+        use tdb_core::kv_pack::{KVLayerPayload, KVPack};
+
+        let key =
+            retrieval_key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?.to_vec();
+
+        let layers: Vec<KVLayerPayload> = layer_payloads
+            .iter()
+            .map(|(idx, data)| {
+                Ok(KVLayerPayload {
+                    layer_idx: *idx,
+                    data: data
+                        .as_slice()
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                        .to_vec(),
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+
+        let pack = KVPack { id: 0, owner, retrieval_key: key, layers, salience };
+
+        self.inner.mem_write_pack(&pack).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Retrieve the top-k KV Packs matching a query key.
+    ///
+    /// Returns list of dicts with pack ID, owner, score, tier, and layers.
+    fn mem_read_pack(
+        &mut self,
+        py: Python<'_>,
+        query_key: PyReadonlyArray1<'_, f32>,
+        k: usize,
+        owner: Option<u64>,
+    ) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
+        let query = query_key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let results = self
+            .inner
+            .mem_read_pack(query, k, owner)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let mut py_results = Vec::with_capacity(results.len());
+        for r in results {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("pack_id", r.pack.id)?;
+            dict.set_item("owner", r.pack.owner)?;
+            dict.set_item("score", r.score)?;
+            dict.set_item("tier", r.tier as u8)?;
+
+            let layers_list = pyo3::types::PyList::empty(py);
+            for layer in &r.pack.layers {
+                let layer_dict = pyo3::types::PyDict::new(py);
+                layer_dict.set_item("layer_idx", layer.layer_idx)?;
+                let data_arr = numpy::PyArray1::from_slice(py, &layer.data);
+                layer_dict.set_item("data", data_arr)?;
+                layers_list.append(layer_dict)?;
+            }
+            dict.set_item("layers", layers_list)?;
+
+            py_results.push(dict.into_any().unbind());
+        }
+
+        Ok(py_results)
+    }
+
+    /// Number of KV Packs stored.
+    fn pack_count(&self) -> usize {
+        self.inner.pack_count()
+    }
+
+    /// Get the importance score of a pack.
+    fn pack_importance(&self, pack_id: u64) -> Option<f32> {
+        self.inner.pack_importance(pack_id)
+    }
+
     fn __repr__(&self) -> String {
         format!("Engine(path='{}', cells={})", self.inner.dir().display(), self.inner.cell_count())
     }

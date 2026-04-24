@@ -21,6 +21,7 @@ name = "tardigrade_db"
 crate-type = ["cdylib"]
 
 [dependencies]
+tdb-core = { workspace = true }
 tdb-engine = { workspace = true }
 pyo3 = "0.28"
 numpy = "0.28"
