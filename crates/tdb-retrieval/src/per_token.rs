@@ -28,6 +28,17 @@ use crate::int8_quant::{Int8Quantizer, QuantizedInt8Vec};
 use crate::retriever::Retriever;
 use crate::simd_distance::DotProduct;
 
+/// Scoring aggregation strategy for per-token retrieval.
+#[derive(Debug, Clone, Copy)]
+pub enum ScoringMode {
+    /// Max-sim: cell score = max dot product across all token pairs.
+    /// Fast but sensitive to high-magnitude outlier tokens.
+    MaxSim,
+    /// Top-5 average: cell score = mean of the 5 highest dot products.
+    /// More robust — rewards broad matches over single spikes.
+    Top5Avg,
+}
+
 /// A single token's K vector, quantized to INT8, with its parent cell reference.
 #[derive(Debug)]
 struct TokenEntry {
@@ -36,11 +47,11 @@ struct TokenEntry {
     quantized_key: QuantizedInt8Vec,
 }
 
-/// Per-token retriever using Inverted Multi-Key Index + max-sim scoring.
+/// Per-token retriever using Inverted Multi-Key Index.
 ///
 /// Multiple token entries point back to the same `CellId`. On query,
-/// each query token scores against all stored tokens. The best match
-/// per cell determines that cell's ranking.
+/// each query token scores against all stored tokens. Aggregation
+/// depends on [`ScoringMode`].
 #[derive(Debug)]
 pub struct PerTokenRetriever {
     tokens: Vec<TokenEntry>,
@@ -48,12 +59,24 @@ pub struct PerTokenRetriever {
     cell_token_count: HashMap<CellId, usize>,
     /// Dimension of each token vector (detected on first insert).
     dim: Option<usize>,
+    /// How to aggregate per-token scores into a cell score.
+    scoring_mode: ScoringMode,
 }
 
 impl PerTokenRetriever {
-    /// Create a new empty per-token retriever.
+    /// Create a new empty per-token retriever with `MaxSim` scoring.
     pub fn new() -> Self {
-        Self { tokens: Vec::new(), cell_token_count: HashMap::new(), dim: None }
+        Self {
+            tokens: Vec::new(),
+            cell_token_count: HashMap::new(),
+            dim: None,
+            scoring_mode: ScoringMode::MaxSim,
+        }
+    }
+
+    /// Create a retriever with a specific scoring mode.
+    pub fn with_scoring_mode(mode: ScoringMode) -> Self {
+        Self { tokens: Vec::new(), cell_token_count: HashMap::new(), dim: None, scoring_mode: mode }
     }
 
     /// Number of individual token entries stored.
@@ -157,15 +180,14 @@ impl Retriever for PerTokenRetriever {
         let dim = self.dim.unwrap_or(0);
         let inv_sqrt_dk = if dim > 0 { 1.0 / (dim as f32).sqrt() } else { 1.0 };
 
-        // Max-sim: for each cell, take the max score across all (query_token, stored_token) pairs.
-        let mut cell_max_scores: HashMap<CellId, (f32, OwnerId)> = HashMap::new();
+        // Collect dot products per cell. Aggregation depends on scoring_mode.
+        let mut cell_scores: HashMap<CellId, (Vec<f32>, OwnerId)> = HashMap::new();
 
         for token_entry in &self.tokens {
             if owner_filter.is_some_and(|o| o != token_entry.owner) {
                 continue;
             }
 
-            // Skip dimension mismatch.
             if token_entry.quantized_key.values.len() != query_tokens[0].values.len() {
                 continue;
             }
@@ -173,20 +195,32 @@ impl Retriever for PerTokenRetriever {
             for qt in &query_tokens {
                 let dot = DotProduct::int8_dot(qt, &token_entry.quantized_key) * inv_sqrt_dk;
 
-                let entry = cell_max_scores
+                let entry = cell_scores
                     .entry(token_entry.cell_id)
-                    .or_insert((f32::NEG_INFINITY, token_entry.owner));
+                    .or_insert_with(|| (Vec::new(), token_entry.owner));
 
-                if dot > entry.0 {
-                    *entry = (dot, token_entry.owner);
-                }
+                entry.0.push(dot);
             }
         }
 
-        // Sort by max score descending, take top-k.
-        let mut results: Vec<RetrievalResult> = cell_max_scores
+        // Aggregate per-cell scores based on scoring mode.
+        let mut results: Vec<RetrievalResult> = cell_scores
             .into_iter()
-            .map(|(cell_id, (score, owner))| RetrievalResult { cell_id, owner, score })
+            .map(|(cell_id, (mut dots, owner))| {
+                let score = match self.scoring_mode {
+                    ScoringMode::MaxSim => dots.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+                    ScoringMode::Top5Avg => {
+                        dots.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                        let take = dots.len().min(5);
+                        if take == 0 {
+                            f32::NEG_INFINITY
+                        } else {
+                            dots[..take].iter().sum::<f32>() / take as f32
+                        }
+                    }
+                };
+                RetrievalResult { cell_id, owner, score }
+            })
             .collect();
 
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
