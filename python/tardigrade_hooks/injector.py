@@ -1,16 +1,13 @@
-"""MemoryInjector — Decorator pattern for transparent KV cache injection.
+"""MemoryInjector — DEPRECATED. Use KnowledgePackStore instead.
 
-Wraps a HuggingFace model, intercepting forward() to:
-1. Compute a cheap query via the model's embedding layer (no attention)
-2. Retrieve relevant KV memories from TardigradeDB
-3. Build a DynamicCache with injected entries
-4. Run a single forward pass with the injected cache
+This injector uses embedding-based queries and per-cell KV injection,
+which was proven inferior to the Knowledge Packs approach (chat template +
+full past_key_values injection). KnowledgePackStore achieves byte-identical
+output to text RAG with 46% fewer prompt tokens.
 
-Callers use model(input_ids) or model.generate() as usual — the injection
-is transparent. On empty retrieval, behavior is identical to the unwrapped
-model (Decorator contract).
-
-Approach C: hook-based, single forward pass, embedding-based query.
+Kept for backwards compatibility with existing tests. The kv_injector
+module (reshape_to_kv, build_injection_cache, etc.) is still used by
+test_kv_injector.py and test_memory_injector.py.
 """
 
 from typing import Optional

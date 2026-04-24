@@ -1,7 +1,11 @@
-"""HuggingFaceHook — Reference implementation of TardigradeHook for HF transformers.
+"""HuggingFaceHook — DEPRECATED. Use HuggingFaceKVHook or KnowledgePackStore.
 
-Adapter pattern: translates HuggingFace hidden_states tensor format
-to TardigradeDB's flat f32 key/value API.
+This hook uses mean-pooled hidden states, which was proven to produce
+31% recall (gravity well problem). Superseded by:
+  - HuggingFaceKVHook: per-token K/Q projections for retrieval
+  - KnowledgePackStore: end-to-end KV injection via Knowledge Packs approach
+
+Kept for backwards compatibility with existing tests.
 """
 
 import numpy as np

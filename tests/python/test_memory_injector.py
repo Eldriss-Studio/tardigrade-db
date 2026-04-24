@@ -1,12 +1,12 @@
-"""ATDD acceptance tests for MemoryInjector — Decorator pattern.
+"""LEGACY tests for MemoryInjector — Decorator pattern.
 
-The MemoryInjector wraps a HuggingFace model, transparently retrieving
-stored KV memories from TardigradeDB and injecting them into the attention
-cache before the forward pass. Callers use model.generate() as usual.
+These tests validate the old embedding-based injection approach, which
+has been superseded by KnowledgePackStore (see test_kp_injector.py).
+The old approach works structurally but produces inferior retrieval
+quality (mean-pooled hidden states = 31% recall vs 100% with Top5Avg).
 
-Approach C (hook-based): Uses the model's embedding layer as a cheap
-query to TardigradeDB, then injects retrieved KV into a DynamicCache
-for a single full forward pass. No double-forward.
+Kept as regression tests for the kv_injector module (reshape, cache
+building) which is still used internally.
 """
 
 import sys

@@ -296,7 +296,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install maturin numpy pytest
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
 
-# Run 81 Python tests
+# Run 88 Python tests
 pytest tests/python/ -v
 
 # Run the GPT-2 end-to-end demo
@@ -345,7 +345,7 @@ cargo fmt --all -- --check                            # format check
 just test-crate tdb-storage                           # single crate
 ```
 
-### Python (81 tests)
+### Python (88 tests)
 
 ```bash
 source .venv/bin/activate
@@ -406,7 +406,7 @@ PYTHONPATH=python python -m tdb_bench compare \
 | Governance | `tdb-governance` | 22 | Importance scoring, tier hysteresis, recency decay, sweep |
 | Engine | `tdb-engine` | 34 | Write/read, pack API, state rebuild, SLB chain, Vamana activation, throughput |
 | Docs | doctests | 10 | Crate-level usage examples |
-| Python | pytest | 81 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack round-trip, diagnostics, RAG baseline, sweep |
+| Python | pytest | 88 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack round-trip, diagnostics, RAG baseline, sweep |
 
 ## Research Milestones Implemented
 
@@ -476,7 +476,7 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] SynapticBank (LoRA adapter) persistence
 - [x] Criterion benchmarks across all subsystems
 - [x] GPT-2 end-to-end demo + Qwen3-0.6B injection experiments
-- [x] 223 tests (142 Rust + 81 Python)
+- [x] 230 tests (142 Rust + 88 Python)
 
 ### Next up
 
