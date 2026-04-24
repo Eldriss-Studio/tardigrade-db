@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["mean_pool_if_per_token"],"struct":["BruteForceRetriever","RetrievalResult","StoredKey"]};
+window.SIDEBAR_ITEMS = {"struct":["BruteForceRetriever","RetrievalResult","StoredKey"]};
