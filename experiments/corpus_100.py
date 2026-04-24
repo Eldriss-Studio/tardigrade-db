@@ -191,9 +191,37 @@ NEGATIVE_QUERIES = [
     "Eduardo moving to another state for work",
 ]
 
+# ── Vague Queries (15) — natural, broad, no distinctive keywords ──────────
+
+VAGUE_QUERIES = [
+    # Broad domain recall
+    ("What have I been cooking lately", [20, 21, 22, 23, 24, 25, 26, 27, 28, 29]),
+    ("How is Lucia doing", [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
+    ("Any updates on the divorce", [40, 41, 42, 43, 44, 45, 46, 47, 48, 49]),
+    ("How has work been going", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+    ("Have I been exercising", [60, 61, 62, 63, 64, 65, 66, 67, 68, 69]),
+    # Cross-domain vague
+    ("What made me cry recently", [11, 24, 38, 49, 59, 92]),
+    ("Did anything funny happen", [17, 23, 25, 28, 29, 64]),
+    ("What have I been worried about", [4, 30, 33, 34, 38, 48, 49, 99]),
+    ("Tell me about my neighbors", [14, 52, 56]),
+    ("Any car or house problems", [8, 80, 84, 88]),
+    # Very vague / emotional
+    ("How have I been feeling", [11, 34, 38, 49, 59, 92]),
+    ("What did I do this weekend", [13, 23, 62, 93]),
+    ("Anything about Eduardo", [4, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]),
+    ("What did Lucia say that surprised me", [14, 17, 19, 22, 28]),
+    ("Am I taking care of myself", [30, 31, 32, 33, 34, 35, 36, 37, 38, 39]),
+]
+
 # All queries combined with labels
 ALL_QUERIES = (
     [(q, e, "cross") for q, e in CROSS_DOMAIN_QUERIES]
     + [(q, e, "within") for q, e in WITHIN_DOMAIN_QUERIES]
     + [(q, [], "negative") for q in NEGATIVE_QUERIES]
+)
+
+ALL_QUERIES_WITH_VAGUE = (
+    ALL_QUERIES
+    + [(q, e, "vague") for q, e in VAGUE_QUERIES]
 )
