@@ -69,9 +69,13 @@ Systematic exploration of what to store and how to retrieve, tested on Sonia (16
 
 **100-memory scale test:** Q*K recall dropped to **40%** at 100 memories. Gravity well returned. Traditional RAG baseline achieved 100% on the same corpus.
 
-**Signal audit verdict: `LAYER_OR_HEAD_PROBLEM`.** The correct memories ARE in the latent signal (R@100 = 100%). The current layer/scorer is a poor combination. **Hidden states + top5_pair_avg achieves 100% recall with 10% false positive rate** — matching RAG quality with latent representations. The problem was never the architecture; it was mean-pooling and layer/scorer selection.
+**Signal audit verdict: `LAYER_OR_HEAD_PROBLEM`.** The correct memories ARE in the latent signal (R@100 = 100%). Hidden states + top5_pair_avg achieves 100% recall with 10% false positive rate.
 
-**Scripts:** `experiments/scale_100_qk_diagnostics.py` (full diagnostic suite), `experiments/scale_100_qk.py` (scale test), `experiments/scale_100_rag_baseline.py` (RAG baseline)
+**Engine pipeline validation: 100% recall.** Hidden states + Top5Avg scoring through the full engine pipeline (Q4 quantization, INT8 scoring, per-token retrieval) achieves **30/30 recall, all at rank #1, no gravity well, 97ms latency**. This matches traditional RAG using the model's own latent representations.
+
+**Open question: vague queries.** All test queries use specific vocabulary. Real agent queries would be vaguer ("How is Lucia doing?"). This is the next test.
+
+**Scripts:** `experiments/scale_100_hidden_top5.py` (100% result), `experiments/scale_100_qk_diagnostics.py` (diagnostic suite), `experiments/scale_100_rag_baseline.py` (RAG baseline)
 
 ## Planned Experiments
 

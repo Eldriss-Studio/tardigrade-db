@@ -224,19 +224,68 @@ The correct memories are present in the latent signal. The current default layer
 3. The remaining problem is false positive rejection (telling "genuine match" from "not in memory")
 4. Hidden states with smarter aggregation outperform Q/K projections for cross-sequence retrieval
 
+## Engine Pipeline Validation (April 23, 2026)
+
+The diagnostic's 100% result was measured outside the engine with raw tensors. The critical question: does it survive Q4 quantization and the full retrieval path?
+
+**Yes.** `experiments/scale_100_hidden_top5.py` ran the 100-memory corpus through the real engine pipeline:
+
+| Metric | Result |
+|---|---|
+| Cross-domain recall | **10/10 (100%)** |
+| Within-domain recall | **20/20 (100%)** |
+| Overall recall@5 | **30/30 (100%)** |
+| All results at rank #1 | Yes |
+| Unique top-1 memories | 30/30 |
+| Gravity well | PASS (worst = 1x) |
+| Avg query latency | 97ms |
+| Store time (100 memories) | 12.5s |
+
+### Full Progression on 100-Memory Corpus
+
+| Method | Recall@5 | Notes |
+|---|---|---|
+| Q*K per-token pipeline (max_sim) | 40.0% | Gravity well, 7x on one memory |
+| Q*K per-head-max (diagnostic) | 63.3% | Best Q*K scorer |
+| Cosine sum-of-max (ColBERT-style) | 53.3% | Tested and rejected |
+| Hidden + top5_pair_avg (diagnostic) | 100.0% | Outside engine, raw tensors |
+| Traditional RAG (e5-small-v2) | 100.0% | Embedding baseline |
+| **Hidden + Top5Avg (engine pipeline)** | **100.0%** | **Through Q4 quantization, full pipeline** |
+
+Q4 quantization did not destroy the hidden state signal. The Top5Avg scorer survived lossy 4-bit compression.
+
+## What's Validated
+
+- Hidden states + Top5Avg achieves 100% recall at 100 memories through the full engine pipeline
+- Q4 quantization preserves enough hidden state signal for per-token retrieval
+- No gravity well at 100-memory density with this approach
+- Latency is acceptable (97ms per query, 12.5s to store 100 memories)
+- The latent-space retrieval approach matches traditional RAG on this corpus
+- Storing K projections (not hidden states) was a wrong turn — hidden states are better for cross-sequence retrieval
+- Per-token scoring with top-5 averaging outperforms max-sim and all Q*K variants
+
+## What's Not Yet Tested
+
+- **Vague queries** — All test queries use specific vocabulary that overlaps with stored memories ("The sourdough starter I named Fernando"). Real agent queries would be vaguer ("What have I been cooking lately?"). This is the critical unknown.
+- **Storage efficiency** — A 30-token memory stored as hidden states is ~90KB after Q4 vs ~50 bytes as text. Whether the latent approach's speed advantage on injection justifies 1000x storage overhead hasn't been measured.
+- **Injection quality** — The injection pipeline (Phase 18) exists but hasn't been tested with hidden-state-retrieved memories on actual generation quality.
+- **False positive calibration** — The diagnostic showed 10% false positive rate on negative queries. A production system needs a score threshold to say "I don't remember."
+- **Layer sensitivity** — The current layer choice (67% depth) works but the diagnostic showed other layers can be better or worse. No automatic layer selection exists.
+
 ## Experiment Scripts
 
 | Script | What it tests |
 |---|---|
-| `experiments/scale_100_qk_diagnostics.py` | **Full diagnostic suite** — rank depth, oracle, layer/head sweep, hidden states |
-| `experiments/scale_100_qk.py` | Q*K retrieval at 100-memory density |
-| `experiments/scale_100_rag_baseline.py` | Traditional embedding RAG baseline |
-| `experiments/sonia_per_token_pipeline.py` | Q*K pipeline end-to-end |
-| `experiments/sonia_real_kv_cache.py` | K*K real KV cache |
+| `experiments/scale_100_hidden_top5.py` | **Hidden + Top5Avg through engine** — the 100% result |
+| `experiments/scale_100_qk_diagnostics.py` | Full diagnostic suite — rank depth, oracle, layer/head sweep |
+| `experiments/scale_100_qk.py` | Q*K retrieval at 100-memory density (40% baseline) |
+| `experiments/scale_100_rag_baseline.py` | Traditional embedding RAG baseline (100%) |
 | `experiments/corpus_100.py` | 100-memory corpus (10 domains x 10 memories) |
+| `experiments/sonia_per_token_pipeline.py` | Q*K pipeline on 16 memories |
 
 ## Next Steps
 
-1. **Validate hidden states + top5_pair_avg through the engine pipeline** on the 100-memory corpus. The diagnostic ran outside the engine — need to confirm it holds through Q4 quantization and the full retrieval path.
-2. **False positive calibration** — The 10% negFP rate means 1 in 10 "I don't remember" queries incorrectly matches. Calibrate a score threshold to reduce this.
-3. **Layer selection** — Test whether the optimal layer can be detected automatically or if it needs to be configured per model.
+1. **Vague query test** — Add 10-15 natural queries ("What have I been cooking?", "How is Lucia?") alongside specific ones. Run both hidden state retrieval AND traditional RAG on the same queries. This is the test that determines whether the latent approach works for real agent use.
+2. **Storage efficiency measurement** — Compare: tensor storage size vs text size, injection latency vs re-tokenization latency. Quantify the actual trade-off.
+3. **False positive calibration** — Establish a score threshold for "I don't remember" based on the negative query score distribution.
+4. **Injection quality test** — Verify that hidden-state-retrieved memories, when injected via the Phase 18 MemoryInjector, improve generation quality vs text re-tokenization.

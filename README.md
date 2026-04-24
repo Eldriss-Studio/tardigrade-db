@@ -127,15 +127,29 @@ The per-token retriever is now wired into the engine pipeline and the Python KV 
 
 ### Retrieval Evolution (What We Learned)
 
-Three experiments in one session revealed a clear progression:
+A series of experiments revealed what works and what doesn't for latent-space retrieval:
 
-1. **Storing hidden states is wrong.** Raw internal activations (before the model's attention projections) cluster everything together. A 0.6B model couldn't tell "burnt risotto" from "custody hearing" — 31% recall with a gravity well (one memory dominated all queries).
+1. **Mean-pooling destroys signal.** Averaging all tokens into one vector collapses different memories into the same representation. This caused "gravity wells" where one memory dominated all queries regardless of content. Mean-pooled hidden states: 31% recall. Mean-pooled K projections: 62%.
 
-2. **Storing real K projections works.** Switching to `past_key_values` (the actual attention keys) doubled recall to 75%. But mean-pooling the query still lost distinguishing tokens.
+2. **Q*K projections don't work for cross-sequence retrieval.** K vectors share a massive common component across all sequences (position-0 dot product = 6281 for unrelated text). Q*K scoring (what attention does) improved things but still degraded to 40% at 100 memories.
 
-3. **Per-token retrieval breaks the ceiling.** Storing and querying individual token K vectors with max-sim scoring (best token-to-token match per cell) achieved 100% recall on synthetic benchmarks. This is based on FIER (2025) research, using the existing INT8 SIMD infrastructure.
+3. **Hidden states + per-token top-5 averaging = 100%.** Storing raw hidden states per token and scoring by the mean of the top 5 highest dot products achieves perfect recall at 100 memories — matching traditional embedding RAG. The hidden states contain all the information Q and K are derived from, without the artifacts that make Q*K fail cross-sequence.
 
-The retrieval pipeline now chains: **SLB (mean-pooled hot cache) -> PerTokenRetriever (max-sim) -> BruteForceRetriever (fallback)**.
+The retrieval pipeline now chains: **SLB (mean-pooled hot cache) → PerTokenRetriever (Top5Avg) → BruteForceRetriever (fallback)**.
+
+### 100-Memory Result (April 23, 2026)
+
+100 memories across 10 life domains, 30 queries (10 cross-domain, 20 within-domain):
+
+| Method | Recall@5 |
+|--------|----------|
+| Q*K per-token max-sim | 40% |
+| Traditional RAG (e5-small-v2) | 100% |
+| **Hidden states + Top5Avg (engine pipeline)** | **100%** |
+
+All 30 queries found at rank #1. No gravity well. 97ms average latency. Q4 quantization preserved the signal.
+
+**Open question:** These queries use specific vocabulary ("The sourdough starter I named Fernando"). Vague queries ("What have I been cooking?") are untested. This is the next experiment.
 
 ### Why Python Exists in This Project
 
