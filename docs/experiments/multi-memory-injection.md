@@ -130,12 +130,50 @@ Multi-hop is partially universal (both fail), but RAG handles it significantly b
 3. The fix is in the retrieval layer, not the injection layer
 4. Options: increase k, two-stage retrieval, or Trace graph traversal (link related facts at storage time)
 
+## Oracle Injection + Higher-K Retrieval (April 24, 2026)
+
+### Oracle Injection: 6/10
+
+Bypassed retrieval and manually injected the correct packs for each query. Result:
+
+| Query | Oracle | Normal | Notes |
+|-------|--------|--------|-------|
+| Q1: wifi password for apartment 4B | PASS | PASS | Both work — single fact sufficient |
+| Q2: car Lucia's instructor drives | **MISS** | MISS | Hallucinated "white car" even with correct packs |
+| Q3: cat of neighbor who brought pierogi | **MISS** | MISS | Hallucinated "Milo" even with correct packs |
+| Q4: best-selling item at Eduardo's bakery | PASS | PASS | Both work |
+| Q5: address of Sonia's dentist | **MISS** | MISS | "information incomplete" even with correct packs |
+| Q6: dog of Lucia's piano teacher | **MISS** | MISS | Hallucinated "Milo" even with correct packs |
+| Q7: leader of running group at Prospect Park | PASS | MISS | Oracle fixes retrieval-only failure |
+| Q8: day Eduardo's restaurant closed | PASS | PASS | Both work |
+| Q9: pharmacist at pharmacy on Western | PASS | MISS | Oracle fixes retrieval-only failure |
+| Q10: birthday of Lucia's best friend | PASS | MISS | Oracle fixes retrieval-only failure |
+
+**6/10 correct with oracle.** 3 queries (Q7, Q9, Q10) were pure retrieval failures — fixed by oracle. 4 queries (Q2, Q3, Q5, Q6) fail even with correct packs injected — genuine injection/composition failures.
+
+### Higher-K Retrieval
+
+| k | Queries with all facts found |
+|---|------------------------------|
+| 2 | 0/10 |
+| 5 | 0/10 |
+| 10 | 4/10 |
+| 20 | 5/10 |
+
+Even at k=20, only 5/10 queries find all needed packs. The latent retrieval key for second-hop facts has no semantic overlap with the query.
+
+### What This Means
+
+The ceiling for multi-memory KV injection: **~6/10** on cross-referencing queries (vs 10/10 text RAG). Two independent problems:
+
+1. **Retrieval gap (fixable):** 5/10 second-hop facts unreachable by latent retrieval. Trace graph or entity-linked retrieval could fix this.
+2. **Injection gap (harder):** 4/10 queries fail even with correct packs injected. The model hallucinates details instead of reading them from the second pack's KV cache. This is the genuine cross-attention limitation.
+
 ## Remaining Experiments
 
 | Experiment | Purpose | Status |
 |------------|---------|--------|
-| Oracle injection | Manually inject correct packs to verify injection works | Planned |
-| Higher-k retrieval | Test if missing facts appear at k=10/20 | Planned |
+| Investigate 4 oracle failures | Why does the model hallucinate with correct packs? | Next |
 | Trace-linked retrieval | Link related facts via causal graph, follow edges on retrieval | Planned |
 
 ## Updated File List
