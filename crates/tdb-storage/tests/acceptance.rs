@@ -3,6 +3,15 @@ use tdb_core::memory_cell::{MemoryCell, MemoryCellBuilder};
 use tdb_storage::block_pool::BlockPool;
 use tdb_storage::quantization::{DequantizeStrategy, Q4, QuantizeStrategy};
 
+const HYDRATION_FIXTURE_CELL_COUNT: u64 = 6;
+const HYDRATION_FIXTURE_TARGET_ID: u64 = 4;
+const HYDRATION_FIXTURE_OWNER: u64 = 7;
+const HYDRATION_FIXTURE_LAYER: u16 = 3;
+const HYDRATION_FIXTURE_KEY_DIM: usize = 16;
+const HYDRATION_FIXTURE_PAYLOAD_DIM: usize = 96;
+const HYDRATION_KEY_BASE: f32 = 0.25;
+const HYDRATION_VALUE_BASE: f32 = 0.75;
+
 /// ATDD Test 1: Round-trip a `MemoryCell` through Q4 quantization and storage.
 /// Write a cell, read it back, verify vectors match within Q4 tolerance (SNR > 20dB).
 #[test]
@@ -352,4 +361,33 @@ fn test_batch_faster_than_individual() {
         speedup > 2.0,
         "Batch ({time_batch:?}) should be ≥2x faster than individual ({time_ind:?}). Speedup: {speedup:.1}x"
     );
+}
+
+#[test]
+fn test_direct_block_pool_hydration_fixture_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open(dir.path()).unwrap();
+
+    let cells: Vec<MemoryCell> = (0..HYDRATION_FIXTURE_CELL_COUNT)
+        .map(|id| {
+            MemoryCellBuilder::new(
+                id,
+                HYDRATION_FIXTURE_OWNER,
+                HYDRATION_FIXTURE_LAYER,
+                vec![HYDRATION_KEY_BASE + id as f32; HYDRATION_FIXTURE_KEY_DIM],
+                vec![HYDRATION_VALUE_BASE + id as f32; HYDRATION_FIXTURE_PAYLOAD_DIM],
+            )
+            .build()
+        })
+        .collect();
+
+    pool.append_batch(&cells).unwrap();
+
+    let restored = pool.get(HYDRATION_FIXTURE_TARGET_ID).unwrap();
+
+    assert_eq!(restored.id, HYDRATION_FIXTURE_TARGET_ID);
+    assert_eq!(restored.owner, HYDRATION_FIXTURE_OWNER);
+    assert_eq!(restored.layer, HYDRATION_FIXTURE_LAYER);
+    assert_eq!(restored.key.len(), HYDRATION_FIXTURE_KEY_DIM);
+    assert_eq!(restored.value.len(), HYDRATION_FIXTURE_PAYLOAD_DIM);
 }

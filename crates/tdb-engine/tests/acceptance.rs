@@ -1207,6 +1207,8 @@ const OWNER_TWO_LAYER_VALUE_CODE: i32 = 220;
 const OWNER_ONE_LAYER_VALUE: f32 = OWNER_ONE_LAYER_VALUE_CODE as f32;
 const OWNER_TWO_LAYER_VALUE: f32 = OWNER_TWO_LAYER_VALUE_CODE as f32;
 const KEY_ONLY_INDEX_QUERY_K: usize = 8;
+const ZERO_LAYER_COUNT: usize = 0;
+const PROFILE_PAYLOAD_DIM: usize = 64;
 
 fn test_pack(layer_values: &[f32], retrieval_key: Vec<f32>) -> KVPack {
     test_pack_for_owner(TEST_PACK_OWNER_ONE, layer_values, retrieval_key)
@@ -1535,6 +1537,46 @@ fn test_key_only_index_preserves_owner_filter() {
 
     assert!(results.iter().all(|result| result.pack.owner == TEST_PACK_OWNER_TWO));
     assert_eq!(results[0].pack.layers[0].data[0].round() as i32, OWNER_TWO_LAYER_VALUE_CODE);
+}
+
+#[test]
+fn test_pack_fixture_with_zero_layers_is_retrievable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+
+    engine.mem_write_pack(&test_pack(&[], broad_key)).unwrap();
+
+    let results =
+        engine.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].pack.owner, TEST_PACK_OWNER_ONE);
+    assert_eq!(results[0].pack.layers.len(), ZERO_LAYER_COUNT);
+}
+
+#[test]
+fn test_pack_fixture_payload_dimension_is_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let (query, broad_key, _spike_key) = top5_broad_match_fixture();
+    let pack = KVPack {
+        id: 0,
+        owner: TEST_PACK_OWNER_ONE,
+        retrieval_key: broad_key,
+        layers: vec![KVLayerPayload {
+            layer_idx: CANDIDATE_FIXTURE_LAYER,
+            data: vec![OWNER_ONE_LAYER_VALUE; PROFILE_PAYLOAD_DIM],
+        }],
+        salience: TEST_PACK_SALIENCE,
+    };
+
+    engine.mem_write_pack(&pack).unwrap();
+    let results =
+        engine.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].pack.layers[0].data.len(), PROFILE_PAYLOAD_DIM);
 }
 
 fn recall_at(rankings: &[Vec<u64>], expected: &[u64], k: usize) -> f32 {

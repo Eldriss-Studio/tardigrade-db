@@ -42,6 +42,12 @@ The Rust acceptance tests now lock these behaviors:
 - malformed encoded keys do not flow into fixed-dimension retrievers as raw vectors
 - Vamana threshold crossing does not change encoded ranking
 - correctness metric helpers catch recall and gravity-well regressions
+- pack-read phase profile labels include layer count, payload dimension, and
+  indexed cells per pack
+- zero-layer packs remain retrievable through `mem_read_pack`
+- pack payload dimensions round-trip through reconstruction
+- direct `BlockPool::get` hydration fixtures preserve cell IDs and payload
+  dimensions
 
 ## Bug Found
 
@@ -122,18 +128,18 @@ RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo ben
 
 ## Validation
 
-The relevant Rust checks passed:
+The latest Rust profile checks passed:
 
 ```bash
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo nextest run -p tdb-retrieval -p tdb-engine
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo clippy -p tdb-retrieval -p tdb-engine --all-targets -- -D warnings
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo nextest run -p tdb-engine -p tdb-storage
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo clippy -p tdb-engine -p tdb-storage --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
 Result:
 
 ```text
-108 tests passed, 3 skipped
+82 tests run: 82 passed (1 leaky), 1 skipped
 clippy passed
 format check passed
 ```
@@ -177,3 +183,81 @@ Key-only indexing confirms duplicate pack-cell retrieval was a real bottleneck:
 10K 4-layer reads improved from ~17.06 ms to ~6.60 ms. The remaining latency is
 now much less sensitive to layer count, which means the next pack-read plan
 should profile residual retrieval cost and storage hydration instead of dedup.
+
+### Pack Read Phase Profile
+
+The phase profile compares three costs without changing production behavior:
+
+- direct retrieval-cell reads through `Engine::mem_read`
+- complete pack reads through `Engine::mem_read_pack`
+- direct payload hydration through `BlockPool::get`
+
+Measured with:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo bench -p tdb-engine "mem_read_pack"
+RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo bench -p tdb-storage "BlockPool get"
+```
+
+All `mem_read_pack` labels reported `target true`, `dedup true`, and `indexed 1`.
+
+| Path | Size | Layers | Payload dim | Latency |
+| --- | ---: | ---: | ---: | ---: |
+| `Engine::mem_read_pack` | 100 packs | 0 | 128 | ~135 us |
+| `Engine::mem_read_pack` | 100 packs | 1 | 128 | ~242 us |
+| `Engine::mem_read_pack` | 100 packs | 4 | 128 | ~535 us |
+| `Engine::mem_read_pack` | 100 packs | 16 | 128 | ~1.71 ms |
+| `Engine::mem_read_pack` | 1,000 packs | 0 | 128 | ~1.62 ms |
+| `Engine::mem_read_pack` | 1,000 packs | 1 | 128 | ~1.73 ms |
+| `Engine::mem_read_pack` | 1,000 packs | 4 | 128 | ~2.03 ms |
+| `Engine::mem_read_pack` | 1,000 packs | 16 | 128 | ~3.19 ms |
+| `Engine::mem_read_pack` | 10,000 packs | 0 | 128 | ~6.16 ms |
+| `Engine::mem_read_pack` | 10,000 packs | 1 | 128 | ~6.51 ms |
+| `Engine::mem_read_pack` | 10,000 packs | 4 | 128 | ~6.62 ms |
+| `Engine::mem_read_pack` | 10,000 packs | 16 | 128 | ~7.96 ms |
+
+Payload dimension did not materially change the result in this profile. At
+10K packs, 4-layer reads were ~6.62 ms at payload dim 128 and ~6.75 ms at
+payload dim 256.
+
+The retrieval-cell-only profile used `Engine::mem_read` against the same pack
+fixtures:
+
+| Path | Size | Latency |
+| --- | ---: | ---: |
+| `Engine::mem_read` on pack retrieval cells | 100 packs | ~232 us |
+| `Engine::mem_read` on pack retrieval cells | 1,000 packs | ~1.68 ms |
+| `Engine::mem_read` on pack retrieval cells | 10,000 packs | ~4.0 ms |
+
+This is not a perfect subtraction model because `mem_read` and `mem_read_pack`
+do different result handling, governance updates, and reconstruction work. It
+does show that direct encoded retrieval-cell reads are still a large part of the
+10K budget.
+
+Direct storage hydration was much cheaper:
+
+| Path | Cell count | Payload dim | Latency |
+| --- | ---: | ---: | ---: |
+| `BlockPool::get` | 100 cells | 128 | ~18.6 us |
+| `BlockPool::get` | 100 cells | 256 | ~18.9 us |
+| `BlockPool::get` | 1,000 cells | 128 | ~18.8 us |
+| `BlockPool::get` | 1,000 cells | 256 | ~18.9 us |
+| `BlockPool::get` | 10,000 cells | 128 | ~18.9 us |
+| `BlockPool::get` | 10,000 cells | 256 | ~19.0 us |
+
+#### Phase Profile Conclusion
+
+The next bottleneck is not raw `BlockPool::get`. A single payload hydration is
+only ~19 us, and doubling payload dimension from 128 to 256 barely moves either
+the storage benchmark or the pack benchmark.
+
+At 10K packs, zero-layer `mem_read_pack` is already ~6.1 ms. A 4-layer pack is
+only about half a millisecond slower, while direct retrieval-cell `mem_read` is
+about ~4.0 ms. That means the remaining 10K latency is mostly retrieval/base
+pack-read overhead, with reconstruction becoming important only at high layer
+counts such as 16 layers.
+
+The next implementation plan should therefore profile and reduce the residual
+pack-read path around result materialization, governance/SLB warming, and the
+`mem_read_pack` reconstruction loop. Storage hydration should not be the first
+target unless a later profile uses much larger payload tensors.

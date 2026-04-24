@@ -19,9 +19,11 @@ const DEFAULT_LAYER: u16 = 0;
 const DEFAULT_SALIENCE: f32 = 50.0;
 const PACK_SALIENCE: f32 = 80.0;
 const BENCH_CELL_COUNTS: [usize; 3] = [100, 1_000, 10_000];
-const PACK_LAYER_COUNTS: [usize; 2] = [1, 4];
+const PACK_PROFILE_LAYER_COUNTS: [usize; 4] = [0, 1, 4, 16];
+const PACK_PROFILE_PAYLOAD_DIMS: [usize; 2] = [128, 256];
 const PACK_TARGET_DIVISOR: usize = 2;
 const INDEXED_CELLS_PER_PACK: usize = 1;
+const FIRST_ASSIGNED_PACK_ID: u64 = 1;
 const CANDIDATE_REDUCTION_THRESHOLD: usize = 512;
 const MIN_CANDIDATES: usize = 256;
 const CANDIDATE_MULTIPLIER: usize = 64;
@@ -30,6 +32,28 @@ const CELL_SEED_MULTIPLIER: u64 = 0x9E37_79B1_85EB_CA87;
 const TOKEN_SEED_MULTIPLIER: u64 = 0xC2B2_AE3D_27D4_EB4F;
 const RANDOM_SHIFT: u32 = 40;
 const RANDOM_DENOMINATOR: f32 = (1u64 << 24) as f32;
+
+#[derive(Debug, Clone, Copy)]
+struct PackReadProfileLabel {
+    target_top1: bool,
+    dedup_ok: bool,
+    layer_count: usize,
+    payload_dim: usize,
+    indexed_cells_per_pack: usize,
+}
+
+impl PackReadProfileLabel {
+    fn as_benchmark_id(self) -> String {
+        format!(
+            "target-{}-dedup-{}-layers-{}-payload-{}-indexed-{}",
+            self.target_top1,
+            self.dedup_ok,
+            self.layer_count,
+            self.payload_dim,
+            self.indexed_cells_per_pack
+        )
+    }
+}
 
 fn bench_engine_write(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
@@ -267,30 +291,68 @@ fn bench_engine_read_pack_encoded_per_token(c: &mut Criterion) {
     // retrieval key shape matches the validated hidden-state Top5Avg path.
     let mut group = c.benchmark_group("Engine mem_read_pack — encoded per-token Top5Avg path");
     for pack_count in BENCH_CELL_COUNTS {
-        for layer_count in PACK_LAYER_COUNTS {
-            let dir = tempfile::tempdir().unwrap();
-            let mut engine = Engine::open(dir.path()).unwrap();
-            for pack_id in 0..pack_count {
-                engine.mem_write_pack(&bench_pack(pack_id, layer_count)).unwrap();
-            }
-            let target_pack = target_pack_id(pack_count);
-            let query = encoded_cell(FIXTURE_DIM, target_pack, FIXTURE_TOKENS_PER_CELL);
-            let report = pack_read_correctness_report(&mut engine, &query, target_pack);
+        for layer_count in PACK_PROFILE_LAYER_COUNTS {
+            for payload_dim in PACK_PROFILE_PAYLOAD_DIMS {
+                let dir = tempfile::tempdir().unwrap();
+                let mut engine = Engine::open(dir.path()).unwrap();
+                for pack_id in 0..pack_count {
+                    engine.mem_write_pack(&bench_pack(pack_id, layer_count, payload_dim)).unwrap();
+                }
+                let target_pack = target_pack_id(pack_count);
+                let query = encoded_cell(FIXTURE_DIM, target_pack, FIXTURE_TOKENS_PER_CELL);
+                let report = pack_read_correctness_report(&mut engine, &query, target_pack);
+                let label = PackReadProfileLabel {
+                    target_top1: report.target_top1,
+                    dedup_ok: report.dedup_ok,
+                    layer_count,
+                    payload_dim,
+                    indexed_cells_per_pack: INDEXED_CELLS_PER_PACK,
+                };
 
-            let bench_id = BenchmarkId::new(
-                format!(
-                    "target-{}-dedup-{}-layers-{}-indexed-{}",
-                    report.target_top1, report.dedup_ok, layer_count, INDEXED_CELLS_PER_PACK
-                ),
-                pack_count,
-            );
-            group.bench_function(bench_id, |bench| {
-                bench.iter(|| {
-                    let _ = engine
-                        .mem_read_pack(black_box(&query), BENCH_TOP_K, Some(OWNER_ONE))
-                        .unwrap();
+                let bench_id = BenchmarkId::new(label.as_benchmark_id(), pack_count);
+                group.bench_function(bench_id, |bench| {
+                    bench.iter(|| {
+                        let _ = engine
+                            .mem_read_pack(black_box(&query), BENCH_TOP_K, Some(OWNER_ONE))
+                            .unwrap();
+                    });
                 });
-            });
+            }
+        }
+    }
+    group.finish();
+}
+
+fn bench_engine_read_pack_retrieval_only(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Engine mem_read_pack profile — retrieval cell only");
+    for pack_count in BENCH_CELL_COUNTS {
+        for layer_count in PACK_PROFILE_LAYER_COUNTS {
+            for payload_dim in PACK_PROFILE_PAYLOAD_DIMS {
+                let dir = tempfile::tempdir().unwrap();
+                let mut engine = Engine::open(dir.path()).unwrap();
+                for pack_id in 0..pack_count {
+                    engine.mem_write_pack(&bench_pack(pack_id, layer_count, payload_dim)).unwrap();
+                }
+                let target_pack = target_pack_id(pack_count);
+                let query = encoded_cell(FIXTURE_DIM, target_pack, FIXTURE_TOKENS_PER_CELL);
+                let report = pack_read_correctness_report(&mut engine, &query, target_pack);
+                let label = PackReadProfileLabel {
+                    target_top1: report.target_top1,
+                    dedup_ok: report.dedup_ok,
+                    layer_count,
+                    payload_dim,
+                    indexed_cells_per_pack: INDEXED_CELLS_PER_PACK,
+                };
+
+                let bench_id = BenchmarkId::new(label.as_benchmark_id(), pack_count);
+                group.bench_function(bench_id, |bench| {
+                    bench.iter(|| {
+                        let _ = engine
+                            .mem_read(black_box(&query), BENCH_TOP_K, Some(OWNER_ONE))
+                            .unwrap();
+                    });
+                });
+            }
         }
     }
     group.finish();
@@ -301,7 +363,7 @@ struct PackReadCorrectnessReport {
     dedup_ok: bool,
 }
 
-fn bench_pack(pack_id: usize, layer_count: usize) -> KVPack {
+fn bench_pack(pack_id: usize, layer_count: usize, payload_dim: usize) -> KVPack {
     KVPack {
         id: 0,
         owner: OWNER_ONE,
@@ -309,7 +371,7 @@ fn bench_pack(pack_id: usize, layer_count: usize) -> KVPack {
         layers: (0..layer_count)
             .map(|layer_idx| KVLayerPayload {
                 layer_idx: DEFAULT_LAYER + layer_idx as u16,
-                data: vec![pack_id as f32; FIXTURE_DIM],
+                data: vec![pack_id as f32; payload_dim],
             })
             .collect(),
         salience: PACK_SALIENCE,
@@ -326,12 +388,12 @@ fn pack_read_correctness_report(
     target_pack: usize,
 ) -> PackReadCorrectnessReport {
     let results = engine.mem_read_pack(query, BENCH_TOP_K, Some(OWNER_ONE)).unwrap();
-    let pack_ids: Vec<usize> =
-        results.iter().map(|result| result.pack.layers[0].data[0].round() as usize).collect();
-    let unique_pack_ids: std::collections::HashSet<usize> = pack_ids.iter().copied().collect();
+    let target_pack_id = target_pack as u64 + FIRST_ASSIGNED_PACK_ID;
+    let pack_ids: Vec<u64> = results.iter().map(|result| result.pack.id).collect();
+    let unique_pack_ids: std::collections::HashSet<u64> = pack_ids.iter().copied().collect();
 
     PackReadCorrectnessReport {
-        target_top1: pack_ids.first().is_some_and(|pack_id| *pack_id == target_pack),
+        target_top1: pack_ids.first().is_some_and(|pack_id| *pack_id == target_pack_id),
         dedup_ok: unique_pack_ids.len() == pack_ids.len(),
     }
 }
@@ -341,6 +403,7 @@ criterion_group!(
     bench_engine_write,
     bench_engine_read,
     bench_engine_read_encoded_per_token,
-    bench_engine_read_pack_encoded_per_token
+    bench_engine_read_pack_encoded_per_token,
+    bench_engine_read_pack_retrieval_only
 );
 criterion_main!(benches);
