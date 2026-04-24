@@ -279,15 +279,46 @@ This may be fixable by adjusting pack ordering (put the answer fact last) or by 
 4. **Persistence:** Cache pack data in Rust so `_pack_data` survives restarts
 5. **Larger model:** Test on Qwen2.5-3B to see if model capacity changes the results
 
+## Scale Test: 140 Memories, 20 Queries (April 24, 2026)
+
+100 background single-fact memories + 20 cross-referencing fact pairs (40 facts, trace-linked) = 140 total.
+
+| Approach | Small corpus (21 facts) | Scale (140 facts) |
+|----------|------------------------|-------------------|
+| Text RAG | 10/10 (100%) | 19/20 (95%) |
+| Baseline (no trace) | 3/10 (30%) | ~30% (estimated) |
+| Trace-linked injection | 9/10 (90%) | **11/20 (55%)** |
+
+The 9/10 result was real but small-corpus-favorable. At 140 memories with retrieval noise from 100 unrelated facts, accuracy drops to 55%. Still 2x better than no-trace baseline, but the gap with text RAG widens from 10% to 40%.
+
+Even text RAG degraded slightly (100% → 95%) — the 20 new queries are harder and more specific.
+
+## Full Progression
+
+```
+Phase 24: Retrieval works ..................... 100% at 100 memories
+Phase 25: Single injection works ............. 8/10, byte-identical to RAG
+Phase 30: Multi injection fails .............. 3/10 (retrieval problem)
+Phase 30A: RoPE correction ................... 3/10 (no effect)
+Phase 30B: Oracle injection .................. 6/10 (injection ceiling)
+          RAG retrieval comparison ........... 5/10 (RAG also partially fails)
+          Higher-k retrieval ................. 5/10 at k=20
+Phase 31: Trace-linked retrieval ............. 10/10 find both packs
+          Small corpus (21 facts) ............ 9/10 (90%)
+          Scale test (140 facts) ............. 11/20 (55%)
+```
+
 ## Open Research
 
 | Question | Status |
 |----------|--------|
-| Does trace-linked injection hold at 100+ memories? | Not tested |
-| Does pack ordering consistently affect accuracy? | Observed but not systematically tested |
-| Does a larger model (3B+) improve or change the result? | Not tested |
-| Can the Q1 regression be fixed by ordering? | Not tested |
-| Does Rust-side Trace produce the same results as Python-side links? | Not tested (Python-first validation) |
+| Why does scale degrade accuracy? | Retrieval noise + attention dilution (not yet decomposed) |
+| Can first-hop retrieval accuracy be measured at 140 memories? | Not measured |
+| Does candidate reduction (Rust) improve first-hop at scale? | Not tested |
+| Does a larger model (3B+) tolerate scale noise better? | Not tested |
+| Would hybrid delivery (KV single-fact + text multi-hop) reach 95%? | Theoretical |
+| Does pack ordering systematically affect accuracy? | Observed small scale, not at scale |
+| Does Rust-side Trace match Python-side links? | Not tested |
 
 ## Updated File List
 
