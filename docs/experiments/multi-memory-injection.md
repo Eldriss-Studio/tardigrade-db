@@ -169,12 +169,59 @@ The ceiling for multi-memory KV injection: **~6/10** on cross-referencing querie
 1. **Retrieval gap (fixable):** 5/10 second-hop facts unreachable by latent retrieval. Trace graph or entity-linked retrieval could fix this.
 2. **Injection gap (harder):** 4/10 queries fail even with correct packs injected. The model hallucinates details instead of reading them from the second pack's KV cache. This is the genuine cross-attention limitation.
 
-## Remaining Experiments
+## Why 4 Oracle Injections Fail (April 24, 2026)
 
-| Experiment | Purpose | Status |
-|------------|---------|--------|
-| Investigate 4 oracle failures | Why does the model hallucinate with correct packs? | Next |
-| Trace-linked retrieval | Link related facts via causal graph, follow edges on retrieval | Planned |
+The 4 queries that fail even with correct packs share a structural pattern: **the query and the answer fact have zero direct vocabulary overlap**. The only connection is through an entity name that the query doesn't mention.
+
+**Failing pattern — no vocabulary bridge:**
+| Query asks about | Linking fact | Answer fact | Missing bridge |
+|-----------------|-------------|-------------|----------------|
+| "Lucia's instructor's car" | instructor = Tomoko | Tomoko drives Honda Civic | Query has no "Tomoko" |
+| "neighbor's cat who brought pierogi" | Mrs. Kowalski brought pierogi | Mrs. Kowalski's cat = Whiskers | Query has no "Mrs. Kowalski" |
+| "Sonia's dentist address" | dentist at Riverside Dental | Riverside Dental at 742 Elm | Query has no "Riverside Dental" |
+| "Lucia's piano teacher's dog" | teacher = Mr. Yamamoto | Mr. Yamamoto has Biscuit | Query has no "Mr. Yamamoto" |
+
+**Passing pattern — direct vocabulary overlap:**
+| Query asks about | Answer fact | Shared terms |
+|-----------------|-------------|--------------|
+| "best-selling at bakery" | "best-selling item is cinnamon swirl" | "best-selling" |
+| "running group leader" | "running group leader is Carmen" | "running group", "leader" |
+| "restaurant closed day" | "Trattoria Bella closed on Mondays" | "closed" |
+| "pharmacist at pharmacy" | "MedPlus pharmacist is James Chen" | "pharmacist" |
+| "birthday of best friend" | "Harper's birthday is March 15th" | "birthday" |
+
+### Root Cause: Attention Inside the Model
+
+This is the same problem as retrieval but **inside the model's attention mechanism**. During generation, the query's Q vectors attend to injected K vectors via dot product. If the K vectors (computed from "Tomoko drives Honda Civic") have zero token overlap with the Q vectors (computed from "Lucia's instructor"), the attention score is low and the model ignores that pack's V vectors.
+
+Text RAG succeeds because the model processes all facts as text in a single forward pass — the attention between "Lucia's instructor" and "Tomoko" is computed fresh during that pass. With KV injection, that attention was never computed.
+
+### Architectural Verdict
+
+Multi-memory KV injection works when:
+- Facts share direct vocabulary with the query (6/10)
+- OR the answer is in a fact that's self-sufficient (single-memory recall)
+
+Multi-memory KV injection fails when:
+- Cross-referencing requires entity resolution ("Lucia's instructor" = "Tomoko") that can only happen during a joint forward pass
+
+This is a fundamental property of attention, not a fixable bug. The ceiling for multi-memory KV injection with independently-computed packs is ~60% on cross-referencing queries.
+
+### Recommendations
+
+1. **Single-memory injection** remains the canonical path (8/10, byte-identical to text RAG)
+2. **Multi-memory with vocabulary overlap** works (6/10 on oracle) — queries like "what is X's birthday" where "birthday" appears in both query and answer fact
+3. **Cross-referencing queries** requiring entity resolution should use **text RAG delivery** with TardigradeDB retrieval — retrieve the memories latently, deliver them as text in the prompt
+4. **Hybrid approach**: use single-memory KV injection for direct-recall queries, fall back to text delivery for multi-hop queries. The retrieval layer (latent + Trace graph) determines which memories are relevant; the delivery method (KV injection vs text) depends on query complexity
+
+## Open Research
+
+| Question | Status |
+|----------|--------|
+| Does a larger model (3B+) handle cross-entity attention better? | Not tested |
+| Could CacheBlend HKVD recomputation fix the 4 failing queries? | Likely not — the problem is missing entity bridges, not position |
+| Would Trace graph traversal fix retrieval for all 10? | Yes for retrieval, but injection still fails on 4 |
+| Is the 60% ceiling model-dependent? | Unknown — only tested on Qwen3-0.6B |
 
 ## Updated File List
 
