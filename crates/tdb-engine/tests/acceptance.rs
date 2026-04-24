@@ -1,4 +1,5 @@
 use tdb_core::Tier;
+use tdb_core::kv_pack::{KVLayerPayload, KVPack};
 use tdb_engine::engine::{Engine, WriteRequest};
 use tdb_retrieval::per_token::encode_per_token_keys;
 
@@ -812,4 +813,161 @@ fn test_engine_per_token_query_cannot_be_satisfied_by_slb_only() {
         results[0].cell.id, 0,
         "encoded per-token queries must run max-sim cold scoring even when SLB has enough candidates"
     );
+}
+
+// -- Phase 29: KV Pack ATDD ──────────────────────────────────────────────────
+
+/// ATDD 30: Write a KV Pack, all layers stored atomically.
+#[test]
+fn test_write_pack_stores_all_layers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let retrieval_key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+
+    let pack = KVPack {
+        id: 0, // assigned by engine
+        owner: 1,
+        retrieval_key,
+        layers: (0..12)
+            .map(|i| KVLayerPayload {
+                layer_idx: i,
+                data: vec![i as f32 * 0.1; 64], // dummy K+V payload
+            })
+            .collect(),
+        salience: 80.0,
+    };
+
+    let pack_id = engine.mem_write_pack(&pack).unwrap();
+    assert!(pack_id >= 1); // pack IDs start at 1
+    assert_eq!(engine.pack_count(), 1);
+}
+
+/// ATDD 31: Read back a stored KV Pack with all layers intact.
+#[test]
+fn test_read_pack_returns_complete_kv() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key_vec = [1.0f32, 0.0, 0.0, 0.0];
+    let retrieval_key = encode_per_token_keys(&[&key_vec]);
+
+    let pack = KVPack {
+        id: 0,
+        owner: 1,
+        retrieval_key,
+        layers: (0..4)
+            .map(|i| KVLayerPayload { layer_idx: i, data: vec![(i + 1) as f32; 32] })
+            .collect(),
+        salience: 80.0,
+    };
+
+    engine.mem_write_pack(&pack).unwrap();
+
+    // Query with similar key.
+    let results = engine.mem_read_pack(&key_vec, 1, None).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].pack.layers.len(), 4);
+
+    // Verify layer data survived Q4 round-trip (approximate).
+    for (i, layer) in results[0].pack.layers.iter().enumerate() {
+        assert_eq!(layer.layer_idx, i as u16);
+        assert_eq!(layer.data.len(), 32);
+    }
+}
+
+/// ATDD 32: Pack survives engine reopen (persistence).
+#[test]
+fn test_pack_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let key_vec = [1.0f32, 0.0, 0.0, 0.0];
+    let retrieval_key = encode_per_token_keys(&[&key_vec]);
+
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let pack = KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key,
+            layers: (0..4)
+                .map(|i| KVLayerPayload { layer_idx: i, data: vec![1.0f32; 16] })
+                .collect(),
+            salience: 80.0,
+        };
+        engine.mem_write_pack(&pack).unwrap();
+        assert_eq!(engine.pack_count(), 1);
+    }
+
+    // Reopen.
+    let mut engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine.pack_count(), 1);
+
+    let results = engine.mem_read_pack(&key_vec, 1, None).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].pack.layers.len(), 4);
+}
+
+/// ATDD 33: Multiple packs, retrieval ranks by similarity.
+#[test]
+fn test_multiple_packs_retrieval_ranking() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    // Pack 0: about cooking.
+    let cooking_key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: cooking_key,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+        })
+        .unwrap();
+
+    // Pack 1: about running.
+    let running_key = encode_per_token_keys(&[&[0.0f32, 1.0, 0.0, 0.0]]);
+    engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: running_key,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+            salience: 80.0,
+        })
+        .unwrap();
+
+    // Query similar to cooking.
+    let query = [0.9f32, 0.1, 0.0, 0.0];
+    let results = engine.mem_read_pack(&query, 2, None).unwrap();
+    assert_eq!(results.len(), 2);
+    // Pack 0 (cooking) should rank first.
+    assert_eq!(results[0].pack.layers[0].data[0] as i32, 1, "Cooking pack should rank first");
+}
+
+/// ATDD 34: Pack governance — importance decays across the whole pack.
+#[test]
+fn test_pack_governance() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack_id = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 50.0,
+        })
+        .unwrap();
+
+    let imp_before = engine.pack_importance(pack_id);
+    assert!(imp_before.is_some());
+
+    engine.advance_days(100.0);
+
+    let imp_after = engine.pack_importance(pack_id);
+    assert!(imp_after.unwrap() < imp_before.unwrap(), "Importance should decay");
 }

@@ -85,11 +85,13 @@
 #![deny(unsafe_code)]
 
 pub mod error;
+pub mod kv_pack;
 pub mod memory_cell;
 pub mod synaptic_bank;
 pub mod types;
 
 pub use error::TardigradeError;
+pub use kv_pack::{KVLayerPayload, KVPack, PackId, PackReadResult};
 pub use memory_cell::MemoryCell;
 pub use synaptic_bank::SynapticBankEntry;
 pub use types::{CellId, LayerId, OwnerId, SynapticId, TagBits, Tier};

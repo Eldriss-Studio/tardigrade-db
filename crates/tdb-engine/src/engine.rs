@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use tdb_core::error::{Result, TardigradeError};
+use tdb_core::kv_pack::{KVLayerPayload, KVPack, PackId, PackReadResult};
 use tdb_core::memory_cell::{MemoryCell, MemoryCellBuilder};
 use tdb_core::synaptic_bank::SynapticBankEntry;
 use tdb_core::{CellId, OwnerId, Tier};
@@ -137,6 +138,9 @@ pub struct WriteRequest {
 /// The SLB is a separate LRU cache (needs direct access for warming on reads).
 /// The [`RetrieverPipeline`] chains cold-path retrievers via the [`Retriever`] trait.
 /// Vamana is lazily activated when cell count crosses the threshold.
+/// Sentinel layer index for KV Pack retrieval key cells.
+const PACK_RETRIEVAL_LAYER: u16 = 0xFFFE;
+
 pub struct Engine {
     pool: BlockPool,
     /// Cold-path retrieval: `BruteForce` + Vamana (when active).
@@ -151,6 +155,9 @@ pub struct Engine {
     next_id: CellId,
     dir: PathBuf,
     vamana_threshold: usize,
+    /// Maps `PackId` to `Vec<CellId>` (retrieval key cell + layer payload cells).
+    pack_index: HashMap<PackId, Vec<CellId>>,
+    next_pack_id: PackId,
     /// Key dimension (detected from first write, used for SLB/Vamana init).
     key_dim: Option<usize>,
 }
@@ -223,14 +230,20 @@ impl Engine {
         for cell_id in &cell_ids {
             let cell = pool.get(*cell_id)?;
 
-            // Track mean-pooled dim for SLB (may differ from raw key length if per-token).
-            let slb_key = mean_pool_key(&cell.key);
-            if key_dim.is_none() {
-                key_dim = Some(slb_key.len());
-            }
+            // Pack payload cells (non-retrieval layers of a pack) should NOT be indexed
+            // for retrieval — only the retrieval key cell (PACK_RETRIEVAL_LAYER) or
+            // regular (non-pack) cells should be indexed.
+            let is_pack_payload = cell.token_span.0 > 0 && cell.layer != PACK_RETRIEVAL_LAYER;
 
-            pipeline.insert(cell.id, cell.owner, &cell.key);
-            slb_entries.push((cell.id, cell.owner, slb_key));
+            if !is_pack_payload {
+                let slb_key = mean_pool_key(&cell.key);
+                if key_dim.is_none() {
+                    key_dim = Some(slb_key.len());
+                }
+
+                pipeline.insert(cell.id, cell.owner, &cell.key);
+                slb_entries.push((cell.id, cell.owner, slb_key));
+            }
 
             let scorer = ImportanceScorer::new(cell.meta.importance);
             let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
@@ -249,6 +262,26 @@ impl Engine {
             slb.insert(cell_id, owner, &slb_key);
         }
 
+        // Rebuild pack index from persisted cells.
+        // Pack cells store pack_id in token_span.0. PACK_RETRIEVAL_LAYER marks the key cell.
+        let mut pack_index: HashMap<PackId, Vec<CellId>> = HashMap::new();
+        let mut max_pack_id: PackId = 0;
+        for cell_id in &cell_ids {
+            if let Ok(cell) = pool.get(*cell_id) {
+                let stored_pack_id = cell.token_span.0;
+                if stored_pack_id > 0 || cell.layer == PACK_RETRIEVAL_LAYER {
+                    pack_index.entry(stored_pack_id).or_default().push(cell.id);
+                    if stored_pack_id >= max_pack_id {
+                        max_pack_id = stored_pack_id + 1;
+                    }
+                }
+            }
+        }
+        // Sort each pack's cells: retrieval key first (PACK_RETRIEVAL_LAYER), then by layer.
+        for cells in pack_index.values_mut() {
+            cells.sort_unstable();
+        }
+
         Ok(Self {
             pool,
             pipeline,
@@ -261,6 +294,8 @@ impl Engine {
             next_id,
             dir: dir.to_path_buf(),
             vamana_threshold,
+            pack_index,
+            next_pack_id: max_pack_id.max(1), // pack IDs start at 1 (0 = not a pack)
             key_dim: if cell_ids.is_empty() { None } else { key_dim },
         })
     }
@@ -586,6 +621,210 @@ impl Engine {
     /// Load all `SynapticBankEntry` records for a given owner.
     pub fn load_synapsis(&self, owner: OwnerId) -> Result<Vec<SynapticBankEntry>> {
         self.synaptic_store.load_by_owner(owner).map_err(|e| TardigradeError::Io { source: e })
+    }
+
+    // ── KV Pack API (Repository pattern) ──────────────────────────────────
+
+    /// Store a complete multi-layer KV cache as a single atomic pack.
+    ///
+    /// All layers are persisted with a single fsync. The retrieval key is
+    /// indexed for search. Returns the assigned pack ID.
+    pub fn mem_write_pack(&mut self, pack: &KVPack) -> Result<PackId> {
+        let pack_id = self.next_pack_id;
+        self.next_pack_id += 1;
+
+        let now_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+
+        // Detect key dimension from retrieval key.
+        let retrieval_key_pooled = mean_pool_key(&pack.retrieval_key);
+        if self.key_dim.is_none() {
+            let dim = retrieval_key_pooled.len();
+            self.key_dim = Some(dim);
+            self.slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, dim);
+        }
+
+        // Build cells: one for retrieval key + one per layer payload.
+        let mut cells = Vec::with_capacity(1 + pack.layers.len());
+        let mut cell_ids = Vec::with_capacity(1 + pack.layers.len());
+
+        // Retrieval key cell (sentinel layer = PACK_RETRIEVAL_LAYER).
+        let retrieval_cell_id = self.next_id;
+        self.next_id += 1;
+
+        let mut scorer = ImportanceScorer::new(pack.salience);
+        scorer.on_update();
+        let mut tier_sm = TierStateMachine::new();
+        tier_sm.evaluate(scorer.importance());
+
+        // Store mean-pooled key in the cell (survives Q4). The per-token encoded
+        // key is only used for in-memory retriever insert, not persisted.
+        let cell_key = mean_pool_key(&pack.retrieval_key);
+        cells.push(
+            MemoryCellBuilder::new(
+                retrieval_cell_id,
+                pack.owner,
+                PACK_RETRIEVAL_LAYER,
+                cell_key,
+                vec![], // no value for retrieval cell
+            )
+            .importance(scorer.importance())
+            .tier(tier_sm.current())
+            .token_span(pack_id, 0) // pack_id stored for cross-session rebuild
+            .created_at(now_nanos)
+            .updated_at(now_nanos)
+            .build(),
+        );
+        cell_ids.push(retrieval_cell_id);
+
+        // Layer payload cells.
+        for layer in &pack.layers {
+            let cell_id = self.next_id;
+            self.next_id += 1;
+
+            let layer_cell_key = mean_pool_key(&pack.retrieval_key);
+            cells.push(
+                MemoryCellBuilder::new(
+                    cell_id,
+                    pack.owner,
+                    layer.layer_idx,
+                    layer_cell_key,
+                    layer.data.clone(),
+                )
+                .importance(scorer.importance())
+                .tier(tier_sm.current())
+                .token_span(pack_id, 0)
+                .created_at(now_nanos)
+                .updated_at(now_nanos)
+                .build(),
+            );
+            cell_ids.push(cell_id);
+        }
+
+        // Persist atomically (single fsync).
+        self.pool.append_batch(&cells)?;
+
+        // Index retrieval key for search.
+        self.pipeline.insert(retrieval_cell_id, pack.owner, &pack.retrieval_key);
+        let slb_key = mean_pool_key(&pack.retrieval_key);
+        self.slb.insert(retrieval_cell_id, pack.owner, &slb_key);
+
+        // Governance for the pack (tracked on retrieval cell).
+        self.governance
+            .insert(retrieval_cell_id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
+
+        // Pack index.
+        self.pack_index.insert(pack_id, cell_ids);
+
+        Ok(pack_id)
+    }
+
+    /// Retrieve the top-k KV Packs matching a query key.
+    ///
+    /// Returns complete packs with all layer payloads reconstructed.
+    pub fn mem_read_pack(
+        &mut self,
+        query_key: &[f32],
+        k: usize,
+        owner_filter: Option<OwnerId>,
+    ) -> Result<Vec<PackReadResult>> {
+        // Search using the retrieval pipeline (same as mem_read).
+        let slb_query = mean_pool_key(query_key);
+        let mut candidates =
+            if self.slb.is_empty() { Vec::new() } else { self.slb.query(&slb_query, k * 2) };
+
+        if candidates.len() < k {
+            let cold = self.pipeline.query(query_key, k * 2, owner_filter);
+            let seen: std::collections::HashSet<CellId> =
+                candidates.iter().map(|r| r.cell_id).collect();
+            for r in cold {
+                if !seen.contains(&r.cell_id) {
+                    candidates.push(r);
+                }
+            }
+        }
+
+        candidates
+            .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut results = Vec::with_capacity(k);
+        for rr in candidates {
+            // Find the pack that contains this retrieval cell.
+            let pack_entry = self
+                .pack_index
+                .iter()
+                .find(|(_, cell_ids)| cell_ids.first().copied() == Some(rr.cell_id));
+
+            let Some((&found_pack_id, cell_ids)) = pack_entry else {
+                continue;
+            };
+
+            // Owner filter.
+            if owner_filter.is_some_and(|f| f != rr.owner) {
+                continue;
+            }
+
+            // Load layer payloads from pool.
+            let mut layers = Vec::new();
+            for &cid in &cell_ids[1..] {
+                match self.pool.get(cid) {
+                    Ok(cell) => {
+                        if cell.layer != PACK_RETRIEVAL_LAYER {
+                            layers.push(KVLayerPayload { layer_idx: cell.layer, data: cell.value });
+                        }
+                    }
+                    Err(TardigradeError::CellNotFound(_)) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+
+            // Governance boost on access.
+            if let Some(gov) = self.governance.get_mut(&rr.cell_id) {
+                gov.scorer.on_access();
+                gov.tier_sm.evaluate(gov.scorer.importance());
+            }
+
+            let tier =
+                self.governance.get(&rr.cell_id).map_or(Tier::Draft, |g| g.tier_sm.current());
+
+            let decay_factor = self
+                .governance
+                .get(&rr.cell_id)
+                .map_or(1.0, |g| recency_decay(g.days_since_update));
+
+            layers.sort_by_key(|l| l.layer_idx);
+
+            results.push(PackReadResult {
+                pack: KVPack {
+                    id: found_pack_id,
+                    owner: rr.owner,
+                    retrieval_key: vec![], // not returned to save memory
+                    layers,
+                    salience: 0.0,
+                },
+                score: rr.score * decay_factor,
+                tier,
+            });
+
+            if results.len() >= k {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Number of KV Packs stored.
+    pub fn pack_count(&self) -> usize {
+        self.pack_index.len()
+    }
+
+    /// Get the importance score of a pack.
+    pub fn pack_importance(&self, pack_id: PackId) -> Option<f32> {
+        let cell_ids = self.pack_index.get(&pack_id)?;
+        let retrieval_cell_id = *cell_ids.first()?;
+        self.governance.get(&retrieval_cell_id).map(|g| g.scorer.importance())
     }
 
     /// Build and activate the Vamana index, adding it as a pipeline stage.
