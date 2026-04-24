@@ -47,6 +47,9 @@ class KnowledgePackStore:
         else:
             self.query_layer = query_layer
 
+        # Pack ID -> original fact text (for sequential recomputation)
+        self._text_registry = {}
+
     def store(self, fact_text, salience=80.0):
         """Store a fact's KV cache across all layers.
 
@@ -85,9 +88,12 @@ class KnowledgePackStore:
             layer_payloads.append((li, payload))
 
         # Single atomic write via Rust pack API (one fsync for all layers)
-        self.engine.mem_write_pack(
+        pack_id = self.engine.mem_write_pack(
             self.owner, retrieval_key, layer_payloads, salience
         )
+
+        # Register fact text for sequential recomputation
+        self._text_registry[pack_id] = fact_text
 
         return self.n_layers
 

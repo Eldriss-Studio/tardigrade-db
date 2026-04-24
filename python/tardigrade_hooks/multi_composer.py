@@ -83,6 +83,62 @@ class NaiveConcatComposer(CompositionStrategy):
         return cache
 
 
+class SequentialRecomputeComposer(CompositionStrategy):
+    """Recompute KV cache sequentially through the model.
+
+    Processes each fact through the model in order, with previous
+    facts' KV already in the cache. This produces a coherent cache
+    where each fact is contextualized by all preceding facts —
+    correct RoPE positions and cross-fact attention.
+
+    Requires model, tokenizer, and a text_registry mapping pack_id
+    to the original fact text.
+    """
+
+    def __init__(self, model, tokenizer, text_registry):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.text_registry = text_registry
+
+    def compose(self, packs, num_kv_heads, head_dim, kv_dim, n_layers):
+        accumulated_cache = None
+
+        for pack in packs:
+            pack_id = pack["pack_id"]
+            fact_text = self.text_registry.get(pack_id)
+            if fact_text is None:
+                continue
+
+            messages = [{"role": "system", "content": fact_text}]
+            formatted = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=False
+            )
+            input_ids = self.tokenizer.encode(formatted, return_tensors="pt")
+
+            # Build attention mask covering accumulated cache + new tokens
+            if accumulated_cache is not None:
+                kv_len = accumulated_cache.get_seq_length()
+                q_len = input_ids.shape[1]
+                attn_mask = torch.ones(1, kv_len + q_len, dtype=torch.long)
+            else:
+                attn_mask = None
+
+            with torch.no_grad():
+                out = self.model(
+                    input_ids,
+                    past_key_values=accumulated_cache,
+                    attention_mask=attn_mask,
+                    use_cache=True,
+                )
+
+            accumulated_cache = out.past_key_values
+
+        if accumulated_cache is None:
+            return DynamicCache()
+
+        return accumulated_cache
+
+
 def _find_layer(pack, layer_idx):
     """Find a layer by index in a pack dict."""
     for layer_info in pack["layers"]:
