@@ -214,14 +214,80 @@ This is a fundamental property of attention, not a fixable bug. The ceiling for 
 3. **Cross-referencing queries** requiring entity resolution should use **text RAG delivery** with TardigradeDB retrieval — retrieve the memories latently, deliver them as text in the prompt
 4. **Hybrid approach**: use single-memory KV injection for direct-recall queries, fall back to text delivery for multi-hop queries. The retrieval layer (latent + Trace graph) determines which memories are relevant; the delivery method (KV injection vs text) depends on query complexity
 
+## Phase 31: Trace-Linked Retrieval — 3/10 → 9/10 (April 24, 2026)
+
+### The Breakthrough
+
+Linking related facts at storage time and following links at retrieval time produces **9/10 correct on cross-referencing queries** — up from 3/10 baseline and 6/10 oracle.
+
+| Approach | Accuracy | Prompt Tokens | Retrieval |
+|----------|----------|---------------|-----------|
+| Text RAG | 10/10 | 564 | N/A (all in prompt) |
+| Baseline KV injection | 3/10 | 243 | 0/10 find both packs |
+| Oracle injection (bypass retrieval) | 6/10 | 243 | Manual (correct packs) |
+| RoPE-corrected concat | 3/10 | 243 | 0/10 (position fix irrelevant) |
+| **Trace-linked injection** | **9/10** | **243** | **10/10 find both packs** |
+
+Result verified reproducible across 2 runs. `do_sample=False` ensures deterministic generation.
+
+### How It Works
+
+**Storage:** `store_linked(["fact A", "fact B"])` stores both facts as KV packs and records a bidirectional link between their pack IDs in a Python-side dictionary.
+
+**Retrieval:** `retrieve_with_trace(query, k=1)` retrieves the top-1 pack via normal latent retrieval, then looks up linked pack IDs and loads them from a local cache. Both packs are composed into a single DynamicCache via NaiveConcatComposer.
+
+**No Rust changes, no recomputation, no training.**
+
+### Why 9/10 Instead of 6/10 (Oracle)
+
+The oracle experiment used `mem_read_pack(query_key, 50)` to load "correct" packs, which returns packs **ordered by retrieval score**. Trace-linked retrieval loads the second pack from a local cache with **score 0.0**, which means the packs arrive in storage order (fact A first, fact B second).
+
+In causal attention, order matters: later tokens attend to earlier ones. When fact A (the linking fact) is first and fact B (the answer fact) is second, fact B's tokens can attend to fact A's tokens during the query's generation forward pass. The oracle's retrieval-score ordering may have placed packs in a suboptimal order for 4 of the 10 queries.
+
+This is a significant finding: **pack ordering affects multi-memory injection quality**. The order in which facts were originally stored (and linked) may naturally reflect their logical relationship, which helps the model's causal attention.
+
+### The One Miss: Q1
+
+Q1 ("What is the wifi password for the person in apartment 4B?") passes with single-memory injection (3/10 baseline) but fails with trace-linked injection (9/10). The model responds: "The information provided is about Sonia's WiFi password, not [apartment 4B]."
+
+This is a regression caused by injecting BOTH packs: the model sees KV from "Sonia's wifi password is mango-cathedral-7" AND "Sonia lives in apartment 4B" — but interprets the second fact as contradicting the query's premise rather than confirming it. The model thinks "apartment 4B" is about Sonia's location, not about whose wifi password it is.
+
+This may be fixable by adjusting pack ordering (put the answer fact last) or by using a smarter composition strategy. It's not a fundamental limitation.
+
+### Honest Assessment
+
+**What's real:**
+- Trace-linked retrieval solves the multi-hop retrieval problem (0/10 → 10/10 finding both packs)
+- Multi-memory KV injection works at 9/10 on this corpus with correct pack ordering
+- 57% fewer prompt tokens than text RAG
+- No recomputation, no training, no custom kernels
+- Reproducible across multiple runs (deterministic with do_sample=False)
+
+**What to question:**
+- Tested on only 10 cross-referencing queries — small corpus
+- Only tested on Qwen3-0.6B (596M) — model-dependent results possible
+- Python-side trace links are in-memory (not persistent across restarts)
+- Pack ordering matters and isn't well-understood yet
+- The Q1 regression shows that injecting more packs can sometimes hurt
+- Not tested at scale (100+ linked facts, 1000+ total memories)
+
+### Next Steps
+
+1. **Scale test:** Run on a larger corpus (50+ cross-referencing queries, 200+ total memories)
+2. **Pack ordering:** Investigate whether "answer fact last" consistently helps
+3. **Rust-side trace links:** Move Python-side `_trace_links` to Rust Trace graph for persistence
+4. **Persistence:** Cache pack data in Rust so `_pack_data` survives restarts
+5. **Larger model:** Test on Qwen2.5-3B to see if model capacity changes the results
+
 ## Open Research
 
 | Question | Status |
 |----------|--------|
-| Does a larger model (3B+) handle cross-entity attention better? | Not tested |
-| Could CacheBlend HKVD recomputation fix the 4 failing queries? | Likely not — the problem is missing entity bridges, not position |
-| Would Trace graph traversal fix retrieval for all 10? | Yes for retrieval, but injection still fails on 4 |
-| Is the 60% ceiling model-dependent? | Unknown — only tested on Qwen3-0.6B |
+| Does trace-linked injection hold at 100+ memories? | Not tested |
+| Does pack ordering consistently affect accuracy? | Observed but not systematically tested |
+| Does a larger model (3B+) improve or change the result? | Not tested |
+| Can the Q1 regression be fixed by ordering? | Not tested |
+| Does Rust-side Trace produce the same results as Python-side links? | Not tested (Python-first validation) |
 
 ## Updated File List
 
