@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["HEADER_SENTINEL","HEADER_SIZE"],"enum":["ScoringMode"],"fn":["decode_per_token_keys","encode_per_token_keys"],"struct":["PerTokenRetriever","TokenEntry"]};
+window.SIDEBAR_ITEMS = {"constant":["CANDIDATE_MULTIPLIER","CANDIDATE_REDUCTION_THRESHOLD","HEADER_SENTINEL","HEADER_SIZE","MIN_CANDIDATES","TOP5_AVG_MATCH_COUNT"],"enum":["ScoringMode"],"fn":["decode_per_token_keys","encode_per_token_keys"],"struct":["CellSummary","PerTokenRetriever","TokenEntry"]};
