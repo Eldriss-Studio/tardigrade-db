@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from .encoding import encode_per_token
+from .multi_composer import NaiveConcatComposer
 from transformers import DynamicCache
 
 import tardigrade_db
@@ -175,6 +176,87 @@ class KnowledgePackStore:
             return text, q_len, False
 
         # Clone cache to avoid in-place mutation
+        clone = DynamicCache()
+        for li in range(len(cache.layers)):
+            layer = cache.layers[li]
+            clone.update(layer.keys.clone(), layer.values.clone(), li)
+
+        with torch.no_grad():
+            out = self.model.generate(
+                query_ids,
+                past_key_values=clone,
+                attention_mask=attn_mask,
+                **gen_kwargs,
+            )
+
+        text = self.tokenizer.decode(out[0][q_len:], skip_special_tokens=True).strip()
+        return text, q_len, True
+
+    # -- Multi-memory injection ------------------------------------------------
+
+    def retrieve_and_inject_multi(self, query_text, k=3, composer=None):
+        """Retrieve k memories and compose into a single DynamicCache.
+
+        Returns (cache, query_ids, attention_mask) ready for model.generate(),
+        or (None, query_ids, None) if no memories found.
+        """
+        if composer is None:
+            composer = NaiveConcatComposer()
+
+        query_input = self.tokenizer.encode(query_text, return_tensors="pt")
+        with torch.no_grad():
+            query_out = self.model(query_input, output_hidden_states=True)
+
+        hidden = query_out.hidden_states[self.query_layer][0]
+        h_tokens = hidden[1:].numpy().astype(np.float32)
+        query_key = encode_per_token(h_tokens, self.hidden_size)
+
+        packs = self.engine.mem_read_pack(query_key, k, self.owner)
+        if not packs:
+            return None, query_input, None
+
+        cache = composer.compose(
+            packs, self.num_kv_heads, self.head_dim, self.kv_dim, self.n_layers
+        )
+
+        # Query IDs: user template continuation after system
+        fact_messages = [{"role": "system", "content": "placeholder"}]
+        fact_fmt = self.tokenizer.apply_chat_template(
+            fact_messages, tokenize=False, add_generation_prompt=False
+        )
+        messages = [
+            {"role": "system", "content": "placeholder"},
+            {"role": "user", "content": query_text},
+        ]
+        full_fmt = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        full_ids = self.tokenizer.encode(full_fmt, return_tensors="pt")
+        fact_len = len(self.tokenizer.encode(fact_fmt))
+        query_ids = full_ids[:, fact_len:]
+
+        kv_len = cache.get_seq_length()
+        q_len = query_ids.shape[1]
+        attention_mask = torch.ones(1, kv_len + q_len, dtype=torch.long)
+
+        return cache, query_ids, attention_mask
+
+    def generate_multi(self, query_text, k=3, composer=None, **gen_kwargs):
+        """Full pipeline: retrieve k memories, compose, inject, generate.
+
+        Returns (generated_text, prompt_tokens, had_memory).
+        """
+        cache, query_ids, attn_mask = self.retrieve_and_inject_multi(
+            query_text, k=k, composer=composer
+        )
+        q_len = query_ids.shape[1]
+
+        if cache is None:
+            with torch.no_grad():
+                out = self.model.generate(query_ids, **gen_kwargs)
+            text = self.tokenizer.decode(out[0][q_len:], skip_special_tokens=True).strip()
+            return text, q_len, False
+
         clone = DynamicCache()
         for li in range(len(cache.layers)):
             layer = cache.layers[li]
