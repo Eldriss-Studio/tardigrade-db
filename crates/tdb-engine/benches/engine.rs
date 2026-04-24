@@ -4,16 +4,50 @@ use tdb_core::kv_pack::{KVLayerPayload, KVPack};
 use tdb_engine::engine::{Engine, WriteRequest};
 use tdb_retrieval::per_token::encode_per_token_keys;
 
+const FIXTURE_DIM: usize = 128;
+const FIXTURE_TOKENS_PER_CELL: usize = 8;
+const LEGACY_BENCH_DIM: usize = 64;
+const LEGACY_READ_CELL_COUNT: u64 = 1_000;
+const LEGACY_TARGET_CELL: usize = 10;
+const LEGACY_BASE_VALUE: f32 = 0.01;
+const FIXTURE_QUERY_COUNT: usize = 30;
+const FIXTURE_QUERY_STRIDE: usize = 7;
+const FIXTURE_QUERY_OFFSET: usize = 3;
+const BENCH_TOP_K: usize = 5;
+const OWNER_ONE: u64 = 1;
+const DEFAULT_LAYER: u16 = 0;
+const DEFAULT_SALIENCE: f32 = 50.0;
+const PACK_SALIENCE: f32 = 80.0;
+const BENCH_CELL_COUNTS: [usize; 3] = [100, 1_000, 10_000];
+const CANDIDATE_REDUCTION_THRESHOLD: usize = 512;
+const MIN_CANDIDATES: usize = 256;
+const CANDIDATE_MULTIPLIER: usize = 64;
+const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+const CELL_SEED_MULTIPLIER: u64 = 0x9E37_79B1_85EB_CA87;
+const TOKEN_SEED_MULTIPLIER: u64 = 0xC2B2_AE3D_27D4_EB4F;
+const RANDOM_SHIFT: u32 = 40;
+const RANDOM_DENOMINATOR: f32 = (1u64 << 24) as f32;
+
 fn bench_engine_write(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
     let mut engine = Engine::open(dir.path()).unwrap();
 
-    let key: Vec<f32> = (0..64).map(|i| (i as f32 * 0.01).sin()).collect();
-    let value: Vec<f32> = vec![0.0; 64];
+    let key: Vec<f32> =
+        (0..LEGACY_BENCH_DIM).map(|i| (i as f32 * LEGACY_BASE_VALUE).sin()).collect();
+    let value: Vec<f32> = vec![0.0; LEGACY_BENCH_DIM];
 
     c.bench_function("Engine mem_write — single cell persist with fsync (dim=64)", |bench| {
         bench.iter(|| {
-            engine.mem_write(1, 0, black_box(&key), value.clone(), 50.0, None).unwrap();
+            engine
+                .mem_write(
+                    OWNER_ONE,
+                    DEFAULT_LAYER,
+                    black_box(&key),
+                    value.clone(),
+                    DEFAULT_SALIENCE,
+                    None,
+                )
+                .unwrap();
         });
     });
 }
@@ -23,32 +57,41 @@ fn bench_engine_read(c: &mut Criterion) {
     let mut engine = Engine::open(dir.path()).unwrap();
 
     // Pre-populate with 1000 cells.
-    for i in 0..1000u64 {
-        let mut key = vec![0.01f32; 64];
-        key[(i as usize) % 64] = 1.0;
-        engine.mem_write(1, 0, &key, vec![0.0; 64], 50.0, None).unwrap();
+    for i in 0..LEGACY_READ_CELL_COUNT {
+        let mut key = vec![LEGACY_BASE_VALUE; LEGACY_BENCH_DIM];
+        key[(i as usize) % LEGACY_BENCH_DIM] = 1.0;
+        engine
+            .mem_write(
+                OWNER_ONE,
+                DEFAULT_LAYER,
+                &key,
+                vec![0.0; LEGACY_BENCH_DIM],
+                DEFAULT_SALIENCE,
+                None,
+            )
+            .unwrap();
     }
 
-    let mut query = vec![0.01f32; 64];
-    query[10] = 1.0;
+    let mut query = vec![LEGACY_BASE_VALUE; LEGACY_BENCH_DIM];
+    query[LEGACY_TARGET_CELL] = 1.0;
 
     c.bench_function(
         "Engine mem_read — full pipeline: SLB → retriever → governance (1K cells, dim=64, top-5)",
         |bench| {
             bench.iter(|| {
-                let _ = engine.mem_read(black_box(&query), 5, None).unwrap();
+                let _ = engine.mem_read(black_box(&query), BENCH_TOP_K, None).unwrap();
             });
         },
     );
 }
 
 fn token_vector(dim: usize, cell_id: usize, token_id: usize) -> Vec<f32> {
-    let mut state = ((cell_id as u64 + 1) * 0x9E37_79B1_85EB_CA87)
-        ^ ((token_id as u64 + 1) * 0xC2B2_AE3D_27D4_EB4F);
+    let mut state = (cell_id as u64 + 1).wrapping_mul(CELL_SEED_MULTIPLIER)
+        ^ (token_id as u64 + 1).wrapping_mul(TOKEN_SEED_MULTIPLIER);
     let mut vector = Vec::with_capacity(dim);
     for _ in 0..dim {
-        state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-        vector.push(((state >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0);
+        state = state.wrapping_mul(LCG_MULTIPLIER).wrapping_add(1);
+        vector.push(((state >> RANDOM_SHIFT) as f32 / RANDOM_DENOMINATOR) * 2.0 - 1.0);
     }
     let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
     for value in &mut vector {
@@ -98,11 +141,11 @@ fn build_encoded_engine(
     let mut engine = Engine::open_with_vamana_threshold(dir.path(), vamana_threshold).unwrap();
     let requests: Vec<WriteRequest> = (0..cell_count)
         .map(|cell_id| WriteRequest {
-            owner: 1,
-            layer: 0,
+            owner: OWNER_ONE,
+            layer: DEFAULT_LAYER,
             key: encoded_cell(dim, cell_id, tokens_per_cell),
             value: vec![0.0; dim],
-            salience: 50.0,
+            salience: DEFAULT_SALIENCE,
             parent_cell_id: None,
         })
         .collect();
@@ -116,14 +159,20 @@ fn collect_engine_rankings(
     dim: usize,
     tokens_per_cell: usize,
 ) -> (Vec<u64>, Vec<Vec<u64>>) {
-    let query_count = 30.min(cell_count);
-    let expected: Vec<u64> =
-        (0..query_count).map(|idx| ((idx * 7 + 3) % cell_count) as u64).collect();
+    let query_count = FIXTURE_QUERY_COUNT.min(cell_count);
+    let expected: Vec<u64> = (0..query_count)
+        .map(|idx| ((idx * FIXTURE_QUERY_STRIDE + FIXTURE_QUERY_OFFSET) % cell_count) as u64)
+        .collect();
     let rankings: Vec<Vec<u64>> = expected
         .iter()
         .map(|target| {
             let query = encoded_cell(dim, *target as usize, tokens_per_cell);
-            engine.mem_read(&query, 5, Some(1)).unwrap().into_iter().map(|r| r.cell.id).collect()
+            engine
+                .mem_read(&query, BENCH_TOP_K, Some(OWNER_ONE))
+                .unwrap()
+                .into_iter()
+                .map(|r| r.cell.id)
+                .collect()
         })
         .collect();
     (expected, rankings)
@@ -134,6 +183,7 @@ struct CorrectnessReport {
     recall_at_5: f32,
     worst_top1: usize,
     vamana_changed: bool,
+    candidate_count: usize,
 }
 
 fn engine_correctness_report(
@@ -153,9 +203,18 @@ fn engine_correctness_report(
 
     CorrectnessReport {
         recall_at_1: recall_at(&baseline_rankings, &expected, 1),
-        recall_at_5: recall_at(&baseline_rankings, &expected, 5),
+        recall_at_5: recall_at(&baseline_rankings, &expected, BENCH_TOP_K),
         worst_top1: worst_top1_concentration(&baseline_rankings),
         vamana_changed: baseline_rankings != vamana_rankings,
+        candidate_count: candidate_count(cell_count, BENCH_TOP_K),
+    }
+}
+
+fn candidate_count(cell_count: usize, k: usize) -> usize {
+    if cell_count <= CANDIDATE_REDUCTION_THRESHOLD {
+        cell_count
+    } else {
+        cell_count.min(MIN_CANDIDATES.max(k * CANDIDATE_MULTIPLIER))
     }
 }
 
@@ -163,39 +222,37 @@ fn bench_engine_read_encoded_per_token(c: &mut Criterion) {
     // Template Method benchmark flow:
     // build deterministic encoded corpus → batch populate engine → query → measure.
     let mut group = c.benchmark_group("Engine mem_read — encoded per-token Top5Avg path");
-    let dim = 128;
-    let tokens_per_cell = 8;
-
-    for cell_count in [100usize, 1_000, 10_000] {
-        let report = engine_correctness_report(cell_count, dim, tokens_per_cell);
+    for cell_count in BENCH_CELL_COUNTS {
+        let report = engine_correctness_report(cell_count, FIXTURE_DIM, FIXTURE_TOKENS_PER_CELL);
         let dir = tempfile::tempdir().unwrap();
         let mut engine = Engine::open(dir.path()).unwrap();
         let requests: Vec<WriteRequest> = (0..cell_count)
             .map(|cell_id| WriteRequest {
-                owner: 1,
-                layer: 0,
-                key: encoded_cell(dim, cell_id, tokens_per_cell),
-                value: vec![0.0; dim],
-                salience: 50.0,
+                owner: OWNER_ONE,
+                layer: DEFAULT_LAYER,
+                key: encoded_cell(FIXTURE_DIM, cell_id, FIXTURE_TOKENS_PER_CELL),
+                value: vec![0.0; FIXTURE_DIM],
+                salience: DEFAULT_SALIENCE,
                 parent_cell_id: None,
             })
             .collect();
         engine.mem_write_batch(&requests).unwrap();
-        let query = encoded_cell(dim, cell_count / 2, tokens_per_cell);
+        let query = encoded_cell(FIXTURE_DIM, cell_count / 2, FIXTURE_TOKENS_PER_CELL);
 
         let bench_id = BenchmarkId::new(
             format!(
-                "cells-r1-{:.0}-r5-{:.0}-gw-{}-vamana-changed-{}",
+                "cells-r1-{:.0}-r5-{:.0}-gw-{}-cand-{}-vamana-changed-{}",
                 report.recall_at_1 * 100.0,
                 report.recall_at_5 * 100.0,
                 report.worst_top1,
+                report.candidate_count,
                 report.vamana_changed
             ),
             cell_count,
         );
         group.bench_function(bench_id, |bench| {
             bench.iter(|| {
-                let _ = engine.mem_read(black_box(&query), 5, Some(1)).unwrap();
+                let _ = engine.mem_read(black_box(&query), BENCH_TOP_K, Some(OWNER_ONE)).unwrap();
             });
         });
     }
@@ -206,27 +263,28 @@ fn bench_engine_read_pack_encoded_per_token(c: &mut Criterion) {
     // Fixture Builder / Object Mother: each pack has one small layer payload;
     // retrieval key shape matches the validated hidden-state Top5Avg path.
     let mut group = c.benchmark_group("Engine mem_read_pack — encoded per-token Top5Avg path");
-    let dim = 128;
-    let tokens_per_cell = 8;
-
-    for pack_count in [100usize, 1_000, 10_000] {
+    for pack_count in BENCH_CELL_COUNTS {
         let dir = tempfile::tempdir().unwrap();
         let mut engine = Engine::open(dir.path()).unwrap();
         for pack_id in 0..pack_count {
             let pack = KVPack {
                 id: 0,
-                owner: 1,
-                retrieval_key: encoded_cell(dim, pack_id, tokens_per_cell),
-                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![pack_id as f32; dim] }],
-                salience: 80.0,
+                owner: OWNER_ONE,
+                retrieval_key: encoded_cell(FIXTURE_DIM, pack_id, FIXTURE_TOKENS_PER_CELL),
+                layers: vec![KVLayerPayload {
+                    layer_idx: DEFAULT_LAYER,
+                    data: vec![pack_id as f32; FIXTURE_DIM],
+                }],
+                salience: PACK_SALIENCE,
             };
             engine.mem_write_pack(&pack).unwrap();
         }
-        let query = encoded_cell(dim, pack_count / 2, tokens_per_cell);
+        let query = encoded_cell(FIXTURE_DIM, pack_count / 2, FIXTURE_TOKENS_PER_CELL);
 
         group.bench_function(BenchmarkId::new("packs", pack_count), |bench| {
             bench.iter(|| {
-                let _ = engine.mem_read_pack(black_box(&query), 5, Some(1)).unwrap();
+                let _ =
+                    engine.mem_read_pack(black_box(&query), BENCH_TOP_K, Some(OWNER_ONE)).unwrap();
             });
         });
     }

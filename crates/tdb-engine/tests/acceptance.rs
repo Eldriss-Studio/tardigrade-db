@@ -950,6 +950,123 @@ fn test_engine_reopen_preserves_encoded_ranking_after_adapter_rebuild() {
     );
 }
 
+const CANDIDATE_FIXTURE_DIM: usize = 128;
+const CANDIDATE_FIXTURE_TOKENS_PER_CELL: usize = 8;
+const CANDIDATE_FIXTURE_CELL_COUNT: usize = 1_000;
+const CANDIDATE_FIXTURE_TARGET_CELL: usize = 503;
+const CANDIDATE_FIXTURE_TOP_K: usize = 5;
+const CANDIDATE_FIXTURE_OWNER: u64 = 1;
+const CANDIDATE_FIXTURE_LAYER: u16 = 0;
+const CANDIDATE_FIXTURE_SALIENCE: f32 = 50.0;
+const CANDIDATE_FIXTURE_PACK_SALIENCE: f32 = 80.0;
+const CANDIDATE_FIXTURE_LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+const CANDIDATE_FIXTURE_CELL_SEED_MULTIPLIER: u64 = 0x9E37_79B1_85EB_CA87;
+const CANDIDATE_FIXTURE_TOKEN_SEED_MULTIPLIER: u64 = 0xC2B2_AE3D_27D4_EB4F;
+const CANDIDATE_FIXTURE_RANDOM_SHIFT: u32 = 40;
+const CANDIDATE_FIXTURE_RANDOM_DENOMINATOR: f32 = (1u64 << 24) as f32;
+
+fn normalized_token(dim: usize, cell_id: usize, token_id: usize) -> Vec<f32> {
+    let mut state = (cell_id as u64 + 1).wrapping_mul(CANDIDATE_FIXTURE_CELL_SEED_MULTIPLIER)
+        ^ (token_id as u64 + 1).wrapping_mul(CANDIDATE_FIXTURE_TOKEN_SEED_MULTIPLIER);
+    let mut vector = Vec::with_capacity(dim);
+    for _ in 0..dim {
+        state = state.wrapping_mul(CANDIDATE_FIXTURE_LCG_MULTIPLIER).wrapping_add(1);
+        vector.push(
+            ((state >> CANDIDATE_FIXTURE_RANDOM_SHIFT) as f32
+                / CANDIDATE_FIXTURE_RANDOM_DENOMINATOR)
+                * 2.0
+                - 1.0,
+        );
+    }
+    let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+    for value in &mut vector {
+        *value /= norm;
+    }
+    vector
+}
+
+fn normalized_encoded_cell(dim: usize, cell_id: usize, tokens_per_cell: usize) -> Vec<f32> {
+    let tokens: Vec<Vec<f32>> =
+        (0..tokens_per_cell).map(|token_id| normalized_token(dim, cell_id, token_id)).collect();
+    let refs: Vec<&[f32]> = tokens.iter().map(Vec::as_slice).collect();
+    encode_per_token_keys(&refs)
+}
+
+#[test]
+fn test_engine_candidate_reduction_preserves_encoded_ranking() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    for cell_id in 0..CANDIDATE_FIXTURE_CELL_COUNT {
+        let key = normalized_encoded_cell(
+            CANDIDATE_FIXTURE_DIM,
+            cell_id,
+            CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+        );
+        engine
+            .mem_write(
+                CANDIDATE_FIXTURE_OWNER,
+                CANDIDATE_FIXTURE_LAYER,
+                &key,
+                vec![0.0; CANDIDATE_FIXTURE_DIM],
+                CANDIDATE_FIXTURE_SALIENCE,
+                None,
+            )
+            .unwrap();
+    }
+
+    let query = normalized_encoded_cell(
+        CANDIDATE_FIXTURE_DIM,
+        CANDIDATE_FIXTURE_TARGET_CELL,
+        CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+    );
+    let results =
+        engine.mem_read(&query, CANDIDATE_FIXTURE_TOP_K, Some(CANDIDATE_FIXTURE_OWNER)).unwrap();
+
+    assert_eq!(results[0].cell.id, CANDIDATE_FIXTURE_TARGET_CELL as u64);
+}
+
+#[test]
+fn test_engine_vamana_still_does_not_change_candidate_reduced_ranking() {
+    let build_rankings = |threshold: usize| -> Vec<u64> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open_with_vamana_threshold(dir.path(), threshold).unwrap();
+        for cell_id in 0..CANDIDATE_FIXTURE_CELL_COUNT {
+            let key = normalized_encoded_cell(
+                CANDIDATE_FIXTURE_DIM,
+                cell_id,
+                CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+            );
+            engine
+                .mem_write(
+                    CANDIDATE_FIXTURE_OWNER,
+                    CANDIDATE_FIXTURE_LAYER,
+                    &key,
+                    vec![0.0; CANDIDATE_FIXTURE_DIM],
+                    CANDIDATE_FIXTURE_SALIENCE,
+                    None,
+                )
+                .unwrap();
+        }
+        let query = normalized_encoded_cell(
+            CANDIDATE_FIXTURE_DIM,
+            CANDIDATE_FIXTURE_TARGET_CELL,
+            CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+        );
+        engine
+            .mem_read(&query, CANDIDATE_FIXTURE_TOP_K, Some(CANDIDATE_FIXTURE_OWNER))
+            .unwrap()
+            .into_iter()
+            .map(|result| result.cell.id)
+            .collect()
+    };
+
+    let exact_pipeline = build_rankings(usize::MAX);
+    let with_vamana = build_rankings(1);
+
+    assert_eq!(with_vamana, exact_pipeline);
+}
+
 // -- Phase 29: KV Pack ATDD ──────────────────────────────────────────────────
 
 /// ATDD 30: Write a KV Pack, all layers stored atomically.
@@ -1145,6 +1262,50 @@ fn test_mem_read_pack_preserves_pack_deduplication_after_adapter_rebuild() {
 
     assert_eq!(results.len(), 1, "Rebuilt pack index should still deduplicate by pack");
     assert_eq!(results[0].pack.layers.len(), 4);
+}
+
+#[test]
+fn test_mem_read_pack_candidate_reduction_preserves_pack_deduplication() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    for pack_id in 0..CANDIDATE_FIXTURE_CELL_COUNT {
+        let pack = KVPack {
+            id: 0,
+            owner: CANDIDATE_FIXTURE_OWNER,
+            retrieval_key: normalized_encoded_cell(
+                CANDIDATE_FIXTURE_DIM,
+                pack_id,
+                CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+            ),
+            layers: vec![
+                KVLayerPayload {
+                    layer_idx: CANDIDATE_FIXTURE_LAYER,
+                    data: vec![pack_id as f32; CANDIDATE_FIXTURE_DIM],
+                },
+                KVLayerPayload {
+                    layer_idx: CANDIDATE_FIXTURE_LAYER + 1,
+                    data: vec![pack_id as f32 + 0.5; CANDIDATE_FIXTURE_DIM],
+                },
+            ],
+            salience: CANDIDATE_FIXTURE_PACK_SALIENCE,
+        };
+        engine.mem_write_pack(&pack).unwrap();
+    }
+
+    let query = normalized_encoded_cell(
+        CANDIDATE_FIXTURE_DIM,
+        CANDIDATE_FIXTURE_TARGET_CELL,
+        CANDIDATE_FIXTURE_TOKENS_PER_CELL,
+    );
+    let results = engine
+        .mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(CANDIDATE_FIXTURE_OWNER))
+        .unwrap();
+
+    assert_eq!(results[0].pack.layers[0].data[0].round() as usize, CANDIDATE_FIXTURE_TARGET_CELL);
+    let pack_ids: std::collections::HashSet<usize> =
+        results.iter().map(|result| result.pack.layers[0].data[0].round() as usize).collect();
+    assert_eq!(pack_ids.len(), results.len(), "candidate reduction must still deduplicate packs");
 }
 
 fn recall_at(rankings: &[Vec<u64>], expected: &[u64], k: usize) -> f32 {

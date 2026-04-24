@@ -70,17 +70,33 @@ RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo ben
 RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo bench -p tdb-engine
 ```
 
+### Adapter Baseline
+
+Before candidate reduction, the exact per-token path had these 10K timings:
+
 | Path | Size | Correctness label | Latency |
 | --- | ---: | --- | ---: |
-| `PerTokenRetriever(Top5Avg)` | 100 cells | R@1 100%, R@5 100%, worst top-1 1 | ~134 us |
-| `PerTokenRetriever(Top5Avg)` | 1,000 cells | R@1 100%, R@5 100%, worst top-1 1 | ~1.43 ms |
 | `PerTokenRetriever(Top5Avg)` | 10,000 cells | R@1 100%, R@5 100%, worst top-1 1 | ~15.95 ms |
-| `Engine::mem_read` encoded path | 100 cells | R@1 100%, R@5 100%, worst top-1 1, Vamana unchanged | ~234 us |
-| `Engine::mem_read` encoded path | 1,000 cells | R@1 100%, R@5 100%, worst top-1 1, Vamana unchanged | ~1.53 ms |
 | `Engine::mem_read` encoded path | 10,000 cells | R@1 100%, R@5 100%, worst top-1 1, Vamana unchanged | ~16.22 ms |
-| `Engine::mem_read_pack` encoded path | 100 packs | latency only | ~372 us |
-| `Engine::mem_read_pack` encoded path | 1,000 packs | latency only | ~2.97 ms |
 | `Engine::mem_read_pack` encoded path | 10,000 packs | latency only | ~32.7 ms |
+
+### Candidate Reduction
+
+Candidate reduction keeps exact scoring for small corpora and switches to pooled latent
+candidate selection above 512 cells. At `k = 5`, the candidate limit is 320 cells.
+Those candidates are reranked with the existing `Top5Avg` scorer.
+
+| Path | Size | Correctness label | Latency |
+| --- | ---: | --- | ---: |
+| `PerTokenRetriever(Top5Avg)` | 100 cells | R@1 100%, R@5 100%, worst top-1 1, 100 candidates | ~136 us |
+| `PerTokenRetriever(Top5Avg)` | 1,000 cells | R@1 100%, R@5 100%, worst top-1 1, 320 candidates | ~547 us |
+| `PerTokenRetriever(Top5Avg)` | 10,000 cells | R@1 100%, R@5 100%, worst top-1 1, 320 candidates | ~1.75 ms |
+| `Engine::mem_read` encoded path | 100 cells | R@1 100%, R@5 100%, worst top-1 1, Vamana unchanged, 100 candidates | ~249 us |
+| `Engine::mem_read` encoded path | 1,000 cells | R@1 100%, R@5 100%, worst top-1 1, Vamana unchanged, 320 candidates | ~1.82 ms |
+| `Engine::mem_read` encoded path | 10,000 cells | R@1 100%, R@5 100%, worst top-1 1, Vamana unchanged, 320 candidates | ~3.90 ms |
+| `Engine::mem_read_pack` encoded path | 100 packs | pack dedup preserved | ~399 us |
+| `Engine::mem_read_pack` encoded path | 1,000 packs | pack dedup preserved | ~3.71 ms |
+| `Engine::mem_read_pack` encoded path | 10,000 packs | pack dedup preserved | ~8.84 ms |
 
 ## Validation
 
@@ -95,13 +111,15 @@ cargo fmt --all -- --check
 Result:
 
 ```text
-89 tests passed, 3 skipped
+97 tests passed, 3 skipped
 clippy passed
 format check passed
 ```
 
 ## Conclusion
 
-The retrieval-key contract is now centralized and locked with ATDD. Correctness is clean on the deterministic Rust fixture: 100% recall@1/@5, no gravity well, and no ranking change when Vamana activates.
+The retrieval-key contract is centralized and locked with ATDD. Correctness is clean on the deterministic Rust fixture: 100% recall@1/@5, no gravity well, and no ranking change when Vamana activates.
 
-The remaining problem is speed. The current path is still linear at 10K scale, and `mem_read_pack` is the slowest path. The next Rust step is candidate reduction before full `Top5Avg` scoring, with pack reconstruction profiled separately.
+Candidate reduction is now the default encoded per-token path above 512 cells. It is still latent-only: no RAG, BM25, lexical index, or public API change. The 10K path is no longer dominated by scoring every stored token: `PerTokenRetriever` dropped from ~15.95 ms to ~1.75 ms, `Engine::mem_read` dropped from ~16.22 ms to ~3.90 ms, and `mem_read_pack` dropped from ~32.7 ms to ~8.84 ms.
+
+The remaining problem is pack overhead and mid-size engine overhead. Criterion showed the 1K `mem_read_pack` benchmark regressed while 10K improved sharply, which means candidate reduction solved the large linear scan but pack reconstruction still needs its own profiling pass.
