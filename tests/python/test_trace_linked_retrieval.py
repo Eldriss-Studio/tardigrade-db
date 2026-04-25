@@ -103,8 +103,8 @@ def test_unlinked_facts_no_trace_hop(kps, engine):
     """GIVEN 2 facts stored separately (NOT linked),
     WHEN retrieve_with_trace(query, k=1),
     THEN only 1 pack returned (no trace links to follow)."""
-    kps.store("The pharmacy closes at 8:30pm")
-    kps.store("Eduardo works at Morning Bloom bakery")
+    kps.store("The pharmacy closes at 8:30pm", auto_link=False)
+    kps.store("Eduardo works at Morning Bloom bakery", auto_link=False)
 
     cache_single, _, _ = kps.retrieve_and_inject("Tell me about the pharmacy")
     cache_trace, _, _ = kps.retrieve_with_trace("Tell me about the pharmacy", k=1)

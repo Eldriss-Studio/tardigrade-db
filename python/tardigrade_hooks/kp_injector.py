@@ -231,6 +231,19 @@ class KnowledgePackStore:
 
     # -- Trace-linked storage and retrieval ------------------------------------
 
+    def store_and_link(self, fact_text, related_pack_id, salience=80.0):
+        """Store a fact and link it to an existing memory.
+
+        Use when the agent learns a new detail about something it already
+        remembers. The engine records the link; the agent decides what to link.
+
+        Returns the new pack_id.
+        """
+        pack_id = self.store(fact_text, salience=salience, auto_link=False)
+        self._trace_links.setdefault(pack_id, set()).add(related_pack_id)
+        self._trace_links.setdefault(related_pack_id, set()).add(pack_id)
+        return pack_id
+
     def store_linked(self, facts, salience=80.0):
         """Store related facts and link them for multi-hop retrieval.
 
