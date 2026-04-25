@@ -40,17 +40,21 @@ struct PackReadProfileLabel {
     layer_count: usize,
     payload_dim: usize,
     indexed_cells_per_pack: usize,
+    returned_pack_count: usize,
+    hydrated_layer_count: usize,
 }
 
 impl PackReadProfileLabel {
     fn as_benchmark_id(self) -> String {
         format!(
-            "target-{}-dedup-{}-layers-{}-payload-{}-indexed-{}",
+            "target-{}-dedup-{}-layers-{}-payload-{}-indexed-{}-returned-{}-hydrated-{}",
             self.target_top1,
             self.dedup_ok,
             self.layer_count,
             self.payload_dim,
-            self.indexed_cells_per_pack
+            self.indexed_cells_per_pack,
+            self.returned_pack_count,
+            self.hydrated_layer_count
         )
     }
 }
@@ -307,6 +311,8 @@ fn bench_engine_read_pack_encoded_per_token(c: &mut Criterion) {
                     layer_count,
                     payload_dim,
                     indexed_cells_per_pack: INDEXED_CELLS_PER_PACK,
+                    returned_pack_count: report.returned_pack_count,
+                    hydrated_layer_count: report.hydrated_layer_count,
                 };
 
                 let bench_id = BenchmarkId::new(label.as_benchmark_id(), pack_count);
@@ -342,6 +348,8 @@ fn bench_engine_read_pack_retrieval_only(c: &mut Criterion) {
                     layer_count,
                     payload_dim,
                     indexed_cells_per_pack: INDEXED_CELLS_PER_PACK,
+                    returned_pack_count: report.returned_pack_count,
+                    hydrated_layer_count: report.hydrated_layer_count,
                 };
 
                 let bench_id = BenchmarkId::new(label.as_benchmark_id(), pack_count);
@@ -361,6 +369,8 @@ fn bench_engine_read_pack_retrieval_only(c: &mut Criterion) {
 struct PackReadCorrectnessReport {
     target_top1: bool,
     dedup_ok: bool,
+    returned_pack_count: usize,
+    hydrated_layer_count: usize,
 }
 
 fn bench_pack(pack_id: usize, layer_count: usize, payload_dim: usize) -> KVPack {
@@ -391,10 +401,13 @@ fn pack_read_correctness_report(
     let target_pack_id = target_pack as u64 + FIRST_ASSIGNED_PACK_ID;
     let pack_ids: Vec<u64> = results.iter().map(|result| result.pack.id).collect();
     let unique_pack_ids: std::collections::HashSet<u64> = pack_ids.iter().copied().collect();
+    let hydrated_layer_count: usize = results.iter().map(|r| r.pack.layers.len()).sum();
 
     PackReadCorrectnessReport {
         target_top1: pack_ids.first().is_some_and(|pack_id| *pack_id == target_pack_id),
         dedup_ok: unique_pack_ids.len() == pack_ids.len(),
+        returned_pack_count: results.len(),
+        hydrated_layer_count,
     }
 }
 
