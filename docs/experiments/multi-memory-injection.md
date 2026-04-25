@@ -355,15 +355,44 @@ Text RAG:             95% (19/20)
 
 Each step improved. The remaining 6 failures: 5 retrieval (background still outscores despite boost) and 1 injection. Q20 ("14 months" vs "fourteen") is arguably a format match. Effective accuracy may be 75%.
 
+## Boost Factor Sweep (April 25, 2026)
+
+Swept boost_factor from 0.0 to 2.0 on the 140-memory, 20-query scale test:
+
+| boost_factor | Accuracy |
+|---|---|
+| 0.0 | 11/20 (55%) |
+| 0.1 | 14/20 (70%) |
+| 0.3 | 14/20 (70%) |
+| 0.5 | 14/20 (70%) |
+| 0.8 | 14/20 (70%) |
+| 1.0 | 14/20 (70%) |
+| 1.5 | 14/20 (70%) |
+| 2.0 | 14/20 (70%) |
+
+**Hard plateau at 70%.** The boost is a binary switch, not a dial — any non-zero value fixes the same 3 queries. The remaining 6 failures are immune to boosting:
+- 5 retrieval failures where background memories score too much higher than the cross-ref linking facts
+- 1 injection failure where correct packs produce a wrong answer
+
+Default `boost_factor=0.3` is optimal: minimal but sufficient.
+
+### What the plateau means
+
+The 5 retrieval-immune failures are caused by the experiment design: the cross-ref linking facts are shorter restatements of events that already exist as rich narrative memories in the background corpus. The retriever correctly picks the more detailed memory — it just doesn't have trace links. This is an artifact of storing duplicate descriptions of the same event.
+
+In a real agent scenario, an agent wouldn't store "The bookstore where I did the poetry reading is called Casa Azul" as a separate memory when it already has "Went to a poetry reading at a bookstore in Pilsen." It would link the new detail (the bookstore's name) to the existing memory. If the existing memory had the trace link, the retriever would find it (it's already the top match) and trace would hop to the answer.
+
+This suggests the 70% plateau is partially a corpus design artifact, not a fundamental architectural limit.
+
 ## Open Research
 
 | Question | Status |
 |----------|--------|
-| Does higher boost_factor (0.5, 1.0) fix more retrieval failures? | Next experiment |
-| Would linking details to existing memories (not restated facts) eliminate the competition? | Not tested |
+| Would linking details to existing memories eliminate the competition? | Not tested — strongest hypothesis |
 | Does a larger model (3B+) change results? | Not tested |
 | Would hybrid delivery (KV + text fallback) reach 95%? | Theoretical |
 | Does Rust-side Trace match Python-side links? | Not tested |
+| Is the 70% plateau model-dependent? | Not tested |
 
 ## Updated File List
 
