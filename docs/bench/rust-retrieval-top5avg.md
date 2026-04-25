@@ -261,3 +261,129 @@ The next implementation plan should therefore profile and reduce the residual
 pack-read path around result materialization, governance/SLB warming, and the
 `mem_read_pack` reconstruction loop. Storage hydration should not be the first
 target unless a later profile uses much larger payload tensors.
+
+### Pack Read Materialization Refactoring
+
+The previous phase profile showed that raw `BlockPool::get` was not the 10K
+bottleneck. The next step was to split `mem_read_pack`'s internal overhead into
+named phases, then apply only optimizations proven safe by ATDD.
+
+#### Architectural Change (Template Method)
+
+`mem_read_pack` was refactored from a single monolithic loop into five private
+phases following the Template Method pattern:
+
+```text
+mem_read_pack(query_key, k, owner_filter)
+  │
+  ├─ collect_pack_candidates    — SLB/pipeline retrieval, dedup by cell_id
+  ├─ deduplicate_pack_candidates — sort by score, pack-level dedup via PackDirectory
+  ├─ hydrate_pack_layers        — BlockPool::get per layer cell, sort by layer_idx
+  ├─ apply_pack_access_governance — single on_access per pack (not per layer)
+  └─ build_pack_read_result     — assemble PackReadResult value object
+```
+
+Value objects extracted to `pack_materialization.rs`:
+
+- `PackCandidate` — ranked retrieval result with pack membership
+- `PackAccessSnapshot` — immutable governance snapshot (tier + decay)
+- `PackMaterializationCounters` — diagnostic counter record (test-only)
+- `PackMaterializationPhaseProfile` — phase timing record (test-only)
+
+Free functions:
+
+- `keep_first_ranked_pack_candidates` — pack-level dedup (keeps first by score)
+- `build_pack_read_result` — assembles final `PackReadResult` from candidate + layers + governance
+
+#### Optimizations Applied
+
+All four allowed optimizations from the plan were structurally achieved by the
+refactoring itself:
+
+1. **Avoid repeated governance map lookups:** `apply_pack_access_governance` does
+   exactly one `get_mut` per pack. The old code did `get_mut` + `get` in the same
+   loop iteration.
+
+2. **Pre-size layer vectors:** `hydrate_pack_layers` uses
+   `Vec::with_capacity(cell_ids.len() - 1)` from pack directory membership.
+
+3. **Avoid redundant PACK_RETRIEVAL_LAYER checks:** The old code checked
+   `cell.layer != PACK_RETRIEVAL_LAYER` inside the layer loop. The refactored code
+   uses `.skip(PACK_RETRIEVAL_CELL_COUNT)` to structurally skip the retrieval cell.
+
+4. **Keep sorting only where needed:** The `layers.sort_by_key(|l| l.layer_idx)`
+   in `hydrate_pack_layers` is load-bearing because `PackDirectory` sorts cell_ids
+   numerically, not by layer_idx. ATDD test 35 proves out-of-order layers must be
+   sorted on read.
+
+No additional code changes were justified beyond the refactoring.
+
+#### ATDD Coverage Added
+
+- `test_pack_materialization_profile_sums_phase_counts` — counters add up correctly
+- `test_pack_candidate_dedup_keeps_first_ranked_pack` — dedup preserves first-ranked
+- `test_pack_layer_hydration_preserves_layer_order` — out-of-order layers sorted
+- `test_pack_materialization_updates_governance_once_per_returned_pack` — exactly one
+  `on_access` per pack, not per layer or candidate
+
+#### Benchmark Labels Enriched
+
+Benchmark IDs now include `returned_pack_count` and `hydrated_layer_count` in
+addition to the existing `target`, `dedup`, `layers`, `payload`, and `indexed`
+fields. This makes the phase profile self-documenting in Criterion output.
+
+#### Benchmark Results (Post-Refactoring)
+
+Measured with:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo bench -p tdb-engine "mem_read_pack"
+```
+
+All `mem_read_pack` labels reported `target true`, `dedup true`, `indexed 1`,
+and `returned 5` (except 16-layer at 100 packs).
+
+| Path | Size | Layers | Payload dim | Latency | vs. previous |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `Engine::mem_read_pack` | 100 packs | 0 | 128 | ~130 us | ~135 us |
+| `Engine::mem_read_pack` | 100 packs | 4 | 128 | ~517 us | ~535 us |
+| `Engine::mem_read_pack` | 100 packs | 16 | 128 | ~1.68 ms | ~1.71 ms |
+| `Engine::mem_read_pack` | 1,000 packs | 0 | 128 | ~1.45 ms | ~1.62 ms |
+| `Engine::mem_read_pack` | 1,000 packs | 4 | 128 | ~1.81 ms | ~2.03 ms |
+| `Engine::mem_read_pack` | 1,000 packs | 16 | 128 | ~2.97 ms | ~3.19 ms |
+| `Engine::mem_read_pack` | 10,000 packs | 0 | 128 | ~5.11 ms | ~6.16 ms |
+| `Engine::mem_read_pack` | 10,000 packs | 4 | 128 | ~5.36 ms | ~6.62 ms |
+| `Engine::mem_read_pack` | 10,000 packs | 16 | 128 | ~6.59 ms | ~7.96 ms |
+
+The retrieval-cell-only profile (`Engine::mem_read`) confirms that layer count
+does not affect retrieval cost:
+
+| Path | Size | Latency |
+| --- | ---: | ---: |
+| `Engine::mem_read` on pack retrieval cells | 100 packs | ~224 us |
+| `Engine::mem_read` on pack retrieval cells | 1,000 packs | ~1.57 ms |
+| `Engine::mem_read` on pack retrieval cells | 10,000 packs | ~3.43 ms |
+
+#### Phase Profile Conclusion
+
+The refactoring improved 10K 4-layer `mem_read_pack` from ~6.62 ms to ~5.36 ms
+(~19% reduction). The improvement came from eliminating governance double-lookups,
+pre-sizing vectors, and structurally skipping PACK_RETRIEVAL_LAYER checks.
+
+The residual 10K `mem_read_pack` latency is dominated by **candidate retrieval**
+(the `collect_pack_candidates` phase), not by materialization, governance, or
+layer hydration. Evidence:
+
+- Zero-layer `mem_read_pack` at 10K packs: ~5.1 ms (no layer hydration at all)
+- Four-layer `mem_read_pack` at 10K packs: ~5.4 ms (only ~250 us more)
+- Direct `BlockPool::get`: ~19 us per cell (negligible)
+- `Engine::mem_read` on the same retrieval cells: ~3.4 ms
+
+The ~1.7 ms gap between `mem_read` (~3.4 ms) and zero-layer `mem_read_pack`
+(~5.1 ms) is the pack-read overhead: pack directory lookups, candidate dedup,
+and result construction. The ~3.4 ms `mem_read` cost is the encoded per-token
+retrieval pipeline itself.
+
+The next bottleneck to address is the retrieval pipeline at scale. The
+materialization path is clean and does not warrant further optimization at
+current payload dimensions.
