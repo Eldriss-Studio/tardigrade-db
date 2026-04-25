@@ -270,19 +270,13 @@ class KnowledgePackStore:
         h_tokens = hidden[1:].numpy().astype(np.float32)
         query_key = encode_per_token(h_tokens, self.hidden_size)
 
-        # Retrieve more candidates than k for trace-boost re-ranking
-        k_expanded = max(k * 5, 10)
-        packs = self.engine.mem_read_pack(query_key, k_expanded, self.owner)
+        # Trace-Boosted Retrieval: Rust handles expanded retrieval,
+        # score boosting by link count, and re-ranking in one call
+        packs = self.engine.mem_read_pack_with_trace_boost(
+            query_key, k, self.owner, boost_factor
+        )
         if not packs:
             return None, query_input, None
-
-        # Trace-Boosted Retrieval: re-rank by connection density (via Rust)
-        for pack in packs:
-            link_count = len(self.engine.pack_links(pack["pack_id"]))
-            pack["score"] *= (1.0 + link_count * boost_factor)
-
-        packs.sort(key=lambda p: p["score"], reverse=True)
-        packs = packs[:k]
 
         # Follow trace links to discover related packs (via Rust)
         retrieved_ids = {p["pack_id"] for p in packs}

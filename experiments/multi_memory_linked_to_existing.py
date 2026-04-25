@@ -269,16 +269,15 @@ def main():
     for entry in LINKED_DETAILS:
         bg_pack_id = background_pack_ids[entry["background_idx"]]
         detail_pack_id = kps.store(entry["detail"])
-        # Bidirectional link: background <-> detail
-        kps._trace_links.setdefault(bg_pack_id, set()).add(detail_pack_id)
-        kps._trace_links.setdefault(detail_pack_id, set()).add(bg_pack_id)
+        # Bidirectional link: background <-> detail (via Rust engine)
+        engine.add_pack_link(bg_pack_id, detail_pack_id)
     link_time = time.time() - t0
     total = engine.pack_count()
     print(f"  Total: {total} packs in {bg_time + link_time:.1f}s")
 
     # Count trace links for diagnostic
     linked_bg_count = sum(
-        1 for pid in background_pack_ids if pid in kps._trace_links
+        1 for pid in background_pack_ids if len(engine.pack_links(pid)) > 0
     )
     print(f"  Background memories with links: {linked_bg_count}/{len(MEMORIES)}")
 

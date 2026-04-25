@@ -108,7 +108,7 @@ def main():
         direct_ids = {p["pack_id"] for p in direct_packs}
         linked_ids = set()
         for pid in direct_ids:
-            linked_ids.update(kps._trace_links.get(pid, set()))
+            linked_ids.update(engine.pack_links(pid))
         all_ids = direct_ids | linked_ids
 
         missing = expected_ids - all_ids

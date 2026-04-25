@@ -345,6 +345,46 @@ impl Engine {
         self.inner.pack_links(pack_id)
     }
 
+    /// Retrieve packs with trace-boosted scoring.
+    fn mem_read_pack_with_trace_boost(
+        &mut self,
+        py: Python<'_>,
+        query_key: PyReadonlyArray1<'_, f32>,
+        k: usize,
+        owner: Option<u64>,
+        boost_factor: f32,
+    ) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
+        let query =
+            query_key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let results = self
+            .inner
+            .mem_read_pack_with_trace_boost(query, k, owner, boost_factor)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let mut py_results = Vec::with_capacity(results.len());
+        for r in results {
+            let layers_list = pyo3::types::PyList::empty(py);
+            for layer in &r.pack.layers {
+                let layer_dict = pyo3::types::PyDict::new(py);
+                layer_dict.set_item("layer_idx", layer.layer_idx)?;
+                let data_array =
+                    numpy::PyArray1::from_slice(py, &layer.data).into_any().unbind();
+                layer_dict.set_item("data", data_array)?;
+                layers_list.append(layer_dict)?;
+            }
+
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("pack_id", r.pack.id)?;
+            dict.set_item("owner", r.pack.owner)?;
+            dict.set_item("score", r.score)?;
+            dict.set_item("tier", r.tier as u8)?;
+            dict.set_item("layers", layers_list)?;
+            py_results.push(dict.into_any().unbind());
+        }
+        Ok(py_results)
+    }
+
     fn __repr__(&self) -> String {
         format!("Engine(path='{}', cells={})", self.inner.dir().display(), self.inner.cell_count())
     }

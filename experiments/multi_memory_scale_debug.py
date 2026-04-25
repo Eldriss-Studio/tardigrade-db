@@ -90,7 +90,7 @@ def main():
         # Step 2: trace links
         linked_ids = set()
         for pid in first_hop_ids:
-            linked_ids.update(kps._trace_links.get(pid, set()))
+            linked_ids.update(engine.pack_links(pid))
         all_found_ids = first_hop_ids | linked_ids
 
         all_expected_found = expected_ids <= all_found_ids

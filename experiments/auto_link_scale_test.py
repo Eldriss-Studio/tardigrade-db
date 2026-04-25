@@ -76,7 +76,7 @@ def main():
     for mem in MEMORIES:
         kps.store(mem, auto_link=True)
     bg_time = time.time() - t0
-    bg_links = sum(len(v) for v in kps._trace_links.values()) // 2
+    bg_links = sum(len(engine.pack_links(pid)) for pid in range(1, engine.pack_count() + 1)) // 2
     print(f"  Background: {engine.pack_count()} packs, {bg_links} auto-links, {bg_time:.1f}s", flush=True)
 
     print(f"  Storing {len(CROSS_REF_PAIRS) * 2} cross-ref facts individually...", flush=True)
@@ -87,7 +87,7 @@ def main():
             pack_id = kps.store(fact, auto_link=True)
             fact_to_pack[fact] = pack_id
     cr_time = time.time() - t0
-    total_links = sum(len(v) for v in kps._trace_links.values()) // 2
+    total_links = sum(len(engine.pack_links(pid)) for pid in range(1, engine.pack_count() + 1)) // 2
     print(f"  Total: {engine.pack_count()} packs, {total_links} auto-links, {cr_time:.1f}s", flush=True)
 
     # Auto-link diagnostic
@@ -96,8 +96,8 @@ def main():
     for i, entry in enumerate(CROSS_REF_PAIRS):
         pid_a = fact_to_pack[entry["facts"][0]]
         pid_b = fact_to_pack[entry["facts"][1]]
-        links_a = kps._trace_links.get(pid_a, set())
-        links_b = kps._trace_links.get(pid_b, set())
+        links_a = set(engine.pack_links(pid_a))
+        links_b = set(engine.pack_links(pid_b))
 
         directly_linked = pid_b in links_a
         shared = links_a & links_b

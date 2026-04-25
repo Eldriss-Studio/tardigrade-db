@@ -733,6 +733,45 @@ impl Engine {
         Ok(results)
     }
 
+    /// Retrieve packs with trace-boosted scoring.
+    ///
+    /// Retrieves an expanded candidate set, boosts scores by trace link
+    /// count (discovery hubs rank higher), then returns the top k.
+    pub fn mem_read_pack_with_trace_boost(
+        &mut self,
+        query_key: &[f32],
+        k: usize,
+        owner_filter: Option<OwnerId>,
+        boost_factor: f32,
+    ) -> Result<Vec<PackReadResult>> {
+        let k_expanded = k.saturating_mul(5).max(10);
+        let candidates = self.collect_pack_candidates(query_key, k_expanded, owner_filter);
+        let candidates = self.deduplicate_pack_candidates(candidates, k_expanded, owner_filter);
+
+        // Score and boost by trace link count
+        let mut scored: Vec<(PackCandidate, f32)> = candidates
+            .into_iter()
+            .map(|c| {
+                let link_count = self.pack_links(c.pack_id).len() as f32;
+                let boosted_score = c.score * (1.0 + link_count * boost_factor);
+                (c, boosted_score)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+
+        let mut results = Vec::with_capacity(k);
+        for (mut candidate, boosted_score) in scored {
+            candidate.score = boosted_score;
+            let layers = self.hydrate_pack_layers(&candidate.cell_ids)?;
+            let access = self.apply_pack_access_governance(candidate.retrieval_cell_id);
+            results.push(build_pack_read_result(&candidate, layers, access));
+        }
+
+        Ok(results)
+    }
+
     fn collect_pack_candidates(
         &mut self,
         query_key: &[f32],
