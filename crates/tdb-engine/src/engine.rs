@@ -843,6 +843,113 @@ impl Engine {
         self.governance.get(&retrieval_cell_id).map(|g| g.scorer.importance())
     }
 
+    /// Load a pack by ID without retrieval scoring.
+    ///
+    /// Returns the complete pack with all layer payloads. Applies access
+    /// governance (importance boost + recency decay).
+    pub fn load_pack_by_id(&mut self, pack_id: PackId) -> Result<PackReadResult> {
+        let cell_ids = self
+            .pack_directory
+            .cell_ids(pack_id)
+            .ok_or(TardigradeError::CellNotFound(pack_id))?
+            .to_vec();
+
+        let retrieval_cell_id = *cell_ids
+            .first()
+            .ok_or(TardigradeError::CellNotFound(pack_id))?;
+
+        let owner = self
+            .pool
+            .get(retrieval_cell_id)
+            .map_or(0, |cell| cell.owner);
+
+        let layers = self.hydrate_pack_layers(&cell_ids)?;
+        let access = self.apply_pack_access_governance(retrieval_cell_id);
+
+        let candidate =
+            PackCandidate::new(pack_id, retrieval_cell_id, owner, 0.0, cell_ids);
+        Ok(build_pack_read_result(&candidate, layers, access))
+    }
+
+    /// Create a durable trace link between two packs.
+    ///
+    /// Links the retrieval cells of both packs via the Trace graph and
+    /// logs the edge to WAL for crash recovery. Bidirectional: creates
+    /// edges in both directions using `Follows` edge type.
+    pub fn add_pack_link(&mut self, pack_id_1: PackId, pack_id_2: PackId) -> Result<()> {
+        let cell_1 = self
+            .pack_directory
+            .cell_ids(pack_id_1)
+            .and_then(|ids| ids.first().copied())
+            .ok_or(TardigradeError::CellNotFound(pack_id_1))?;
+
+        let cell_2 = self
+            .pack_directory
+            .cell_ids(pack_id_2)
+            .and_then(|ids| ids.first().copied())
+            .ok_or(TardigradeError::CellNotFound(pack_id_2))?;
+
+        let now_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+
+        // Forward edge: pack_1 → pack_2
+        let wal_fwd = WalEntry::AddEdge {
+            src: cell_1,
+            dst: cell_2,
+            edge_type: EdgeType::Follows as u8,
+            timestamp: now_nanos,
+        };
+        self.wal.append(&wal_fwd).map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
+        self.trace.add_edge(cell_1, cell_2, EdgeType::Follows, now_nanos);
+
+        // Reverse edge: pack_2 → pack_1
+        let wal_rev = WalEntry::AddEdge {
+            src: cell_2,
+            dst: cell_1,
+            edge_type: EdgeType::Follows as u8,
+            timestamp: now_nanos,
+        };
+        self.wal.append(&wal_rev).map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
+        self.trace.add_edge(cell_2, cell_1, EdgeType::Follows, now_nanos);
+
+        Ok(())
+    }
+
+    /// Get all packs linked to a given pack via trace edges.
+    ///
+    /// Returns pack IDs of all directly connected packs (both directions).
+    pub fn pack_links(&self, pack_id: PackId) -> Vec<PackId> {
+        let Some(cell_ids) = self.pack_directory.cell_ids(pack_id) else {
+            return Vec::new();
+        };
+        let Some(&retrieval_cell) = cell_ids.first() else {
+            return Vec::new();
+        };
+
+        let mut linked_packs = std::collections::HashSet::new();
+
+        // Outgoing edges
+        for edge in self.trace.outgoing(retrieval_cell, None) {
+            if let Some(linked_pack) = self.pack_directory.pack_for_cell(edge.dst)
+                && linked_pack != pack_id
+            {
+                linked_packs.insert(linked_pack);
+            }
+        }
+
+        // Incoming edges
+        for edge in self.trace.incoming(retrieval_cell, None) {
+            if let Some(linked_pack) = self.pack_directory.pack_for_cell(edge.src)
+                && linked_pack != pack_id
+            {
+                linked_packs.insert(linked_pack);
+            }
+        }
+
+        linked_packs.into_iter().collect()
+    }
+
     /// Build and activate the Vamana index, adding it as a pipeline stage.
     fn activate_vamana(&mut self) -> Result<()> {
         let dim = self.key_dim.unwrap_or(128);

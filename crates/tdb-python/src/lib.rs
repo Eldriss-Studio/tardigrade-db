@@ -303,6 +303,48 @@ impl Engine {
         self.inner.pack_importance(pack_id)
     }
 
+    /// Load a pack by ID without retrieval scoring.
+    fn load_pack_by_id(
+        &mut self,
+        py: Python<'_>,
+        pack_id: u64,
+    ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        let result = self
+            .inner
+            .load_pack_by_id(pack_id)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let layers_list = pyo3::types::PyList::empty(py);
+        for layer in &result.pack.layers {
+            let layer_dict = pyo3::types::PyDict::new(py);
+            layer_dict.set_item("layer_idx", layer.layer_idx)?;
+            let data_array =
+                numpy::PyArray1::from_slice(py, &layer.data).into_any().unbind();
+            layer_dict.set_item("data", data_array)?;
+            layers_list.append(layer_dict)?;
+        }
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("pack_id", result.pack.id)?;
+        dict.set_item("owner", result.pack.owner)?;
+        dict.set_item("score", result.score)?;
+        dict.set_item("tier", result.tier as u8)?;
+        dict.set_item("layers", layers_list)?;
+        Ok(dict.into_any().unbind())
+    }
+
+    /// Create a durable trace link between two packs.
+    fn add_pack_link(&mut self, pack_id_1: u64, pack_id_2: u64) -> PyResult<()> {
+        self.inner
+            .add_pack_link(pack_id_1, pack_id_2)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Get all packs linked to a given pack via trace edges.
+    fn pack_links(&self, pack_id: u64) -> Vec<u64> {
+        self.inner.pack_links(pack_id)
+    }
+
     fn __repr__(&self) -> String {
         format!("Engine(path='{}', cells={})", self.inner.dir().display(), self.inner.cell_count())
     }
