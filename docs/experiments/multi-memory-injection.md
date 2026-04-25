@@ -308,16 +308,61 @@ Phase 31: Trace-linked retrieval ............. 10/10 find both packs
           Scale test (140 facts) ............. 11/20 (55%)
 ```
 
+## Failure Decomposition (April 25, 2026)
+
+Decomposed the 9 failures at 140 memories:
+
+| Failure type | Count | What happened |
+|---|---|---|
+| Retrieval wrong | 5 | Background memory outscores cross-ref linking fact |
+| Trace link failure | 0 | Python-side graph works perfectly |
+| Injection failure | 4 | Correct packs found but model misformats answer |
+
+The 5 retrieval failures: the original 100 background memories are detailed narratives ("Went to a poetry reading at a bookstore in Pilsen. A woman read a poem about...") that score higher on content similarity than the shorter cross-ref linking facts ("The bookstore in Pilsen where I did the poetry reading is called Casa Azul"). The retriever correctly picks the best content match — it just doesn't have trace links to the answer.
+
+Of the 4 injection failures, Q20 ("14 months" vs expected "fourteen") is a format mismatch, not a real failure.
+
+## Phase 32: Trace-Boosted Retrieval (April 25, 2026)
+
+**Name: Trace-Boosted Retrieval.** Memories with trace connections get a score boost proportional to their link count. Connected memories are discovery hubs — they bring related facts along via trace traversal. Inspired by PageRank (linked pages rank higher) and Obsidian (backlink-dense notes are more important).
+
+**Implementation:** After retrieving an expanded candidate set (`k * 5` packs), re-rank by:
+```
+final_score = retrieval_score * (1 + link_count * boost_factor)
+```
+Then take top-k and follow trace links. `boost_factor = 0.3` in initial test.
+
+### Results
+
+| Metric | Before boost | After boost (0.3) |
+|---|---|---|
+| Final accuracy | 11/20 (55%) | **14/20 (70%)** |
+| First-hop retrieval correct | 15/20 | 15/20 (unchanged) |
+| Retrieval failures | 5 | 5 (but 3 queries PASS anyway) |
+| Trace failures | 0 | 0 |
+| Injection failures | 4 | 1 |
+
+The boost didn't change how many first-hop retrievals were correct (still 15/20) but changed *which* packs ranked highest among expanded candidates. 3 queries that previously failed now pass — the boost promoted different background memories that happened to contain enough information.
+
+### Full Progression
+
+```
+No trace baseline:   ~30%
+Trace-linked:         55% (11/20)
+Trace-boosted (0.3):  70% (14/20)
+Text RAG:             95% (19/20)
+```
+
+Each step improved. The remaining 6 failures: 5 retrieval (background still outscores despite boost) and 1 injection. Q20 ("14 months" vs "fourteen") is arguably a format match. Effective accuracy may be 75%.
+
 ## Open Research
 
 | Question | Status |
 |----------|--------|
-| Why does scale degrade accuracy? | Retrieval noise + attention dilution (not yet decomposed) |
-| Can first-hop retrieval accuracy be measured at 140 memories? | Not measured |
-| Does candidate reduction (Rust) improve first-hop at scale? | Not tested |
-| Does a larger model (3B+) tolerate scale noise better? | Not tested |
-| Would hybrid delivery (KV single-fact + text multi-hop) reach 95%? | Theoretical |
-| Does pack ordering systematically affect accuracy? | Observed small scale, not at scale |
+| Does higher boost_factor (0.5, 1.0) fix more retrieval failures? | Next experiment |
+| Would linking details to existing memories (not restated facts) eliminate the competition? | Not tested |
+| Does a larger model (3B+) change results? | Not tested |
+| Would hybrid delivery (KV + text fallback) reach 95%? | Theoretical |
 | Does Rust-side Trace match Python-side links? | Not tested |
 
 ## Updated File List
