@@ -54,12 +54,15 @@ class KnowledgePackStore:
         # Pack ID -> set of linked pack IDs (Python-side trace graph)
         self._trace_links = {}
 
-    def store(self, fact_text, salience=80.0):
+    def store(self, fact_text, salience=80.0, auto_link=True, auto_link_threshold=None):
         """Store a fact's KV cache across all layers.
 
         Wraps the fact in the model's chat template before computing KV.
         Stores hidden states as retrieval key (for Top5Avg matching)
         and full K+V payload as injection value (per layer).
+
+        If auto_link is True, searches existing memories before writing
+        and creates trace links to similar ones (Zettelkasten pattern).
 
         Returns the pack_id assigned by the engine.
         """
@@ -91,6 +94,16 @@ class KnowledgePackStore:
             payload = np.concatenate([k_np.ravel(), v_np.ravel()])
             layer_payloads.append((li, payload))
 
+        # Auto-link: search existing memories BEFORE writing (otherwise the
+        # new pack outscores everything when querying with its own key)
+        auto_link_matches = []
+        if auto_link and self.engine.pack_count() > 0:
+            threshold = auto_link_threshold if auto_link_threshold is not None else 200.0
+            existing = self.engine.mem_read_pack(retrieval_key, 3, self.owner)
+            auto_link_matches = [
+                p["pack_id"] for p in existing if p["score"] >= threshold
+            ]
+
         # Single atomic write via Rust pack API (one fsync for all layers)
         pack_id = self.engine.mem_write_pack(
             self.owner, retrieval_key, layer_payloads, salience
@@ -107,6 +120,11 @@ class KnowledgePackStore:
                 for li, payload in layer_payloads
             ],
         }
+
+        # Create trace links to similar existing packs
+        for match_id in auto_link_matches:
+            self._trace_links.setdefault(pack_id, set()).add(match_id)
+            self._trace_links.setdefault(match_id, set()).add(pack_id)
 
         return pack_id
 
@@ -303,13 +321,13 @@ class KnowledgePackStore:
 
         return cache, query_ids, attention_mask
 
-    def generate_with_trace(self, query_text, k=1, composer=None, **gen_kwargs):
+    def generate_with_trace(self, query_text, k=1, composer=None, boost_factor=0.3, **gen_kwargs):
         """Full pipeline: retrieve + trace hop + compose + inject + generate.
 
         Returns (generated_text, prompt_tokens, had_memory).
         """
         cache, query_ids, attn_mask = self.retrieve_with_trace(
-            query_text, k=k, composer=composer
+            query_text, k=k, composer=composer, boost_factor=boost_factor
         )
         q_len = query_ids.shape[1]
 
