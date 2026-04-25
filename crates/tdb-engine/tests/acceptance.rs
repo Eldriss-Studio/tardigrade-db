@@ -1782,3 +1782,181 @@ fn test_pack_governance() {
     let imp_after = engine.pack_importance(pack_id);
     assert!(imp_after.unwrap() < imp_before.unwrap(), "Importance should decay");
 }
+
+// -- Phase 37: Pack-level Rust APIs ─────────────────────────────────────────
+
+/// ATDD: load_pack_by_id returns complete pack without retrieval scoring.
+#[test]
+fn test_load_pack_by_id_returns_complete_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack = KVPack {
+        id: 0,
+        owner: 1,
+        retrieval_key: key,
+        layers: (0..4)
+            .map(|i| KVLayerPayload { layer_idx: i, data: vec![i as f32; 16] })
+            .collect(),
+        salience: 80.0,
+    };
+
+    let pack_id = engine.mem_write_pack(&pack).unwrap();
+    let loaded = engine.load_pack_by_id(pack_id).unwrap();
+
+    assert_eq!(loaded.pack.id, pack_id);
+    assert_eq!(loaded.pack.layers.len(), 4);
+    for (i, layer) in loaded.pack.layers.iter().enumerate() {
+        assert_eq!(layer.layer_idx, i as u16);
+        assert_eq!(layer.data.len(), 16);
+    }
+}
+
+/// ATDD: load_pack_by_id fails for nonexistent pack.
+#[test]
+fn test_load_pack_by_id_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    assert!(engine.load_pack_by_id(999).is_err());
+}
+
+/// ATDD: add_pack_link creates durable bidirectional trace edge.
+#[test]
+fn test_add_pack_link_creates_bidirectional_edge() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key_a = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let key_b = encode_per_token_keys(&[&[0.0f32, 1.0, 0.0, 0.0]]);
+
+    let pack_a = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_a,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+        })
+        .unwrap();
+
+    let pack_b = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_b,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+            salience: 80.0,
+        })
+        .unwrap();
+
+    engine.add_pack_link(pack_a, pack_b).unwrap();
+
+    let links_a = engine.pack_links(pack_a);
+    let links_b = engine.pack_links(pack_b);
+    assert!(links_a.contains(&pack_b), "pack_a should link to pack_b");
+    assert!(links_b.contains(&pack_a), "pack_b should link to pack_a");
+}
+
+/// ATDD: pack links survive engine reopen via WAL replay.
+#[test]
+fn test_pack_links_survive_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let key_a = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let key_b = encode_per_token_keys(&[&[0.0f32, 1.0, 0.0, 0.0]]);
+
+    let (pack_a, pack_b) = {
+        let mut engine = Engine::open(dir.path()).unwrap();
+
+        let a = engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key_a,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+                salience: 80.0,
+            })
+            .unwrap();
+
+        let b = engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key_b,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+                salience: 80.0,
+            })
+            .unwrap();
+
+        engine.add_pack_link(a, b).unwrap();
+        (a, b)
+    }; // engine dropped, WAL flushed
+
+    // Reopen — WAL replay should restore trace edges
+    let engine = Engine::open(dir.path()).unwrap();
+    let links = engine.pack_links(pack_a);
+    assert!(links.contains(&pack_b), "links should survive reopen");
+}
+
+/// ATDD: trace-boosted retrieval prefers linked pack over unlinked.
+#[test]
+fn test_trace_boost_prefers_linked_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    // Pack A: linked, slightly lower base score
+    let key_a = encode_per_token_keys(&[&[0.9f32, 0.1, 0.0, 0.0]]);
+    let pack_a = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_a,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+        })
+        .unwrap();
+
+    // Pack B: unlinked, slightly higher base score
+    let key_b = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack_b = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_b,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+            salience: 80.0,
+        })
+        .unwrap();
+
+    // Pack C: linked to pack_a (gives pack_a a trace link)
+    let key_c = encode_per_token_keys(&[&[0.0f32, 0.0, 1.0, 0.0]]);
+    let _pack_c = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_c,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![3.0; 16] }],
+            salience: 80.0,
+        })
+        .unwrap();
+
+    engine.add_pack_link(pack_a, _pack_c).unwrap();
+
+    // Query close to both A and B
+    let query = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+
+    // Without boost: pack_b should rank first (higher base score)
+    let no_boost = engine.mem_read_pack(&query, 2, None).unwrap();
+    assert_eq!(no_boost[0].pack.id, pack_b, "without boost, unlinked B ranks first");
+
+    // With boost: pack_a should rank first (link boost overcomes score gap)
+    let with_boost = engine
+        .mem_read_pack_with_trace_boost(&query, 2, None, 0.5)
+        .unwrap();
+    assert_eq!(
+        with_boost[0].pack.id, pack_a,
+        "with boost, linked A should rank first"
+    );
+}
