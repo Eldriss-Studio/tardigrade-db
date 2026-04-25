@@ -878,34 +878,141 @@
 <a href=#843 id=843 data-nosnippet>843</a>        <span class="self">self</span>.governance.get(<span class="kw-2">&amp;</span>retrieval_cell_id).map(|g| g.scorer.importance())
 <a href=#844 id=844 data-nosnippet>844</a>    }
 <a href=#845 id=845 data-nosnippet>845</a>
-<a href=#846 id=846 data-nosnippet>846</a>    <span class="doccomment">/// Build and activate the Vamana index, adding it as a pipeline stage.
-<a href=#847 id=847 data-nosnippet>847</a>    </span><span class="kw">fn </span>activate_vamana(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#848 id=848 data-nosnippet>848</a>        <span class="kw">let </span>dim = <span class="self">self</span>.key_dim.unwrap_or(<span class="number">128</span>);
-<a href=#849 id=849 data-nosnippet>849</a>        <span class="kw">let </span><span class="kw-2">mut </span>vamana = VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE);
-<a href=#850 id=850 data-nosnippet>850</a>
-<a href=#851 id=851 data-nosnippet>851</a>        <span class="kw">let </span>cell_ids: Vec&lt;CellId&gt; = <span class="self">self</span>.pool.iter_cell_ids().collect();
-<a href=#852 id=852 data-nosnippet>852</a>        <span class="kw">for </span>cell_id <span class="kw">in </span><span class="kw-2">&amp;</span>cell_ids {
-<a href=#853 id=853 data-nosnippet>853</a>            <span class="kw">let </span>cell = <span class="self">self</span>.pool.get(<span class="kw-2">*</span>cell_id)<span class="question-mark">?</span>;
-<a href=#854 id=854 data-nosnippet>854</a>            <span class="kw">let </span>key = mean_pool_key(<span class="kw-2">&amp;</span>cell.key);
-<a href=#855 id=855 data-nosnippet>855</a>            vamana.insert(cell.id, <span class="kw-2">&amp;</span>key);
-<a href=#856 id=856 data-nosnippet>856</a>        }
-<a href=#857 id=857 data-nosnippet>857</a>        vamana.build();
-<a href=#858 id=858 data-nosnippet>858</a>
-<a href=#859 id=859 data-nosnippet>859</a>        <span class="comment">// Add Vamana as a pipeline stage via the adapter.
-<a href=#860 id=860 data-nosnippet>860</a>        </span><span class="self">self</span>.pipeline.add_stage(Box::new(VamanaAdapter { inner: vamana }));
-<a href=#861 id=861 data-nosnippet>861</a>        <span class="self">self</span>.vamana = <span class="prelude-val">Some</span>(VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE)); <span class="comment">// Marker only.
-<a href=#862 id=862 data-nosnippet>862</a>        </span><span class="prelude-val">Ok</span>(())
-<a href=#863 id=863 data-nosnippet>863</a>    }
-<a href=#864 id=864 data-nosnippet>864</a>}
+<a href=#846 id=846 data-nosnippet>846</a>    <span class="doccomment">/// Load a pack by ID without retrieval scoring.
+<a href=#847 id=847 data-nosnippet>847</a>    ///
+<a href=#848 id=848 data-nosnippet>848</a>    /// Returns the complete pack with all layer payloads. Applies access
+<a href=#849 id=849 data-nosnippet>849</a>    /// governance (importance boost + recency decay).
+<a href=#850 id=850 data-nosnippet>850</a>    </span><span class="kw">pub fn </span>load_pack_by_id(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pack_id: PackId) -&gt; <span class="prelude-ty">Result</span>&lt;PackReadResult&gt; {
+<a href=#851 id=851 data-nosnippet>851</a>        <span class="kw">let </span>cell_ids = <span class="self">self
+<a href=#852 id=852 data-nosnippet>852</a>            </span>.pack_directory
+<a href=#853 id=853 data-nosnippet>853</a>            .cell_ids(pack_id)
+<a href=#854 id=854 data-nosnippet>854</a>            .ok_or(TardigradeError::CellNotFound(pack_id))<span class="question-mark">?
+<a href=#855 id=855 data-nosnippet>855</a>            </span>.to_vec();
+<a href=#856 id=856 data-nosnippet>856</a>
+<a href=#857 id=857 data-nosnippet>857</a>        <span class="kw">let </span>retrieval_cell_id = <span class="kw-2">*</span>cell_ids
+<a href=#858 id=858 data-nosnippet>858</a>            .first()
+<a href=#859 id=859 data-nosnippet>859</a>            .ok_or(TardigradeError::CellNotFound(pack_id))<span class="question-mark">?</span>;
+<a href=#860 id=860 data-nosnippet>860</a>
+<a href=#861 id=861 data-nosnippet>861</a>        <span class="kw">let </span>owner = <span class="self">self
+<a href=#862 id=862 data-nosnippet>862</a>            </span>.pool
+<a href=#863 id=863 data-nosnippet>863</a>            .get(retrieval_cell_id)
+<a href=#864 id=864 data-nosnippet>864</a>            .map_or(<span class="number">0</span>, |cell| cell.owner);
 <a href=#865 id=865 data-nosnippet>865</a>
-<a href=#866 id=866 data-nosnippet>866</a><span class="kw">impl </span>std::fmt::Debug <span class="kw">for </span>Engine {
-<a href=#867 id=867 data-nosnippet>867</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
-<a href=#868 id=868 data-nosnippet>868</a>        f.debug_struct(<span class="string">"Engine"</span>)
-<a href=#869 id=869 data-nosnippet>869</a>            .field(<span class="string">"dir"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.dir)
-<a href=#870 id=870 data-nosnippet>870</a>            .field(<span class="string">"cell_count"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.pool.cell_count())
-<a href=#871 id=871 data-nosnippet>871</a>            .field(<span class="string">"has_vamana"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.vamana.is_some())
-<a href=#872 id=872 data-nosnippet>872</a>            .field(<span class="string">"trace_edges"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.trace.edge_count())
-<a href=#873 id=873 data-nosnippet>873</a>            .finish_non_exhaustive()
-<a href=#874 id=874 data-nosnippet>874</a>    }
-<a href=#875 id=875 data-nosnippet>875</a>}
+<a href=#866 id=866 data-nosnippet>866</a>        <span class="kw">let </span>layers = <span class="self">self</span>.hydrate_pack_layers(<span class="kw-2">&amp;</span>cell_ids)<span class="question-mark">?</span>;
+<a href=#867 id=867 data-nosnippet>867</a>        <span class="kw">let </span>access = <span class="self">self</span>.apply_pack_access_governance(retrieval_cell_id);
+<a href=#868 id=868 data-nosnippet>868</a>
+<a href=#869 id=869 data-nosnippet>869</a>        <span class="kw">let </span>candidate =
+<a href=#870 id=870 data-nosnippet>870</a>            PackCandidate::new(pack_id, retrieval_cell_id, owner, <span class="number">0.0</span>, cell_ids);
+<a href=#871 id=871 data-nosnippet>871</a>        <span class="prelude-val">Ok</span>(build_pack_read_result(<span class="kw-2">&amp;</span>candidate, layers, access))
+<a href=#872 id=872 data-nosnippet>872</a>    }
+<a href=#873 id=873 data-nosnippet>873</a>
+<a href=#874 id=874 data-nosnippet>874</a>    <span class="doccomment">/// Create a durable trace link between two packs.
+<a href=#875 id=875 data-nosnippet>875</a>    ///
+<a href=#876 id=876 data-nosnippet>876</a>    /// Links the retrieval cells of both packs via the Trace graph and
+<a href=#877 id=877 data-nosnippet>877</a>    /// logs the edge to WAL for crash recovery. Bidirectional: creates
+<a href=#878 id=878 data-nosnippet>878</a>    /// edges in both directions using `Follows` edge type.
+<a href=#879 id=879 data-nosnippet>879</a>    </span><span class="kw">pub fn </span>add_pack_link(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pack_id_1: PackId, pack_id_2: PackId) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#880 id=880 data-nosnippet>880</a>        <span class="kw">let </span>cell_1 = <span class="self">self
+<a href=#881 id=881 data-nosnippet>881</a>            </span>.pack_directory
+<a href=#882 id=882 data-nosnippet>882</a>            .cell_ids(pack_id_1)
+<a href=#883 id=883 data-nosnippet>883</a>            .and_then(|ids| ids.first().copied())
+<a href=#884 id=884 data-nosnippet>884</a>            .ok_or(TardigradeError::CellNotFound(pack_id_1))<span class="question-mark">?</span>;
+<a href=#885 id=885 data-nosnippet>885</a>
+<a href=#886 id=886 data-nosnippet>886</a>        <span class="kw">let </span>cell_2 = <span class="self">self
+<a href=#887 id=887 data-nosnippet>887</a>            </span>.pack_directory
+<a href=#888 id=888 data-nosnippet>888</a>            .cell_ids(pack_id_2)
+<a href=#889 id=889 data-nosnippet>889</a>            .and_then(|ids| ids.first().copied())
+<a href=#890 id=890 data-nosnippet>890</a>            .ok_or(TardigradeError::CellNotFound(pack_id_2))<span class="question-mark">?</span>;
+<a href=#891 id=891 data-nosnippet>891</a>
+<a href=#892 id=892 data-nosnippet>892</a>        <span class="kw">let </span>now_nanos = std::time::SystemTime::now()
+<a href=#893 id=893 data-nosnippet>893</a>            .duration_since(std::time::UNIX_EPOCH)
+<a href=#894 id=894 data-nosnippet>894</a>            .map_or(<span class="number">0</span>, |d| d.as_nanos() <span class="kw">as </span>u64);
+<a href=#895 id=895 data-nosnippet>895</a>
+<a href=#896 id=896 data-nosnippet>896</a>        <span class="comment">// Forward edge: pack_1 → pack_2
+<a href=#897 id=897 data-nosnippet>897</a>        </span><span class="kw">let </span>wal_fwd = WalEntry::AddEdge {
+<a href=#898 id=898 data-nosnippet>898</a>            src: cell_1,
+<a href=#899 id=899 data-nosnippet>899</a>            dst: cell_2,
+<a href=#900 id=900 data-nosnippet>900</a>            edge_type: EdgeType::Follows <span class="kw">as </span>u8,
+<a href=#901 id=901 data-nosnippet>901</a>            timestamp: now_nanos,
+<a href=#902 id=902 data-nosnippet>902</a>        };
+<a href=#903 id=903 data-nosnippet>903</a>        <span class="self">self</span>.wal.append(<span class="kw-2">&amp;</span>wal_fwd).map_err(|e| TardigradeError::WalRecovery(e.to_string()))<span class="question-mark">?</span>;
+<a href=#904 id=904 data-nosnippet>904</a>        <span class="self">self</span>.trace.add_edge(cell_1, cell_2, EdgeType::Follows, now_nanos);
+<a href=#905 id=905 data-nosnippet>905</a>
+<a href=#906 id=906 data-nosnippet>906</a>        <span class="comment">// Reverse edge: pack_2 → pack_1
+<a href=#907 id=907 data-nosnippet>907</a>        </span><span class="kw">let </span>wal_rev = WalEntry::AddEdge {
+<a href=#908 id=908 data-nosnippet>908</a>            src: cell_2,
+<a href=#909 id=909 data-nosnippet>909</a>            dst: cell_1,
+<a href=#910 id=910 data-nosnippet>910</a>            edge_type: EdgeType::Follows <span class="kw">as </span>u8,
+<a href=#911 id=911 data-nosnippet>911</a>            timestamp: now_nanos,
+<a href=#912 id=912 data-nosnippet>912</a>        };
+<a href=#913 id=913 data-nosnippet>913</a>        <span class="self">self</span>.wal.append(<span class="kw-2">&amp;</span>wal_rev).map_err(|e| TardigradeError::WalRecovery(e.to_string()))<span class="question-mark">?</span>;
+<a href=#914 id=914 data-nosnippet>914</a>        <span class="self">self</span>.trace.add_edge(cell_2, cell_1, EdgeType::Follows, now_nanos);
+<a href=#915 id=915 data-nosnippet>915</a>
+<a href=#916 id=916 data-nosnippet>916</a>        <span class="prelude-val">Ok</span>(())
+<a href=#917 id=917 data-nosnippet>917</a>    }
+<a href=#918 id=918 data-nosnippet>918</a>
+<a href=#919 id=919 data-nosnippet>919</a>    <span class="doccomment">/// Get all packs linked to a given pack via trace edges.
+<a href=#920 id=920 data-nosnippet>920</a>    ///
+<a href=#921 id=921 data-nosnippet>921</a>    /// Returns pack IDs of all directly connected packs (both directions).
+<a href=#922 id=922 data-nosnippet>922</a>    </span><span class="kw">pub fn </span>pack_links(<span class="kw-2">&amp;</span><span class="self">self</span>, pack_id: PackId) -&gt; Vec&lt;PackId&gt; {
+<a href=#923 id=923 data-nosnippet>923</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(cell_ids) = <span class="self">self</span>.pack_directory.cell_ids(pack_id) <span class="kw">else </span>{
+<a href=#924 id=924 data-nosnippet>924</a>            <span class="kw">return </span>Vec::new();
+<a href=#925 id=925 data-nosnippet>925</a>        };
+<a href=#926 id=926 data-nosnippet>926</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>retrieval_cell) = cell_ids.first() <span class="kw">else </span>{
+<a href=#927 id=927 data-nosnippet>927</a>            <span class="kw">return </span>Vec::new();
+<a href=#928 id=928 data-nosnippet>928</a>        };
+<a href=#929 id=929 data-nosnippet>929</a>
+<a href=#930 id=930 data-nosnippet>930</a>        <span class="kw">let </span><span class="kw-2">mut </span>linked_packs = std::collections::HashSet::new();
+<a href=#931 id=931 data-nosnippet>931</a>
+<a href=#932 id=932 data-nosnippet>932</a>        <span class="comment">// Outgoing edges
+<a href=#933 id=933 data-nosnippet>933</a>        </span><span class="kw">for </span>edge <span class="kw">in </span><span class="self">self</span>.trace.outgoing(retrieval_cell, <span class="prelude-val">None</span>) {
+<a href=#934 id=934 data-nosnippet>934</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(linked_pack) = <span class="self">self</span>.pack_directory.pack_for_cell(edge.dst)
+<a href=#935 id=935 data-nosnippet>935</a>                &amp;&amp; linked_pack != pack_id
+<a href=#936 id=936 data-nosnippet>936</a>            {
+<a href=#937 id=937 data-nosnippet>937</a>                linked_packs.insert(linked_pack);
+<a href=#938 id=938 data-nosnippet>938</a>            }
+<a href=#939 id=939 data-nosnippet>939</a>        }
+<a href=#940 id=940 data-nosnippet>940</a>
+<a href=#941 id=941 data-nosnippet>941</a>        <span class="comment">// Incoming edges
+<a href=#942 id=942 data-nosnippet>942</a>        </span><span class="kw">for </span>edge <span class="kw">in </span><span class="self">self</span>.trace.incoming(retrieval_cell, <span class="prelude-val">None</span>) {
+<a href=#943 id=943 data-nosnippet>943</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(linked_pack) = <span class="self">self</span>.pack_directory.pack_for_cell(edge.src)
+<a href=#944 id=944 data-nosnippet>944</a>                &amp;&amp; linked_pack != pack_id
+<a href=#945 id=945 data-nosnippet>945</a>            {
+<a href=#946 id=946 data-nosnippet>946</a>                linked_packs.insert(linked_pack);
+<a href=#947 id=947 data-nosnippet>947</a>            }
+<a href=#948 id=948 data-nosnippet>948</a>        }
+<a href=#949 id=949 data-nosnippet>949</a>
+<a href=#950 id=950 data-nosnippet>950</a>        linked_packs.into_iter().collect()
+<a href=#951 id=951 data-nosnippet>951</a>    }
+<a href=#952 id=952 data-nosnippet>952</a>
+<a href=#953 id=953 data-nosnippet>953</a>    <span class="doccomment">/// Build and activate the Vamana index, adding it as a pipeline stage.
+<a href=#954 id=954 data-nosnippet>954</a>    </span><span class="kw">fn </span>activate_vamana(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span>dim = <span class="self">self</span>.key_dim.unwrap_or(<span class="number">128</span>);
+<a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">let </span><span class="kw-2">mut </span>vamana = VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE);
+<a href=#957 id=957 data-nosnippet>957</a>
+<a href=#958 id=958 data-nosnippet>958</a>        <span class="kw">let </span>cell_ids: Vec&lt;CellId&gt; = <span class="self">self</span>.pool.iter_cell_ids().collect();
+<a href=#959 id=959 data-nosnippet>959</a>        <span class="kw">for </span>cell_id <span class="kw">in </span><span class="kw-2">&amp;</span>cell_ids {
+<a href=#960 id=960 data-nosnippet>960</a>            <span class="kw">let </span>cell = <span class="self">self</span>.pool.get(<span class="kw-2">*</span>cell_id)<span class="question-mark">?</span>;
+<a href=#961 id=961 data-nosnippet>961</a>            <span class="kw">let </span>key = mean_pool_key(<span class="kw-2">&amp;</span>cell.key);
+<a href=#962 id=962 data-nosnippet>962</a>            vamana.insert(cell.id, <span class="kw-2">&amp;</span>key);
+<a href=#963 id=963 data-nosnippet>963</a>        }
+<a href=#964 id=964 data-nosnippet>964</a>        vamana.build();
+<a href=#965 id=965 data-nosnippet>965</a>
+<a href=#966 id=966 data-nosnippet>966</a>        <span class="comment">// Add Vamana as a pipeline stage via the adapter.
+<a href=#967 id=967 data-nosnippet>967</a>        </span><span class="self">self</span>.pipeline.add_stage(Box::new(VamanaAdapter { inner: vamana }));
+<a href=#968 id=968 data-nosnippet>968</a>        <span class="self">self</span>.vamana = <span class="prelude-val">Some</span>(VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE)); <span class="comment">// Marker only.
+<a href=#969 id=969 data-nosnippet>969</a>        </span><span class="prelude-val">Ok</span>(())
+<a href=#970 id=970 data-nosnippet>970</a>    }
+<a href=#971 id=971 data-nosnippet>971</a>}
+<a href=#972 id=972 data-nosnippet>972</a>
+<a href=#973 id=973 data-nosnippet>973</a><span class="kw">impl </span>std::fmt::Debug <span class="kw">for </span>Engine {
+<a href=#974 id=974 data-nosnippet>974</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+<a href=#975 id=975 data-nosnippet>975</a>        f.debug_struct(<span class="string">"Engine"</span>)
+<a href=#976 id=976 data-nosnippet>976</a>            .field(<span class="string">"dir"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.dir)
+<a href=#977 id=977 data-nosnippet>977</a>            .field(<span class="string">"cell_count"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.pool.cell_count())
+<a href=#978 id=978 data-nosnippet>978</a>            .field(<span class="string">"has_vamana"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.vamana.is_some())
+<a href=#979 id=979 data-nosnippet>979</a>            .field(<span class="string">"trace_edges"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.trace.edge_count())
+<a href=#980 id=980 data-nosnippet>980</a>            .finish_non_exhaustive()
+<a href=#981 id=981 data-nosnippet>981</a>    }
+<a href=#982 id=982 data-nosnippet>982</a>}
 </code></pre></div></section></main></body></html>
