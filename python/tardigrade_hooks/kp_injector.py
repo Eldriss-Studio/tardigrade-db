@@ -47,8 +47,34 @@ class KnowledgePackStore:
         else:
             self.query_layer = query_layer
 
-        # Pack ID -> original fact text (for sequential recomputation)
-        self._text_registry = {}
+        # Pack ID -> original fact text. Persisted as sidecar JSON
+        # so text survives server restarts alongside KV tensors.
+        self._text_registry_path = self._find_engine_dir() / "text_registry.json"
+        self._text_registry = self._load_text_registry()
+
+    def _find_engine_dir(self):
+        """Extract the engine's storage directory from its repr."""
+        from pathlib import Path
+        r = repr(self.engine)
+        # Format: Engine(path='...', cells=N)
+        start = r.find("'") + 1
+        end = r.find("'", start)
+        return Path(r[start:end])
+
+    def _load_text_registry(self):
+        """Load text registry from disk if it exists."""
+        import json
+        if self._text_registry_path.exists():
+            with open(self._text_registry_path) as f:
+                data = json.load(f)
+            return {int(k): v for k, v in data.items()}
+        return {}
+
+    def _save_text_registry(self):
+        """Persist text registry to disk."""
+        import json
+        with open(self._text_registry_path, "w") as f:
+            json.dump({str(k): v for k, v in self._text_registry.items()}, f)
 
     def store(self, fact_text, salience=80.0, auto_link=True, auto_link_threshold=None):
         """Store a fact's KV cache across all layers.
@@ -105,8 +131,9 @@ class KnowledgePackStore:
             self.owner, retrieval_key, layer_payloads, salience
         )
 
-        # Register fact text for sequential recomputation
+        # Register fact text and persist to disk
         self._text_registry[pack_id] = fact_text
+        self._save_text_registry()
 
         # Create trace links to similar existing packs (via Rust engine)
         for match_id in auto_link_matches:

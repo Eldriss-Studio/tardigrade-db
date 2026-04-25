@@ -80,10 +80,14 @@ def _query_key(kps, query):
 
 @mcp.tool()
 def tardigrade_store(text: str) -> dict:
-    """Store a fact as a persistent memory.
+    """Store a fact the user wants you to remember across conversations.
 
-    The text is converted to KV cache tensors and stored in TardigradeDB.
-    Returns the assigned pack_id for future reference or linking.
+    Call this when the user shares personal preferences, important dates,
+    project details, names, or any information they expect you to recall
+    later. The fact is stored permanently and survives restarts.
+
+    Returns a pack_id you can use to link related facts later with
+    tardigrade_store_and_link.
     """
     kps = _get_kps()
     pack_id = kps.store(text)
@@ -92,11 +96,14 @@ def tardigrade_store(text: str) -> dict:
 
 @mcp.tool()
 def tardigrade_store_and_link(text: str, related_pack_id: int) -> dict:
-    """Store a fact linked to an existing memory.
+    """Store a new detail and link it to a memory you already stored.
 
-    Use when learning a new detail about something already remembered.
-    Creates a bidirectional trace link so retrieval of either fact
-    discovers the other.
+    Use when learning additional information about something you previously
+    remembered. For example, learning a person's name after already storing
+    where they work. Pass the pack_id of the original memory.
+
+    This creates a connection so both facts are found together in future
+    queries via tardigrade_recall_with_trace.
     """
     kps = _get_kps()
     pack_id = kps.store_and_link(text, related_pack_id)
@@ -109,11 +116,12 @@ def tardigrade_store_and_link(text: str, related_pack_id: int) -> dict:
 
 @mcp.tool()
 def tardigrade_recall(query: str, k: int = 1) -> list:
-    """Retrieve the most relevant memories for a query.
+    """Search stored memories for facts relevant to the current question.
 
-    Searches stored memories using latent-space scoring (the model's
-    own hidden states, not text embeddings). Returns the stored fact
-    text and relevance score.
+    Call this BEFORE answering questions that might depend on previously
+    stored information. Returns the most relevant stored facts with
+    confidence scores. If no relevant memories exist, returns an empty
+    list — answer from your own knowledge instead.
     """
     kps = _get_kps()
     key = _query_key(kps, query)
@@ -131,11 +139,12 @@ def tardigrade_recall(query: str, k: int = 1) -> list:
 
 @mcp.tool()
 def tardigrade_recall_with_trace(query: str, k: int = 1) -> list:
-    """Retrieve memories following trace links for multi-hop queries.
+    """Search memories and follow connections between linked facts.
 
-    First retrieves the most relevant memory with trace-boosted scoring,
-    then follows trace links to discover related facts. Use for queries
-    that might need information from multiple connected memories.
+    Use this instead of tardigrade_recall when the answer might require
+    combining information from multiple related memories. For example,
+    "What car does the user's instructor drive?" requires knowing who
+    the instructor is AND what car they drive. Returns all connected facts.
     """
     kps = _get_kps()
     key = _query_key(kps, query)
@@ -165,9 +174,11 @@ def tardigrade_recall_with_trace(query: str, k: int = 1) -> list:
 
 @mcp.tool()
 def tardigrade_list_links(pack_id: int) -> list:
-    """Show what memories are linked to a given memory.
+    """Show all memories connected to a specific memory.
 
-    Returns the pack IDs and text of all directly connected memories.
+    Use to explore what you know about a topic or to find the pack_id
+    of a related fact before storing a new detail with
+    tardigrade_store_and_link.
     """
     kps = _get_kps()
     return [
@@ -177,6 +188,25 @@ def tardigrade_list_links(pack_id: int) -> list:
         }
         for lid in kps.engine.pack_links(pack_id)
     ]
+
+
+@mcp.tool()
+def tardigrade_list_all() -> list:
+    """List all stored memories with their pack IDs and link counts.
+
+    Use to see everything you remember. Helpful when exploring what you
+    know or when looking for a pack_id to link a new detail to.
+    """
+    kps = _get_kps()
+    results = []
+    for pack_id, text in sorted(kps._text_registry.items()):
+        links = kps.engine.pack_links(pack_id)
+        results.append({
+            "pack_id": pack_id,
+            "text": text,
+            "links": len(links),
+        })
+    return results
 
 
 # -- Entry point --------------------------------------------------------------
