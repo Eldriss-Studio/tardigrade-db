@@ -71,8 +71,8 @@ def test_store_linked_creates_bidirectional_links(kps):
     THEN both packs are linked to each other."""
     pack_ids = kps.store_linked(["fact A about Sonia", "fact B about Eduardo"])
 
-    assert pack_ids[1] in kps._trace_links[pack_ids[0]]
-    assert pack_ids[0] in kps._trace_links[pack_ids[1]]
+    assert pack_ids[1] in kps.engine.pack_links(pack_ids[0])
+    assert pack_ids[0] in kps.engine.pack_links(pack_ids[1])
 
 
 # -- 3: retrieve_with_trace finds linked packs --------------------------------

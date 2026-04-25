@@ -52,8 +52,8 @@ def test_store_and_link_creates_bidirectional_link(kps, engine):
 
     assert detail != existing
     assert engine.pack_count() == 2
-    assert existing in kps._trace_links[detail]
-    assert detail in kps._trace_links[existing]
+    assert existing in engine.pack_links(detail)
+    assert detail in engine.pack_links(existing)
 
 
 def test_store_and_link_retrieval_finds_both(kps, engine):
@@ -77,7 +77,7 @@ def test_store_and_link_multiple_details(kps, engine):
     detail_b = kps.store_and_link("Casa Azul has open mic on Fridays", existing)
 
     assert engine.pack_count() == 3
-    assert existing in kps._trace_links[detail_a]
-    assert existing in kps._trace_links[detail_b]
-    assert detail_a in kps._trace_links[existing]
-    assert detail_b in kps._trace_links[existing]
+    assert existing in engine.pack_links(detail_a)
+    assert existing in engine.pack_links(detail_b)
+    assert detail_a in engine.pack_links(existing)
+    assert detail_b in engine.pack_links(existing)

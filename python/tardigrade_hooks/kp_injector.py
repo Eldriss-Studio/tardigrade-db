@@ -49,10 +49,6 @@ class KnowledgePackStore:
 
         # Pack ID -> original fact text (for sequential recomputation)
         self._text_registry = {}
-        # Pack ID -> cached pack dict (for trace-linked retrieval)
-        self._pack_data = {}
-        # Pack ID -> set of linked pack IDs (Python-side trace graph)
-        self._trace_links = {}
 
     def store(self, fact_text, salience=80.0, auto_link=True, auto_link_threshold=None):
         """Store a fact's KV cache across all layers.
@@ -109,22 +105,12 @@ class KnowledgePackStore:
             self.owner, retrieval_key, layer_payloads, salience
         )
 
-        # Register fact text and cache pack data for trace-linked retrieval
+        # Register fact text for sequential recomputation
         self._text_registry[pack_id] = fact_text
-        self._pack_data[pack_id] = {
-            "pack_id": pack_id,
-            "owner": self.owner,
-            "score": 0.0,
-            "layers": [
-                {"layer_idx": li, "data": payload.tolist()}
-                for li, payload in layer_payloads
-            ],
-        }
 
-        # Create trace links to similar existing packs
+        # Create trace links to similar existing packs (via Rust engine)
         for match_id in auto_link_matches:
-            self._trace_links.setdefault(pack_id, set()).add(match_id)
-            self._trace_links.setdefault(match_id, set()).add(pack_id)
+            self.engine.add_pack_link(pack_id, match_id)
 
         return pack_id
 
@@ -240,8 +226,7 @@ class KnowledgePackStore:
         Returns the new pack_id.
         """
         pack_id = self.store(fact_text, salience=salience, auto_link=False)
-        self._trace_links.setdefault(pack_id, set()).add(related_pack_id)
-        self._trace_links.setdefault(related_pack_id, set()).add(pack_id)
+        self.engine.add_pack_link(pack_id, related_pack_id)
         return pack_id
 
     def store_linked(self, facts, salience=80.0):
@@ -257,10 +242,10 @@ class KnowledgePackStore:
             pack_id = self.store(fact, salience)
             pack_ids.append(pack_id)
 
-        for pid in pack_ids:
-            self._trace_links.setdefault(pid, set()).update(
-                p for p in pack_ids if p != pid
-            )
+        # Link all packs to each other via Rust engine
+        for i, pid in enumerate(pack_ids):
+            for other_pid in pack_ids[i + 1:]:
+                self.engine.add_pack_link(pid, other_pid)
 
         return pack_ids
 
@@ -291,23 +276,25 @@ class KnowledgePackStore:
         if not packs:
             return None, query_input, None
 
-        # Trace-Boosted Retrieval: re-rank by connection density
+        # Trace-Boosted Retrieval: re-rank by connection density (via Rust)
         for pack in packs:
-            link_count = len(self._trace_links.get(pack["pack_id"], set()))
+            link_count = len(self.engine.pack_links(pack["pack_id"]))
             pack["score"] *= (1.0 + link_count * boost_factor)
 
         packs.sort(key=lambda p: p["score"], reverse=True)
         packs = packs[:k]
 
-        # Follow trace links to discover related packs
+        # Follow trace links to discover related packs (via Rust)
         retrieved_ids = {p["pack_id"] for p in packs}
         linked_ids = set()
         for p in packs:
-            linked_ids.update(self._trace_links.get(p["pack_id"], set()))
+            linked_ids.update(self.engine.pack_links(p["pack_id"]))
 
         for pid in linked_ids - retrieved_ids:
-            if pid in self._pack_data:
-                packs.append(self._pack_data[pid])
+            try:
+                packs.append(self.engine.load_pack_by_id(pid))
+            except Exception:
+                pass  # Pack may have been deleted
 
         cache = composer.compose(
             packs, self.num_kv_heads, self.head_dim, self.kv_dim, self.n_layers
