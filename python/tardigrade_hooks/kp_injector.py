@@ -98,8 +98,8 @@ class KnowledgePackStore:
         # new pack outscores everything when querying with its own key)
         auto_link_matches = []
         if auto_link and self.engine.pack_count() > 0:
-            threshold = auto_link_threshold if auto_link_threshold is not None else 200.0
-            existing = self.engine.mem_read_pack(retrieval_key, 3, self.owner)
+            threshold = auto_link_threshold if auto_link_threshold is not None else 250.0
+            existing = self.engine.mem_read_pack(retrieval_key, 1, self.owner)
             auto_link_matches = [
                 p["pack_id"] for p in existing if p["score"] >= threshold
             ]
