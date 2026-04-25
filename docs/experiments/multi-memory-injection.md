@@ -384,15 +384,62 @@ In a real agent scenario, an agent wouldn't store "The bookstore where I did the
 
 This suggests the 70% plateau is partially a corpus design artifact, not a fundamental architectural limit.
 
+## Phase 33: Auto-Linking on Store (April 25, 2026)
+
+### Hypothesis
+
+On every `store()`, search existing memories before writing. If a similar memory exists above a score threshold, auto-create a trace link. This follows the Zettelkasten pattern (A-MEM, NeurIPS 2025) and would make TardigradeDB a self-organizing memory engine.
+
+### Implementation
+
+Modified `store()` to run `mem_read_pack` with the new fact's retrieval key BEFORE writing. If the top match scores above threshold, create bidirectional trace links automatically.
+
+Critical bug found and fixed: the initial implementation searched AFTER writing, so the new pack outscored everything against its own key and got filtered out by the self-exclusion check.
+
+### Results
+
+**Calibration:** Cross-ref linking facts score 277-347 against their related background memories. All 20 linking facts find the correct background memory as top-1 match.
+
+**Scale test (140 memories, threshold=200, top-3):**
+
+| Metric | Value |
+|---|---|
+| Background auto-links | 99 (within-domain noise) |
+| Cross-ref pairs linked | 8/20 |
+| Final accuracy | 6/20 (30%) — WORSE than store_linked (70%) |
+
+**Scale test (threshold=250, top-1):** Same result — 99 background links, 8/20 pairs, 6/20 accuracy.
+
+### Why It Fails
+
+The scoring can't distinguish **"same event, new detail"** from **"same domain, different event"**:
+
+- Cross-ref link: "poetry reading at bookstore" ↔ "bookstore is called Casa Azul" → score 326
+- Within-domain: "made empanadas" ↔ "tried Thai curry" → score 280+
+
+Both are above any useful threshold. The 99 within-domain background links flood the trace graph with noise, so trace traversal follows 5-10 irrelevant links instead of 1-2 precise cross-ref links.
+
+Latent hidden-state similarity measures **topic similarity**, not **event identity**. The retrieval engine can find topically similar memories, but it can't tell whether two memories describe the same event or just the same life domain.
+
+### Conclusion
+
+Auto-linking as implemented doesn't work. The Zettelkasten pattern requires a similarity metric that distinguishes event identity from topic similarity. Options:
+
+1. **Accept noisy links** + smarter trace traversal (follow only the highest-scoring link)
+2. **Entity-based linking** (text-level entity overlap instead of latent similarity)
+3. **Keep `store_linked()` as the API** — the agent decides what to link, the engine stores the decision
+
+For now, `store_linked()` with explicit trace-boosted retrieval (70% at scale) remains the best approach.
+
 ## Open Research
 
 | Question | Status |
 |----------|--------|
-| Would linking details to existing memories eliminate the competition? | Not tested — strongest hypothesis |
+| Can smarter trace traversal handle noisy auto-links? | Not tested |
+| Would entity-based auto-linking (text overlap) work better? | Not tested |
 | Does a larger model (3B+) change results? | Not tested |
 | Would hybrid delivery (KV + text fallback) reach 95%? | Theoretical |
 | Does Rust-side Trace match Python-side links? | Not tested |
-| Is the 70% plateau model-dependent? | Not tested |
 
 ## Updated File List
 
