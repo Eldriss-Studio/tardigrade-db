@@ -1,8 +1,20 @@
 # Multi-Memory KV Injection Experiment
 
-**Date:** April 24, 2026
+**Date:** April 24-25, 2026
 **Model:** Qwen3-0.6B (596M)
-**Corpus:** 10 cross-referencing fact sets (2-3 facts each)
+**Corpus:** 10-20 cross-referencing fact sets + 100 background memories
+
+## Final Conclusion (April 25, 2026)
+
+**Single-memory injection works.** 8/10, byte-identical to text RAG, zero prompt tokens. This is the core product.
+
+**Multi-memory works with agent-controlled linking.** `store_linked()` and `store_and_link()` let the agent decide what's related. Trace-boosted retrieval gets 70% at 140 memories on cross-referencing queries. The agent's LLM handles entity resolution — the engine stores the links.
+
+**Tensor-native auto-linking doesn't work.** Four approaches tested (whole-fact similarity, boost tuning, per-token max cosine, threshold sweeps). All fail because hidden-state similarity measures topic, not entity identity. The field confirms: entity linking requires LLM extraction or trained probes (Mem0, Cognee, Hindsight).
+
+**Architecture decision:** TardigradeDB stays tensor-native. The engine provides storage, retrieval, governance, and linking primitives. The agent provides the intelligence about what to link. Same boundary as Postgres: the database provides foreign keys, the application decides which rows to join.
+
+## Detailed Progression
 
 ## The Question
 

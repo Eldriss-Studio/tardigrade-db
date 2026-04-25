@@ -143,9 +143,48 @@ The Python `KnowledgePackStore` wraps this API for end-to-end injection:
 
 This is the canonical path for using TardigradeDB with HuggingFace models.
 
+### Multi-Memory: Trace-Linked Retrieval (April 25, 2026)
+
+For queries requiring information from multiple memories ("What car does Lucia's swimming instructor drive?" — needs to know who the instructor is AND what car they drive), TardigradeDB uses **Trace-Boosted Retrieval**: link related facts at storage time, follow links at retrieval time.
+
+| Approach | Accuracy (140 memories, 20 queries) |
+|----------|--------------------------------------|
+| No trace links | ~30% |
+| Trace-linked (`store_linked`) | 55% |
+| Trace-boosted (link-density scoring) | **70%** |
+| Text RAG baseline | 95% |
+
+The agent controls linking via `store_linked()` (batch) or `store_and_link()` (incremental). The engine records links and boosts retrieval scores for connected memories. No auto-linking — [experiments showed](docs/experiments/multi-memory-injection.md) that latent similarity can't distinguish "same event" from "same topic" without entity extraction.
+
+See `docs/experiments/multi-memory-injection.md` for the full research progression.
+
+### Python API: KnowledgePackStore
+
+```python
+from tardigrade_db import Engine
+from tardigrade_hooks.kp_injector import KnowledgePackStore
+
+engine = Engine("/data/agent-memory")
+kps = KnowledgePackStore(engine, model, tokenizer, owner=agent_id)
+
+# Single-memory (8/10, zero prompt tokens)
+pack_id = kps.store("User prefers morning meetings")
+text, tokens, had_memory = kps.generate("When should we meet?")
+
+# Link related facts (agent decides what's related)
+existing = kps.store("Went to bookstore in Pilsen")
+kps.store_and_link("Bookstore is called Casa Azul", existing)
+
+# Multi-memory retrieval (follows trace links)
+text, tokens, had = kps.generate_with_trace("Tell me about the bookstore")
+
+# Batch-link related facts
+kps.store_linked(["Fact A about Tomoko", "Fact B about Tomoko"])
+```
+
 ### Why Python Exists in This Project
 
-The Rust kernel (storage, retrieval, governance, indexing — 142 tests) is a self-contained library. It does not need Python.
+The Rust kernel (storage, retrieval, governance, indexing — 180 tests) is a self-contained library. It does not need Python.
 
 Python exists for one reason: **to bridge TardigradeDB to model inference frameworks**. HuggingFace Transformers is the only practical way to access a model's KV cache (`past_key_values`) on local hardware. The Python layer (`tardigrade_hooks`) captures those tensors and feeds them to the Rust engine via PyO3 bindings.
 
@@ -287,7 +326,7 @@ cd tardigrade-db
 # Build Rust workspace
 cargo build --workspace
 
-# Run all Rust tests (142 unit/acceptance + doctests)
+# Run all Rust tests (180 unit/acceptance + doctests)
 cargo nextest run --workspace --exclude tdb-python
 cargo test --doc --workspace --exclude tdb-python
 
@@ -296,7 +335,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install maturin numpy pytest
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
 
-# Run 88 Python tests
+# Run 110 Python tests
 pytest tests/python/ -v
 
 # Run the GPT-2 end-to-end demo
@@ -335,7 +374,7 @@ Two semantically related prompts find each other through **latent-space attentio
 
 ## Testing
 
-### Rust (142 tests)
+### Rust (180 tests)
 
 ```bash
 cargo nextest run --workspace --exclude tdb-python    # all unit/acceptance tests
@@ -345,7 +384,7 @@ cargo fmt --all -- --check                            # format check
 just test-crate tdb-storage                           # single crate
 ```
 
-### Python (88 tests)
+### Python (110 tests)
 
 ```bash
 source .venv/bin/activate
@@ -406,7 +445,7 @@ PYTHONPATH=python python -m tdb_bench compare \
 | Governance | `tdb-governance` | 22 | Importance scoring, tier hysteresis, recency decay, sweep |
 | Engine | `tdb-engine` | 34 | Write/read, pack API, state rebuild, SLB chain, Vamana activation, throughput |
 | Docs | doctests | 10 | Crate-level usage examples |
-| Python | pytest | 88 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack round-trip, diagnostics, RAG baseline, sweep |
+| Python | pytest | 110 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, KnowledgePackStore, multi-memory injection, trace-linked retrieval, store_and_link, RoPE composer, diagnostics, RAG baseline, sweep |
 
 ## Research Milestones Implemented
 
@@ -476,7 +515,8 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] SynapticBank (LoRA adapter) persistence
 - [x] Criterion benchmarks across all subsystems
 - [x] GPT-2 end-to-end demo + Qwen3-0.6B injection experiments
-- [x] 230 tests (142 Rust + 88 Python)
+- [x] Multi-memory: trace-linked retrieval (`store_linked`, `store_and_link`, trace-boosted scoring) — 70% at 140 memories
+- [x] 290 tests (180 Rust + 110 Python)
 
 ### Next up
 
@@ -484,7 +524,6 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [ ] **Release-mode benchmark numbers** — Run `cargo bench`, publish actual performance data vs. spec targets.
 - [ ] **Background governance sweep** — Tokio timer task for autonomous AKL decay/eviction instead of manual `advance_days()`.
 - [ ] **Storage reduction** — 730 KB per memory is large. Investigate selective layer storage, INT8 KV, or FP16 for injection-critical layers.
-- [ ] **Multi-memory injection** — Knowledge Packs found naive concatenation of multiple KV caches fails. Test sequential recomputation.
 
 ### Future
 
