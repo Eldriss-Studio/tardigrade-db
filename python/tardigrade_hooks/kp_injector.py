@@ -233,8 +233,13 @@ class KnowledgePackStore:
 
         return pack_ids
 
-    def retrieve_with_trace(self, query_text, k=1, composer=None):
-        """Retrieve memories, follow trace links to find related packs.
+    def retrieve_with_trace(self, query_text, k=1, composer=None, boost_factor=0.3):
+        """Retrieve memories with trace-boosted scoring, then follow links.
+
+        Trace-Boosted Retrieval: memories with trace connections get a
+        score boost proportional to their link count. This promotes
+        connected memories (discovery hubs) over isolated ones that
+        score slightly higher on content similarity alone.
 
         Returns (cache, query_ids, attention_mask) or (None, query_ids, None).
         """
@@ -249,9 +254,19 @@ class KnowledgePackStore:
         h_tokens = hidden[1:].numpy().astype(np.float32)
         query_key = encode_per_token(h_tokens, self.hidden_size)
 
-        packs = self.engine.mem_read_pack(query_key, k, self.owner)
+        # Retrieve more candidates than k for trace-boost re-ranking
+        k_expanded = max(k * 5, 10)
+        packs = self.engine.mem_read_pack(query_key, k_expanded, self.owner)
         if not packs:
             return None, query_input, None
+
+        # Trace-Boosted Retrieval: re-rank by connection density
+        for pack in packs:
+            link_count = len(self._trace_links.get(pack["pack_id"], set()))
+            pack["score"] *= (1.0 + link_count * boost_factor)
+
+        packs.sort(key=lambda p: p["score"], reverse=True)
+        packs = packs[:k]
 
         # Follow trace links to discover related packs
         retrieved_ids = {p["pack_id"] for p in packs}
