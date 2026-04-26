@@ -116,6 +116,10 @@ impl crate::retriever::Retriever for BruteForceRetriever {
         BruteForceRetriever::insert(self, cell_id, owner, 0, key);
     }
 
+    fn remove(&mut self, cell_id: CellId) {
+        self.entries.retain(|e| e.cell_id != cell_id);
+    }
+
     fn len(&self) -> usize {
         BruteForceRetriever::len(self)
     }

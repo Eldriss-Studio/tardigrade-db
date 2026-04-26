@@ -222,12 +222,14 @@ impl Engine {
     /// Store a complete multi-layer KV cache as a single atomic pack.
     ///
     /// Returns the assigned pack ID.
+    #[pyo3(signature = (owner, retrieval_key, layer_payloads, salience, text=None))]
     fn mem_write_pack(
         &mut self,
         owner: u64,
         retrieval_key: PyReadonlyArray1<'_, f32>,
         layer_payloads: Vec<(u16, PyReadonlyArray1<'_, f32>)>,
         salience: f32,
+        text: Option<String>,
     ) -> PyResult<u64> {
         use tdb_core::kv_pack::{KVLayerPayload, KVPack};
 
@@ -247,7 +249,7 @@ impl Engine {
             })
             .collect::<PyResult<Vec<_>>>()?;
 
-        let pack = KVPack { id: 0, owner, retrieval_key: key, layers, salience };
+        let pack = KVPack { id: 0, owner, retrieval_key: key, layers, salience, text };
 
         self.inner.mem_write_pack(&pack).map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
@@ -286,6 +288,7 @@ impl Engine {
                 layers_list.append(layer_dict)?;
             }
             dict.set_item("layers", layers_list)?;
+            dict.set_item("text", r.pack.text.as_deref())?;
 
             py_results.push(dict.into_any().unbind());
         }
@@ -304,11 +307,7 @@ impl Engine {
     }
 
     /// Load a pack by ID without retrieval scoring.
-    fn load_pack_by_id(
-        &mut self,
-        py: Python<'_>,
-        pack_id: u64,
-    ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    fn load_pack_by_id(&mut self, py: Python<'_>, pack_id: u64) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let result = self
             .inner
             .load_pack_by_id(pack_id)
@@ -318,8 +317,7 @@ impl Engine {
         for layer in &result.pack.layers {
             let layer_dict = pyo3::types::PyDict::new(py);
             layer_dict.set_item("layer_idx", layer.layer_idx)?;
-            let data_array =
-                numpy::PyArray1::from_slice(py, &layer.data).into_any().unbind();
+            let data_array = numpy::PyArray1::from_slice(py, &layer.data).into_any().unbind();
             layer_dict.set_item("data", data_array)?;
             layers_list.append(layer_dict)?;
         }
@@ -330,6 +328,7 @@ impl Engine {
         dict.set_item("score", result.score)?;
         dict.set_item("tier", result.tier as u8)?;
         dict.set_item("layers", layers_list)?;
+        dict.set_item("text", result.pack.text.as_deref())?;
         Ok(dict.into_any().unbind())
     }
 
@@ -354,8 +353,7 @@ impl Engine {
         owner: Option<u64>,
         boost_factor: f32,
     ) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
-        let query =
-            query_key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let query = query_key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let results = self
             .inner
@@ -368,8 +366,7 @@ impl Engine {
             for layer in &r.pack.layers {
                 let layer_dict = pyo3::types::PyDict::new(py);
                 layer_dict.set_item("layer_idx", layer.layer_idx)?;
-                let data_array =
-                    numpy::PyArray1::from_slice(py, &layer.data).into_any().unbind();
+                let data_array = numpy::PyArray1::from_slice(py, &layer.data).into_any().unbind();
                 layer_dict.set_item("data", data_array)?;
                 layers_list.append(layer_dict)?;
             }
@@ -380,9 +377,25 @@ impl Engine {
             dict.set_item("score", r.score)?;
             dict.set_item("tier", r.tier as u8)?;
             dict.set_item("layers", layers_list)?;
+            dict.set_item("text", r.pack.text.as_deref())?;
             py_results.push(dict.into_any().unbind());
         }
         Ok(py_results)
+    }
+
+    /// Get the stored text for a pack, if any.
+    fn pack_text(&self, pack_id: u64) -> Option<String> {
+        self.inner.pack_text(pack_id).map(str::to_owned)
+    }
+
+    /// Set or update the stored text for an existing pack.
+    fn set_pack_text(&mut self, pack_id: u64, text: &str) -> PyResult<()> {
+        self.inner.set_pack_text(pack_id, text).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Delete a pack permanently. Irreversible.
+    fn delete_pack(&mut self, pack_id: u64) -> PyResult<()> {
+        self.inner.delete_pack(pack_id).map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn __repr__(&self) -> String {

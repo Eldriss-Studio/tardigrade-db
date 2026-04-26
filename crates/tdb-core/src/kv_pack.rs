@@ -35,6 +35,34 @@ pub struct KVLayerPayload {
 /// A complete multi-layer KV cache captured from one inference pass.
 ///
 /// Stored atomically (single fsync), retrieved as a unit, governed as one memory.
+/// Optionally carries the original fact text for durable text persistence
+/// alongside the tensor data.
+///
+/// # Examples
+///
+/// Construct a pack with the original fact text — the engine persists it
+/// in the durable text store alongside the tensor data:
+///
+/// ```rust
+/// use tdb_core::kv_pack::{KVLayerPayload, KVPack};
+///
+/// let pack = KVPack {
+///     id: 0, // assigned by the engine on write
+///     owner: 1,
+///     retrieval_key: vec![0.0f32; 128],
+///     layers: vec![KVLayerPayload {
+///         layer_idx: 0,
+///         data: vec![0.1f32; 64],
+///     }],
+///     salience: 80.0,
+///     text: Some("User prefers morning meetings".into()),
+/// };
+///
+/// assert_eq!(pack.text.as_deref(), Some("User prefers morning meetings"));
+/// ```
+///
+/// `text: None` is valid for packs that don't carry source text (e.g.,
+/// pre-Item-3 databases or pure-tensor workflows).
 #[derive(Debug, Clone)]
 pub struct KVPack {
     /// Unique pack identifier (assigned by engine on write).
@@ -50,6 +78,10 @@ pub struct KVPack {
     pub layers: Vec<KVLayerPayload>,
     /// Initial importance hint (0-100).
     pub salience: f32,
+    /// Original fact text, persisted in a durable append-only text store.
+    ///
+    /// `None` for packs created before text storage was added (backward compatible).
+    pub text: Option<String>,
 }
 
 /// Metadata about a stored pack, returned by retrieval.

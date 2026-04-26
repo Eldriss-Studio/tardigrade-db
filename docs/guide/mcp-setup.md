@@ -1,6 +1,8 @@
 # MCP Setup Guide
 
-TardigradeDB provides an MCP (Model Context Protocol) server that gives any LLM agent persistent memory through 5 tool calls.
+TardigradeDB provides an MCP (Model Context Protocol) server that gives any LLM agent persistent memory through 7 tool calls.
+
+**Note:** The MCP server delivers memories as text in tool responses for universal LLM compatibility. This uses normal prompt tokens. For zero-token KV injection, use the [Python API](python-api.md) directly.
 
 ## Prerequisites
 
@@ -93,6 +95,23 @@ Show what memories are connected to a given memory.
 - `pack_id` (integer): The memory to inspect
 
 **Returns:** List of `{"pack_id": int, "text": string}`
+
+### `tardigrade_list_all`
+
+List all stored memories with their pack IDs and link counts.
+
+**Parameters:** None
+
+**Returns:** List of `{"pack_id": int, "text": string, "links": int}`
+
+### `tardigrade_forget`
+
+Delete a stored memory permanently. Irreversible.
+
+**Parameters:**
+- `pack_id` (integer): The memory to delete
+
+**Returns:** `{"pack_id": int, "status": "deleted"}`
 
 ## Performance Notes
 

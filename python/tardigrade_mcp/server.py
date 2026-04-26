@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """TardigradeDB MCP Server — persistent KV cache memory for LLM agents.
 
-Facade pattern: 5 MCP tools wrap KnowledgePackStore methods.
+Facade pattern: 7 MCP tools wrap KnowledgePackStore methods.
 Adapter pattern: text-based MCP protocol adapted to tensor-based storage.
+
+Note: MCP delivers memories as text (costing prompt tokens) for universal
+LLM compatibility. For zero-token KV injection, use the Python API directly
+via KnowledgePackStore.generate() / generate_with_trace().
 
 Configuration via environment variables:
     TARDIGRADE_DB_PATH  — engine storage directory (default: ./tardigrade-memory)
@@ -122,6 +126,9 @@ def tardigrade_recall(query: str, k: int = 1) -> list:
     stored information. Returns the most relevant stored facts with
     confidence scores. If no relevant memories exist, returns an empty
     list — answer from your own knowledge instead.
+
+    Note: MCP delivers memories as text for universal LLM compatibility.
+    For zero-token KV injection, use the Python API directly.
     """
     kps = _get_kps()
     key = _query_key(kps, query)
@@ -130,7 +137,7 @@ def tardigrade_recall(query: str, k: int = 1) -> list:
     return [
         {
             "pack_id": p["pack_id"],
-            "text": kps._text_registry.get(p["pack_id"], ""),
+            "text": p.get("text") or kps._text_registry.get(p["pack_id"], ""),
             "score": round(float(p["score"]), 2),
         }
         for p in packs
@@ -145,6 +152,9 @@ def tardigrade_recall_with_trace(query: str, k: int = 1) -> list:
     combining information from multiple related memories. For example,
     "What car does the user's instructor drive?" requires knowing who
     the instructor is AND what car they drive. Returns all connected facts.
+
+    Note: MCP delivers memories as text for universal LLM compatibility.
+    For zero-token KV injection, use the Python API directly.
     """
     kps = _get_kps()
     key = _query_key(kps, query)
@@ -164,7 +174,7 @@ def tardigrade_recall_with_trace(query: str, k: int = 1) -> list:
     return [
         {
             "pack_id": p["pack_id"],
-            "text": kps._text_registry.get(p["pack_id"], ""),
+            "text": p.get("text") or kps._text_registry.get(p["pack_id"], ""),
             "score": round(float(p.get("score", 0.0)), 2),
             "linked_packs": kps.engine.pack_links(p["pack_id"]),
         }
@@ -179,12 +189,15 @@ def tardigrade_list_links(pack_id: int) -> list:
     Use to explore what you know about a topic or to find the pack_id
     of a related fact before storing a new detail with
     tardigrade_store_and_link.
+
+    Note: MCP delivers memories as text for universal LLM compatibility.
+    For zero-token KV injection, use the Python API directly.
     """
     kps = _get_kps()
     return [
         {
             "pack_id": lid,
-            "text": kps._text_registry.get(lid, ""),
+            "text": kps.engine.pack_text(lid) or kps._text_registry.get(lid, ""),
         }
         for lid in kps.engine.pack_links(pack_id)
     ]
@@ -196,6 +209,9 @@ def tardigrade_list_all() -> list:
 
     Use to see everything you remember. Helpful when exploring what you
     know or when looking for a pack_id to link a new detail to.
+
+    Note: MCP delivers memories as text for universal LLM compatibility.
+    For zero-token KV injection, use the Python API directly.
     """
     kps = _get_kps()
     results = []
@@ -203,10 +219,25 @@ def tardigrade_list_all() -> list:
         links = kps.engine.pack_links(pack_id)
         results.append({
             "pack_id": pack_id,
-            "text": text,
+            "text": kps.engine.pack_text(pack_id) or text,
             "links": len(links),
         })
     return results
+
+
+@mcp.tool()
+def tardigrade_forget(pack_id: int) -> dict:
+    """Delete a stored memory permanently. This is irreversible.
+
+    Use when the user asks you to forget something, or when stored
+    information is wrong or outdated.
+
+    Note: MCP delivers memories as text for universal LLM compatibility.
+    For zero-token KV injection, use the Python API directly.
+    """
+    kps = _get_kps()
+    kps.forget(pack_id)
+    return {"pack_id": pack_id, "status": "deleted"}
 
 
 # -- Entry point --------------------------------------------------------------

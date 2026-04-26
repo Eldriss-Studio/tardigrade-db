@@ -33,7 +33,9 @@ use tdb_retrieval::pipeline::RetrieverPipeline;
 use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::slb::SemanticLookasideBuffer;
 use tdb_storage::block_pool::BlockPool;
+use tdb_storage::deletion_log::DeletionLog;
 use tdb_storage::synaptic_store::SynapticStore;
+use tdb_storage::text_store::TextStore;
 
 use crate::pack_directory::PackDirectory;
 use crate::pack_materialization::{
@@ -88,6 +90,11 @@ impl Retriever for VamanaAdapter {
     fn insert(&mut self, cell_id: CellId, _owner: OwnerId, key: &[f32]) {
         let key = mean_pool_key(key);
         self.inner.insert(cell_id, &key);
+    }
+
+    fn remove(&mut self, _cell_id: CellId) {
+        // Vamana doesn't support removal — deleted cells are filtered at the
+        // PackDirectory level. This is a no-op.
     }
 
     fn len(&self) -> usize {
@@ -161,6 +168,10 @@ pub struct Engine {
     next_pack_id: PackId,
     /// Key dimension (detected from first write, used for SLB/Vamana init).
     key_dim: Option<usize>,
+    /// Durable text store for KV pack fact text.
+    text_store: TextStore,
+    /// Durable deletion log for pack deletions.
+    deletion_log: DeletionLog,
 }
 
 impl Engine {
@@ -269,8 +280,20 @@ impl Engine {
                 }
             }
         }
-        let pack_directory = PackDirectory::from_cells(pack_cells);
+        let mut pack_directory = PackDirectory::from_cells(pack_cells);
         let next_pack_id = pack_directory.next_pack_id();
+
+        // Open or create the text store for KV pack fact text.
+        let mut text_store = TextStore::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
+
+        // Open or create the deletion log and filter deleted packs from
+        // both pack_directory and text_store. Text records remain on disk
+        // (append-only) but are masked from reads — same as cell records.
+        let deletion_log = DeletionLog::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
+        for &pack_id in deletion_log.deleted_set() {
+            pack_directory.remove_pack(pack_id);
+            text_store.remove(pack_id);
+        }
 
         Ok(Self {
             pool,
@@ -287,6 +310,8 @@ impl Engine {
             pack_directory,
             next_pack_id,
             key_dim: if cell_ids.is_empty() { None } else { key_dim },
+            text_store,
+            deletion_log,
         })
     }
 
@@ -695,6 +720,11 @@ impl Engine {
         // Persist atomically (single fsync).
         self.pool.append_batch(&cells)?;
 
+        // Persist fact text if provided.
+        if let Some(ref text) = pack.text {
+            self.text_store.store(pack_id, text).map_err(|e| TardigradeError::Io { source: e })?;
+        }
+
         // Index only the retrieval cell. Layer payload cells are persisted for
         // reconstruction, not search signal.
         let slb_key = mean_pool_key(&pack.retrieval_key);
@@ -727,7 +757,9 @@ impl Engine {
         for candidate in &candidates {
             let layers = self.hydrate_pack_layers(&candidate.cell_ids)?;
             let access = self.apply_pack_access_governance(candidate.retrieval_cell_id);
-            results.push(build_pack_read_result(candidate, layers, access));
+            let mut result = build_pack_read_result(candidate, layers, access);
+            result.pack.text = self.text_store.get(candidate.pack_id).map(str::to_owned);
+            results.push(result);
         }
 
         Ok(results)
@@ -766,7 +798,9 @@ impl Engine {
             candidate.score = boosted_score;
             let layers = self.hydrate_pack_layers(&candidate.cell_ids)?;
             let access = self.apply_pack_access_governance(candidate.retrieval_cell_id);
-            results.push(build_pack_read_result(&candidate, layers, access));
+            let mut result = build_pack_read_result(&candidate, layers, access);
+            result.pack.text = self.text_store.get(candidate.pack_id).map(str::to_owned);
+            results.push(result);
         }
 
         Ok(results)
@@ -875,6 +909,64 @@ impl Engine {
         self.pack_directory.len()
     }
 
+    /// Get the stored text for a pack, if any.
+    pub fn pack_text(&self, pack_id: PackId) -> Option<&str> {
+        self.text_store.get(pack_id)
+    }
+
+    /// Set or update the stored text for an existing pack.
+    ///
+    /// Useful for migrating legacy text from external sidecars into the
+    /// durable Rust text store, or for editing memory text in place.
+    /// Last-writer-wins semantics — the latest call's text is what reads return.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CellNotFound` if the pack does not exist.
+    pub fn set_pack_text(&mut self, pack_id: PackId, text: &str) -> Result<()> {
+        if self.pack_directory.cell_ids(pack_id).is_none() {
+            return Err(TardigradeError::CellNotFound(pack_id));
+        }
+        self.text_store.store(pack_id, text).map_err(|e| TardigradeError::Io { source: e })
+    }
+
+    /// Delete a pack permanently.
+    ///
+    /// Writes to the durable deletion log (fsynced) before updating in-memory
+    /// state. Cells remain on disk in the `BlockPool` but become inaccessible.
+    /// Trace edges are not removed — orphaned edges are filtered by
+    /// `pack_directory` absence on query.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CellNotFound` if the pack does not exist.
+    pub fn delete_pack(&mut self, pack_id: PackId) -> Result<()> {
+        // Verify pack exists.
+        let cell_ids = self
+            .pack_directory
+            .cell_ids(pack_id)
+            .ok_or(TardigradeError::CellNotFound(pack_id))?
+            .to_vec();
+
+        // Durable: write to deletion log (fsync before in-memory changes).
+        self.deletion_log.mark_deleted(pack_id).map_err(|e| TardigradeError::Io { source: e })?;
+
+        // Remove cells from retrieval pipeline and SLB.
+        for &cell_id in &cell_ids {
+            self.pipeline.remove(cell_id);
+            self.slb.remove(cell_id);
+            self.governance.remove(&cell_id);
+        }
+
+        // Remove from pack directory (in-memory).
+        self.pack_directory.remove_pack(pack_id);
+
+        // Remove text from in-memory text store.
+        self.text_store.remove(pack_id);
+
+        Ok(())
+    }
+
     /// Get the importance score of a pack.
     pub fn pack_importance(&self, pack_id: PackId) -> Option<f32> {
         let cell_ids = self.pack_directory.cell_ids(pack_id)?;
@@ -893,21 +985,17 @@ impl Engine {
             .ok_or(TardigradeError::CellNotFound(pack_id))?
             .to_vec();
 
-        let retrieval_cell_id = *cell_ids
-            .first()
-            .ok_or(TardigradeError::CellNotFound(pack_id))?;
+        let retrieval_cell_id = *cell_ids.first().ok_or(TardigradeError::CellNotFound(pack_id))?;
 
-        let owner = self
-            .pool
-            .get(retrieval_cell_id)
-            .map_or(0, |cell| cell.owner);
+        let owner = self.pool.get(retrieval_cell_id).map_or(0, |cell| cell.owner);
 
         let layers = self.hydrate_pack_layers(&cell_ids)?;
         let access = self.apply_pack_access_governance(retrieval_cell_id);
 
-        let candidate =
-            PackCandidate::new(pack_id, retrieval_cell_id, owner, 0.0, cell_ids);
-        Ok(build_pack_read_result(&candidate, layers, access))
+        let candidate = PackCandidate::new(pack_id, retrieval_cell_id, owner, 0.0, cell_ids);
+        let mut result = build_pack_read_result(&candidate, layers, access);
+        result.pack.text = self.text_store.get(pack_id).map(str::to_owned);
+        Ok(result)
     }
 
     /// Create a durable trace link between two packs.

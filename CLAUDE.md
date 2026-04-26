@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All implementation phases complete. 290 tests (180 Rust + 110 Python). KV Pack API in Rust engine for atomic multi-layer KV storage and retrieval. KV injection validated byte-identical to text RAG (8/10 novel facts through full Q4 pipeline). Hidden states + Top5Avg retrieval at 96-100% recall. `KnowledgePackStore` is the canonical injection path.
+**Status:** All implementation phases complete. 357 tests (228 Rust + 129 Python). KV Pack API in Rust engine for atomic multi-layer KV storage and retrieval. KV injection validated byte-identical to text RAG (8/10 novel facts through full Q4 pipeline). Hidden states + Top5Avg retrieval at 96-100% recall. `KnowledgePackStore` is the canonical injection path.
 
 ## Build & Test
 
@@ -25,7 +25,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install transformers
 ```
 
-### Rust tests (180 tests)
+### Rust tests (228 tests)
 
 ```bash
 cargo build --workspace                              # build all crates
@@ -69,14 +69,15 @@ Captures KV cache from GPT-2 inference on *"The capital of France is"*, then ret
 
 | Layer | Crate | Tests | What's covered |
 |-------|-------|-------|----------------|
-| Core | tdb-core | 5 | Builder, SynapticBank, KVPack types, tier defaults |
-| Storage | tdb-storage | 12 | Q4 round-trip, segment rollover, persistence, SynapticStore |
-| Retrieval | tdb-retrieval | 36 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter |
-| Organization | tdb-index | 20 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
-| Governance | tdb-governance | 22 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | tdb-engine | 34 | Write/read, pack API, state rebuild, SLB chain, Vamana activation, throughput |
-| Docs | doctests | 10 | Crate-level usage examples |
-| Python | pytest | 110 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, diagnostics, RAG baseline, sweep |
+| Core | tdb-core | 6 | Builder, SynapticBank, KVPack types, tier defaults |
+| Storage | tdb-storage | 30 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore, DeletionLog |
+| Retrieval | tdb-retrieval | 51 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter |
+| Organization | tdb-index | 24 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
+| Governance | tdb-governance | 27 | Importance scoring, tier hysteresis, recency decay, sweep |
+| Engine | tdb-engine | 90 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation |
+| Python | pytest | 129 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, migration, diagnostics, RAG baseline |
+
+Per-crate counts include unit + acceptance + doctest tests. Sum: 6+30+51+24+27+90+129 = 357.
 
 ## Crate Structure
 

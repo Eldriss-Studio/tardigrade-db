@@ -37,6 +37,12 @@ pub trait Retriever: Send + Sync {
     /// Insert a key vector for a cell into the retrieval index.
     fn insert(&mut self, cell_id: CellId, owner: OwnerId, key: &[f32]);
 
+    /// Remove a cell from the retrieval index.
+    ///
+    /// Implementations that don't support removal (e.g., Vamana) should no-op.
+    /// The caller is responsible for filtering deleted cells at a higher level.
+    fn remove(&mut self, cell_id: CellId);
+
     /// Number of entries in this retriever.
     fn len(&self) -> usize;
 

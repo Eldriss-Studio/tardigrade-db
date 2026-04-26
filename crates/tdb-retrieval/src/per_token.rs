@@ -383,6 +383,12 @@ impl Retriever for PerTokenRetriever {
         self.cell_summaries.insert(cell_id, CellSummary { owner, pooled_key: summary_key });
     }
 
+    fn remove(&mut self, cell_id: CellId) {
+        self.tokens.retain(|t| t.cell_id != cell_id);
+        self.cell_token_count.remove(&cell_id);
+        self.cell_summaries.remove(&cell_id);
+    }
+
     fn len(&self) -> usize {
         self.tokens.len()
     }

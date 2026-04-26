@@ -67,6 +67,20 @@ impl PackDirectory {
         self.cells_by_pack.len()
     }
 
+    /// Remove a pack and all its cell mappings from the directory.
+    ///
+    /// Returns the cell IDs that belonged to the pack (empty if not found).
+    pub(crate) fn remove_pack(&mut self, pack_id: PackId) -> Vec<CellId> {
+        if let Some(cell_ids) = self.cells_by_pack.remove(&pack_id) {
+            for &cell_id in &cell_ids {
+                self.pack_by_cell.remove(&cell_id);
+            }
+            cell_ids
+        } else {
+            Vec::new()
+        }
+    }
+
     pub(crate) fn next_pack_id(&self) -> PackId {
         self.cells_by_pack
             .keys()

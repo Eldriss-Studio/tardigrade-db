@@ -96,6 +96,8 @@
 
 pub mod arena;
 pub mod block_pool;
+pub mod deletion_log;
 pub mod quantization;
 pub mod segment;
 pub mod synaptic_store;
+pub mod text_store;

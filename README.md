@@ -184,7 +184,7 @@ kps.store_linked(["Fact A about Tomoko", "Fact B about Tomoko"])
 
 ### Why Python Exists in This Project
 
-The Rust kernel (storage, retrieval, governance, indexing — 180 tests) is a self-contained library. It does not need Python.
+The Rust kernel (storage, retrieval, governance, indexing — 228 tests) is a self-contained library. It does not need Python.
 
 Python exists for one reason: **to bridge TardigradeDB to model inference frameworks**. HuggingFace Transformers is the only practical way to access a model's KV cache (`past_key_values`) on local hardware. The Python layer (`tardigrade_hooks`) captures those tensors and feeds them to the Rust engine via PyO3 bindings.
 
@@ -335,7 +335,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install maturin numpy pytest
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
 
-# Run 110 Python tests
+# Run Python tests
 pytest tests/python/ -v
 
 # Run the GPT-2 end-to-end demo
@@ -374,7 +374,7 @@ Two semantically related prompts find each other through **latent-space attentio
 
 ## Testing
 
-### Rust (180 tests)
+### Rust (228 tests)
 
 ```bash
 cargo nextest run --workspace --exclude tdb-python    # all unit/acceptance tests
@@ -516,7 +516,9 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] Criterion benchmarks across all subsystems
 - [x] GPT-2 end-to-end demo + Qwen3-0.6B injection experiments
 - [x] Multi-memory: trace-linked retrieval (`store_linked`, `store_and_link`, trace-boosted scoring) — 70% at 140 memories
-- [x] 290 tests (180 Rust + 110 Python)
+- [x] Durable text persistence — Rust-side `TextStore` (append-only, fsynced) replaces fragile JSON sidecar, with lazy migration of legacy data
+- [x] Delete API — `delete_pack` / `tardigrade_forget` with crash-safe `DeletionLog`
+- [x] 357 tests (228 Rust + 129 Python)
 
 ### Next up
 

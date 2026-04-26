@@ -385,6 +385,7 @@ fn bench_pack(pack_id: usize, layer_count: usize, payload_dim: usize) -> KVPack 
             })
             .collect(),
         salience: PACK_SALIENCE,
+        text: None,
     }
 }
 

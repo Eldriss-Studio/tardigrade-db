@@ -4,9 +4,9 @@
 
 Traditional agent memory systems store text, retrieve text, paste text into the prompt. This consumes prompt tokens.
 
-TardigradeDB stores the model's own KV cache tensors — the internal state the model computes during a forward pass. When a memory is retrieved, its KV cache is injected directly into the model's attention, consuming zero prompt tokens.
+TardigradeDB stores the model's own KV cache tensors — the internal state the model computes during a forward pass. When using the Python API, retrieved memories are injected directly into the model's attention as KV cache, consuming zero prompt tokens. When using the MCP server, memories are delivered as text for universal LLM compatibility (standard prompt token cost).
 
-**Result:** Byte-identical output to having the text in the prompt, at 46% fewer prompt tokens.
+**Result (Python API):** Byte-identical output to having the text in the prompt, at 46% fewer prompt tokens.
 
 **When to use:** Single-fact recall queries. "What's the user's preference?" "What did they say about X?"
 
@@ -65,3 +65,14 @@ Packs are:
 ## When to Use Text RAG Instead
 
 TardigradeDB's KV injection works best for single-fact recall. For queries that need the model to reason across multiple facts simultaneously, text delivery (paste facts into the prompt) is more reliable. The agent can use TardigradeDB's retrieval to find the right memories, then choose the delivery method based on query complexity.
+
+## MCP vs Python API
+
+| Path | Delivery | Token cost | Requires |
+|------|----------|------------|----------|
+| MCP server | Text in tool response | Normal prompt tokens | Any LLM client |
+| Python API | KV cache injection | Zero prompt tokens | Model access (HuggingFace) |
+
+Both paths use TardigradeDB's latent-space retrieval to find the right memories. The difference is delivery: the MCP server returns memory text in its tool response (which the LLM reads as prompt tokens), while the Python API injects KV cache directly into the model's attention (bypassing the prompt entirely).
+
+Choose MCP for convenience with any model. Choose the Python API when you control the model and want zero-token injection.

@@ -237,6 +237,16 @@ impl crate::retriever::Retriever for SemanticLookasideBuffer {
         SemanticLookasideBuffer::insert(self, cell_id, owner, key);
     }
 
+    fn remove(&mut self, cell_id: CellId) {
+        if let Some(&slot_idx) = self.index.get(&cell_id) {
+            if self.slots[slot_idx].active {
+                self.slots[slot_idx].active = false;
+                self.active_count = self.active_count.saturating_sub(1);
+            }
+            self.index.remove(&cell_id);
+        }
+    }
+
     fn len(&self) -> usize {
         SemanticLookasideBuffer::len(self)
     }

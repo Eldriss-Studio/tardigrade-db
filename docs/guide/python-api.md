@@ -48,6 +48,15 @@ kps.store_linked([
 ])
 ```
 
+#### `forget(pack_id)`
+
+Delete a memory permanently. Irreversible. Removes the pack from the durable engine, the text registry, and in-memory caches.
+
+```python
+pack_id = kps.store("Wrong fact")
+kps.forget(pack_id)  # Memory is gone permanently
+```
+
 ### Single-Memory Retrieval + Injection
 
 #### `generate(query_text, **gen_kwargs)`
@@ -108,8 +117,8 @@ engine = tardigrade_db.Engine("/path/to/storage")
 |--------|-------------|
 | `mem_write(owner, layer, key, value, salience, parent_cell_id)` | Write a single cell |
 | `mem_read(query_key, k, owner)` | Read top-k cells |
-| `mem_write_pack(owner, retrieval_key, layer_payloads, salience)` | Write a multi-layer KV pack |
-| `mem_read_pack(query_key, k, owner)` | Read top-k packs |
+| `mem_write_pack(owner, retrieval_key, layer_payloads, salience, text=None)` | Write a multi-layer KV pack with optional fact text |
+| `mem_read_pack(query_key, k, owner)` | Read top-k packs (results include `text` if stored) |
 | `mem_read_pack_with_trace_boost(query_key, k, owner, boost_factor)` | Read with trace-boosted scoring |
 
 ### Pack Management
@@ -121,6 +130,9 @@ engine = tardigrade_db.Engine("/path/to/storage")
 | `pack_links(pack_id)` | Get all packs linked to a given pack |
 | `pack_count()` | Total number of packs stored |
 | `pack_importance(pack_id)` | Current importance score of a pack |
+| `pack_text(pack_id)` | Get the stored fact text for a pack (None if not stored) |
+| `set_pack_text(pack_id, text)` | Set or update the fact text for an existing pack |
+| `delete_pack(pack_id)` | Permanently delete a pack (irreversible) |
 
 ### Governance
 

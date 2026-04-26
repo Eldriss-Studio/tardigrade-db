@@ -16,6 +16,8 @@ This creates a virtual environment, installs dependencies, and downloads the def
 
 ## Option A: Use with Claude Code (MCP)
 
+The MCP server delivers memories as text in tool responses. This works with any LLM client but consumes normal prompt tokens. For zero-token KV injection, see Option B.
+
 Add to your Claude Code MCP settings (the setup script prints the exact config):
 
 ```json
@@ -41,8 +43,12 @@ Then in any conversation, the agent has memory tools:
 - `tardigrade_recall` — find relevant memories
 - `tardigrade_recall_with_trace` — follow links for multi-hop queries
 - `tardigrade_list_links` — see connected memories
+- `tardigrade_list_all` — list all stored memories
+- `tardigrade_forget` — delete a memory permanently
 
 ## Option B: Use with Python
+
+The Python API injects KV cache directly into the model's attention — zero prompt tokens for retrieved memories. Requires running a HuggingFace model locally.
 
 ```python
 import torch

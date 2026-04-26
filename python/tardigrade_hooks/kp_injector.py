@@ -52,6 +52,10 @@ class KnowledgePackStore:
         self._text_registry_path = self._find_engine_dir() / "text_registry.json"
         self._text_registry = self._load_text_registry()
 
+        # Backfill durable Rust text_store from any legacy JSON sidecar
+        # entries written before text storage moved into the engine.
+        self._migrate_text_to_rust()
+
     def _find_engine_dir(self):
         """Extract the engine's storage directory from its repr."""
         from pathlib import Path
@@ -62,19 +66,48 @@ class KnowledgePackStore:
         return Path(r[start:end])
 
     def _load_text_registry(self):
-        """Load text registry from disk if it exists."""
+        """Load text registry from disk if it exists.
+
+        Returns an empty dict on corruption — the Rust engine's text_store
+        is the durable source of truth post-migration, so losing the sidecar
+        is recoverable. Logs a warning to stderr for visibility.
+        """
         import json
-        if self._text_registry_path.exists():
+        import sys
+        if not self._text_registry_path.exists():
+            return {}
+        try:
             with open(self._text_registry_path) as f:
                 data = json.load(f)
             return {int(k): v for k, v in data.items()}
-        return {}
+        except (json.JSONDecodeError, ValueError) as e:
+            print(
+                f"[KnowledgePackStore] warning: corrupted text_registry.json "
+                f"({e}); falling back to engine text_store only",
+                file=sys.stderr,
+            )
+            return {}
 
     def _save_text_registry(self):
         """Persist text registry to disk."""
         import json
         with open(self._text_registry_path, "w") as f:
             json.dump({str(k): v for k, v in self._text_registry.items()}, f)
+
+    def _migrate_text_to_rust(self):
+        """Backfill durable Rust text_store from legacy JSON sidecar entries.
+
+        Idempotent: skips entries already present in the Rust store.
+        Stale entries (text in JSON for packs that have been deleted)
+        are silently skipped — the engine returns CellNotFound for them.
+        """
+        for pack_id, text in self._text_registry.items():
+            if self.engine.pack_text(pack_id) != text:
+                try:
+                    self.engine.set_pack_text(pack_id, text)
+                except Exception:
+                    # Pack was deleted — sidecar is stale, skip it.
+                    pass
 
     def store(self, fact_text, salience=80.0, auto_link=True, auto_link_threshold=None):
         """Store a fact's KV cache across all layers.
@@ -128,7 +161,7 @@ class KnowledgePackStore:
 
         # Single atomic write via Rust pack API (one fsync for all layers)
         pack_id = self.engine.mem_write_pack(
-            self.owner, retrieval_key, layer_payloads, salience
+            self.owner, retrieval_key, layer_payloads, salience, text=fact_text
         )
 
         # Register fact text and persist to disk
@@ -140,6 +173,16 @@ class KnowledgePackStore:
             self.engine.add_pack_link(pack_id, match_id)
 
         return pack_id
+
+    def forget(self, pack_id):
+        """Delete a memory permanently. Irreversible.
+
+        Removes the pack from the Rust engine (durable deletion log),
+        the text registry sidecar, and in-memory caches.
+        """
+        self.engine.delete_pack(pack_id)
+        self._text_registry.pop(pack_id, None)
+        self._save_text_registry()
 
     def retrieve_and_inject(self, query_text):
         """Retrieve the best matching memory and build a DynamicCache.

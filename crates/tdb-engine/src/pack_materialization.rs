@@ -111,6 +111,7 @@ pub(crate) fn build_pack_read_result(
             retrieval_key: Vec::new(),
             layers,
             salience: 0.0,
+            text: None,
         },
         score: candidate.score * access.decay_factor,
         tier: access.tier,

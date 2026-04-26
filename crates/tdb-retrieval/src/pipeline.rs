@@ -113,6 +113,12 @@ impl Retriever for RetrieverPipeline {
         RetrieverPipeline::insert(self, cell_id, owner, key);
     }
 
+    fn remove(&mut self, cell_id: CellId) {
+        for stage in &mut self.stages {
+            stage.remove(cell_id);
+        }
+    }
+
     fn len(&self) -> usize {
         // Report max across stages (pipeline has data if any stage does).
         self.stages.iter().map(|s| s.len()).max().unwrap_or(0)

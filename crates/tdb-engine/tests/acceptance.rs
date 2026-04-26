@@ -1088,6 +1088,7 @@ fn test_write_pack_stores_all_layers() {
             })
             .collect(),
         salience: 80.0,
+        text: None,
     };
 
     let pack_id = engine.mem_write_pack(&pack).unwrap();
@@ -1112,6 +1113,7 @@ fn test_read_pack_returns_complete_kv() {
             .map(|i| KVLayerPayload { layer_idx: i, data: vec![(i + 1) as f32; 32] })
             .collect(),
         salience: 80.0,
+        text: None,
     };
 
     engine.mem_write_pack(&pack).unwrap();
@@ -1146,6 +1148,7 @@ fn test_pack_survives_reopen() {
                 .map(|i| KVLayerPayload { layer_idx: i, data: vec![1.0f32; 16] })
                 .collect(),
             salience: 80.0,
+            text: None,
         };
         engine.mem_write_pack(&pack).unwrap();
         assert_eq!(engine.pack_count(), 1);
@@ -1175,6 +1178,7 @@ fn test_multiple_packs_retrieval_ranking() {
             retrieval_key: cooking_key,
             layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
             salience: 80.0,
+            text: None,
         })
         .unwrap();
 
@@ -1187,6 +1191,7 @@ fn test_multiple_packs_retrieval_ranking() {
             retrieval_key: running_key,
             layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
             salience: 80.0,
+            text: None,
         })
         .unwrap();
 
@@ -1228,6 +1233,7 @@ fn test_pack_for_owner(owner: u64, layer_values: &[f32], retrieval_key: Vec<f32>
             })
             .collect(),
         salience: TEST_PACK_SALIENCE,
+        text: None,
     }
 }
 
@@ -1305,6 +1311,7 @@ fn test_mem_read_pack_candidate_reduction_preserves_pack_deduplication() {
                 },
             ],
             salience: CANDIDATE_FIXTURE_PACK_SALIENCE,
+            text: None,
         };
         engine.mem_write_pack(&pack).unwrap();
     }
@@ -1362,6 +1369,7 @@ fn test_mem_read_pack_reverse_lookup_preserves_ranking() {
                     data: vec![pack_id as f32; CANDIDATE_FIXTURE_DIM],
                 }],
                 salience: CANDIDATE_FIXTURE_PACK_SALIENCE,
+                text: None,
             })
             .unwrap();
     }
@@ -1495,6 +1503,7 @@ fn test_key_only_index_preserves_1000_pack_ranking() {
                     data: vec![pack_id as f32; CANDIDATE_FIXTURE_DIM],
                 }],
                 salience: CANDIDATE_FIXTURE_PACK_SALIENCE,
+                text: None,
             })
             .unwrap();
     }
@@ -1569,6 +1578,7 @@ fn test_pack_fixture_payload_dimension_is_preserved() {
             data: vec![OWNER_ONE_LAYER_VALUE; PROFILE_PAYLOAD_DIM],
         }],
         salience: TEST_PACK_SALIENCE,
+        text: None,
     };
 
     engine.mem_write_pack(&pack).unwrap();
@@ -1682,6 +1692,7 @@ fn test_pack_layer_hydration_preserves_layer_order() {
             },
         ],
         salience: TEST_PACK_SALIENCE,
+        text: None,
     };
 
     engine.mem_write_pack(&pack).unwrap();
@@ -1730,6 +1741,7 @@ fn test_pack_materialization_updates_governance_once_per_returned_pack() {
             })
             .collect(),
         salience: GOVERNANCE_SALIENCE,
+        text: None,
     };
 
     let pack_id = engine.mem_write_pack(&pack).unwrap();
@@ -1771,6 +1783,7 @@ fn test_pack_governance() {
             retrieval_key: key,
             layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
             salience: 50.0,
+            text: None,
         })
         .unwrap();
 
@@ -1785,7 +1798,7 @@ fn test_pack_governance() {
 
 // -- Phase 37: Pack-level Rust APIs ─────────────────────────────────────────
 
-/// ATDD: load_pack_by_id returns complete pack without retrieval scoring.
+/// ATDD: `load_pack_by_id` returns complete pack without retrieval scoring.
 #[test]
 fn test_load_pack_by_id_returns_complete_pack() {
     let dir = tempfile::tempdir().unwrap();
@@ -1796,10 +1809,9 @@ fn test_load_pack_by_id_returns_complete_pack() {
         id: 0,
         owner: 1,
         retrieval_key: key,
-        layers: (0..4)
-            .map(|i| KVLayerPayload { layer_idx: i, data: vec![i as f32; 16] })
-            .collect(),
+        layers: (0..4).map(|i| KVLayerPayload { layer_idx: i, data: vec![i as f32; 16] }).collect(),
         salience: 80.0,
+        text: None,
     };
 
     let pack_id = engine.mem_write_pack(&pack).unwrap();
@@ -1813,7 +1825,7 @@ fn test_load_pack_by_id_returns_complete_pack() {
     }
 }
 
-/// ATDD: load_pack_by_id fails for nonexistent pack.
+/// ATDD: `load_pack_by_id` fails for nonexistent pack.
 #[test]
 fn test_load_pack_by_id_not_found() {
     let dir = tempfile::tempdir().unwrap();
@@ -1822,7 +1834,7 @@ fn test_load_pack_by_id_not_found() {
     assert!(engine.load_pack_by_id(999).is_err());
 }
 
-/// ATDD: add_pack_link creates durable bidirectional trace edge.
+/// ATDD: `add_pack_link` creates durable bidirectional trace edge.
 #[test]
 fn test_add_pack_link_creates_bidirectional_edge() {
     let dir = tempfile::tempdir().unwrap();
@@ -1838,6 +1850,7 @@ fn test_add_pack_link_creates_bidirectional_edge() {
             retrieval_key: key_a,
             layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
             salience: 80.0,
+            text: None,
         })
         .unwrap();
 
@@ -1848,6 +1861,7 @@ fn test_add_pack_link_creates_bidirectional_edge() {
             retrieval_key: key_b,
             layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
             salience: 80.0,
+            text: None,
         })
         .unwrap();
 
@@ -1877,6 +1891,7 @@ fn test_pack_links_survive_reopen() {
                 retrieval_key: key_a,
                 layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
                 salience: 80.0,
+                text: None,
             })
             .unwrap();
 
@@ -1887,6 +1902,7 @@ fn test_pack_links_survive_reopen() {
                 retrieval_key: key_b,
                 layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
                 salience: 80.0,
+                text: None,
             })
             .unwrap();
 
@@ -1915,6 +1931,7 @@ fn test_trace_boost_prefers_linked_pack() {
             retrieval_key: key_a,
             layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
             salience: 80.0,
+            text: None,
         })
         .unwrap();
 
@@ -1927,22 +1944,24 @@ fn test_trace_boost_prefers_linked_pack() {
             retrieval_key: key_b,
             layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
             salience: 80.0,
+            text: None,
         })
         .unwrap();
 
     // Pack C: linked to pack_a (gives pack_a a trace link)
     let key_c = encode_per_token_keys(&[&[0.0f32, 0.0, 1.0, 0.0]]);
-    let _pack_c = engine
+    let pack_c = engine
         .mem_write_pack(&KVPack {
             id: 0,
             owner: 1,
             retrieval_key: key_c,
             layers: vec![KVLayerPayload { layer_idx: 0, data: vec![3.0; 16] }],
             salience: 80.0,
+            text: None,
         })
         .unwrap();
 
-    engine.add_pack_link(pack_a, _pack_c).unwrap();
+    engine.add_pack_link(pack_a, pack_c).unwrap();
 
     // Query close to both A and B
     let query = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
@@ -1952,11 +1971,329 @@ fn test_trace_boost_prefers_linked_pack() {
     assert_eq!(no_boost[0].pack.id, pack_b, "without boost, unlinked B ranks first");
 
     // With boost: pack_a should rank first (link boost overcomes score gap)
-    let with_boost = engine
-        .mem_read_pack_with_trace_boost(&query, 2, None, 0.5)
+    let with_boost = engine.mem_read_pack_with_trace_boost(&query, 2, None, 0.5).unwrap();
+    assert_eq!(with_boost[0].pack.id, pack_a, "with boost, linked A should rank first");
+}
+
+// ── Text Store acceptance tests ─────────────────────────────────────────────
+
+#[test]
+fn test_pack_text_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack_id = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: Some("Nyx's favorite star is Vega".to_owned()),
+        })
         .unwrap();
-    assert_eq!(
-        with_boost[0].pack.id, pack_a,
-        "with boost, linked A should rank first"
-    );
+
+    let result = engine.load_pack_by_id(pack_id).unwrap();
+    assert_eq!(result.pack.text.as_deref(), Some("Nyx's favorite star is Vega"),);
+}
+
+#[test]
+fn test_pack_text_none_is_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack_id = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: None,
+        })
+        .unwrap();
+
+    let result = engine.load_pack_by_id(pack_id).unwrap();
+    assert_eq!(result.pack.text, None);
+}
+
+#[test]
+fn test_pack_text_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let pack_id = {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+        engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+                salience: 80.0,
+                text: Some("Persisted across restarts".to_owned()),
+            })
+            .unwrap()
+    };
+
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let result = engine.load_pack_by_id(pack_id).unwrap();
+    assert_eq!(result.pack.text.as_deref(), Some("Persisted across restarts"),);
+}
+
+#[test]
+fn test_pack_text_empty_string_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack_id = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: Some(String::new()),
+        })
+        .unwrap();
+
+    let result = engine.load_pack_by_id(pack_id).unwrap();
+    assert_eq!(result.pack.text.as_deref(), Some(""));
+}
+
+#[test]
+fn test_set_pack_text_updates_existing_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack_id = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: None,
+        })
+        .unwrap();
+
+    assert_eq!(engine.pack_text(pack_id), None);
+    engine.set_pack_text(pack_id, "Backfilled text").unwrap();
+    assert_eq!(engine.pack_text(pack_id), Some("Backfilled text"));
+}
+
+#[test]
+fn test_set_pack_text_errors_for_unknown_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    assert!(engine.set_pack_text(999, "anything").is_err());
+}
+
+#[test]
+fn test_set_pack_text_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack_id = {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+        let id = engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+                salience: 80.0,
+                text: None,
+            })
+            .unwrap();
+        engine.set_pack_text(id, "Migrated text").unwrap();
+        id
+    };
+    let engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine.pack_text(pack_id), Some("Migrated text"));
+}
+
+// -- Delete API acceptance tests --
+
+#[test]
+fn test_delete_pack_removes_from_retrieval() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key_a = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let key_b = encode_per_token_keys(&[&[0.0f32, 1.0, 0.0, 0.0]]);
+
+    let pack_a = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_a.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: Some("Memory A".to_owned()),
+        })
+        .unwrap();
+
+    let pack_b = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_b,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+            salience: 80.0,
+            text: Some("Memory B".to_owned()),
+        })
+        .unwrap();
+
+    engine.delete_pack(pack_a).unwrap();
+
+    let results = engine.mem_read_pack(&key_a, 2, None).unwrap();
+    let found_ids: Vec<_> = results.iter().map(|r| r.pack.id).collect();
+    assert!(!found_ids.contains(&pack_a), "deleted pack should not appear");
+    assert_eq!(engine.pack_count(), 1);
+    assert_eq!(results[0].pack.id, pack_b);
+}
+
+#[test]
+fn test_delete_pack_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack_id = {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+        let id = engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+                salience: 80.0,
+                text: Some("Will be deleted".to_owned()),
+            })
+            .unwrap();
+        engine.delete_pack(id).unwrap();
+        id
+    };
+    let mut engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine.pack_count(), 0);
+    assert!(engine.load_pack_by_id(pack_id).is_err());
+}
+
+#[test]
+fn test_delete_nonexistent_pack_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    assert!(engine.delete_pack(999).is_err());
+}
+
+#[test]
+fn test_delete_pack_orphans_trace_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let key_a = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let key_b = encode_per_token_keys(&[&[0.0f32, 1.0, 0.0, 0.0]]);
+
+    let pack_a = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_a,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: None,
+        })
+        .unwrap();
+    let pack_b = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_b,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+            salience: 80.0,
+            text: None,
+        })
+        .unwrap();
+    engine.add_pack_link(pack_a, pack_b).unwrap();
+    engine.delete_pack(pack_b).unwrap();
+    assert!(engine.pack_links(pack_a).is_empty());
+}
+
+#[test]
+fn test_delete_pack_decrements_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let mut ids = Vec::new();
+    for i in 0..3 {
+        let key = encode_per_token_keys(&[&[i as f32, 0.0, 0.0, 0.0]]);
+        ids.push(
+            engine
+                .mem_write_pack(&KVPack {
+                    id: 0,
+                    owner: 1,
+                    retrieval_key: key,
+                    layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+                    salience: 80.0,
+                    text: None,
+                })
+                .unwrap(),
+        );
+    }
+    assert_eq!(engine.pack_count(), 3);
+    engine.delete_pack(ids[1]).unwrap();
+    assert_eq!(engine.pack_count(), 2);
+}
+
+#[test]
+fn test_delete_pack_clears_text_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack_id = {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+        let id = engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+                salience: 80.0,
+                text: Some("Will be deleted".to_owned()),
+            })
+            .unwrap();
+        engine.delete_pack(id).unwrap();
+        id
+    };
+
+    // Reopen — deletion log filters both pack_directory AND text_store.
+    let engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine.pack_text(pack_id), None);
+}
+
+#[test]
+fn test_delete_pack_preserves_other_packs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let mut ids = Vec::new();
+    for i in 0u8..3 {
+        let key = encode_per_token_keys(&[&[i as f32, 0.0, 0.0, 0.0]]);
+        ids.push(
+            engine
+                .mem_write_pack(&KVPack {
+                    id: 0,
+                    owner: 1,
+                    retrieval_key: key,
+                    layers: vec![KVLayerPayload { layer_idx: 0, data: vec![i as f32 + 1.0; 16] }],
+                    salience: 80.0,
+                    text: Some(format!("Pack {i}")),
+                })
+                .unwrap(),
+        );
+    }
+    engine.delete_pack(ids[1]).unwrap();
+    let r0 = engine.load_pack_by_id(ids[0]).unwrap();
+    assert_eq!(r0.pack.text.as_deref(), Some("Pack 0"));
+    let r2 = engine.load_pack_by_id(ids[2]).unwrap();
+    assert_eq!(r2.pack.text.as_deref(), Some("Pack 2"));
+    assert!(engine.load_pack_by_id(ids[1]).is_err());
 }
