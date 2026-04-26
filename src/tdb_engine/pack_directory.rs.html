@@ -102,61 +102,75 @@
 <a href=#67 id=67 data-nosnippet>67</a>        <span class="self">self</span>.cells_by_pack.len()
 <a href=#68 id=68 data-nosnippet>68</a>    }
 <a href=#69 id=69 data-nosnippet>69</a>
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>next_pack_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; PackId {
-<a href=#71 id=71 data-nosnippet>71</a>        <span class="self">self</span>.cells_by_pack
-<a href=#72 id=72 data-nosnippet>72</a>            .keys()
-<a href=#73 id=73 data-nosnippet>73</a>            .copied()
-<a href=#74 id=74 data-nosnippet>74</a>            .max()
-<a href=#75 id=75 data-nosnippet>75</a>            .map_or(FIRST_ASSIGNED_PACK_ID, |pack_id| pack_id + <span class="number">1</span>)
-<a href=#76 id=76 data-nosnippet>76</a>    }
-<a href=#77 id=77 data-nosnippet>77</a>
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="kw">fn </span>add_cell(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pack_id: PackId, cell_id: CellId) {
-<a href=#79 id=79 data-nosnippet>79</a>        <span class="self">self</span>.cells_by_pack.entry(pack_id).or_default().push(cell_id);
-<a href=#80 id=80 data-nosnippet>80</a>        <span class="self">self</span>.pack_by_cell.insert(cell_id, pack_id);
-<a href=#81 id=81 data-nosnippet>81</a>    }
-<a href=#82 id=82 data-nosnippet>82</a>
-<a href=#83 id=83 data-nosnippet>83</a>    <span class="kw">fn </span>sort_pack_cells(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#84 id=84 data-nosnippet>84</a>        <span class="kw">for </span>cell_ids <span class="kw">in </span><span class="self">self</span>.cells_by_pack.values_mut() {
-<a href=#85 id=85 data-nosnippet>85</a>            cell_ids.sort_unstable();
-<a href=#86 id=86 data-nosnippet>86</a>            cell_ids.dedup();
-<a href=#87 id=87 data-nosnippet>87</a>        }
-<a href=#88 id=88 data-nosnippet>88</a>    }
-<a href=#89 id=89 data-nosnippet>89</a>}
-<a href=#90 id=90 data-nosnippet>90</a>
-<a href=#91 id=91 data-nosnippet>91</a><span class="attr">#[cfg(test)]
-<a href=#92 id=92 data-nosnippet>92</a></span><span class="kw">mod </span>tests {
-<a href=#93 id=93 data-nosnippet>93</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
-<a href=#94 id=94 data-nosnippet>94</a>
-<a href=#95 id=95 data-nosnippet>95</a>    <span class="kw">const </span>FIRST_TEST_PACK_ID: PackId = <span class="number">7</span>;
-<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">const </span>SECOND_TEST_PACK_ID: PackId = <span class="number">11</span>;
-<a href=#97 id=97 data-nosnippet>97</a>    <span class="kw">const </span>FIRST_PACK_CELLS: [CellId; <span class="number">3</span>] = [<span class="number">30</span>, <span class="number">10</span>, <span class="number">20</span>];
-<a href=#98 id=98 data-nosnippet>98</a>    <span class="kw">const </span>FIRST_PACK_CELLS_SORTED: [CellId; <span class="number">3</span>] = [<span class="number">10</span>, <span class="number">20</span>, <span class="number">30</span>];
-<a href=#99 id=99 data-nosnippet>99</a>    <span class="kw">const </span>SECOND_PACK_CELLS: [CellId; <span class="number">2</span>] = [<span class="number">40</span>, <span class="number">50</span>];
-<a href=#100 id=100 data-nosnippet>100</a>    <span class="kw">const </span>FIRST_PACK_LOOKUP_CELL: CellId = <span class="number">10</span>;
-<a href=#101 id=101 data-nosnippet>101</a>    <span class="kw">const </span>SECOND_PACK_LOOKUP_CELL: CellId = <span class="number">50</span>;
-<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">const </span>MISSING_PACK_LOOKUP_CELL: CellId = <span class="number">99</span>;
-<a href=#103 id=103 data-nosnippet>103</a>
-<a href=#104 id=104 data-nosnippet>104</a>    <span class="attr">#[test]
-<a href=#105 id=105 data-nosnippet>105</a>    </span><span class="kw">fn </span>test_pack_directory_finds_pack_by_cell_id() {
-<a href=#106 id=106 data-nosnippet>106</a>        <span class="kw">let </span><span class="kw-2">mut </span>directory = PackDirectory::new();
-<a href=#107 id=107 data-nosnippet>107</a>        directory.insert_pack(FIRST_TEST_PACK_ID, FIRST_PACK_CELLS.to_vec());
-<a href=#108 id=108 data-nosnippet>108</a>        directory.insert_pack(SECOND_TEST_PACK_ID, SECOND_PACK_CELLS.to_vec());
-<a href=#109 id=109 data-nosnippet>109</a>
-<a href=#110 id=110 data-nosnippet>110</a>        <span class="macro">assert_eq!</span>(directory.pack_for_cell(FIRST_PACK_LOOKUP_CELL), <span class="prelude-val">Some</span>(FIRST_TEST_PACK_ID));
-<a href=#111 id=111 data-nosnippet>111</a>        <span class="macro">assert_eq!</span>(directory.pack_for_cell(SECOND_PACK_LOOKUP_CELL), <span class="prelude-val">Some</span>(SECOND_TEST_PACK_ID));
-<a href=#112 id=112 data-nosnippet>112</a>        <span class="macro">assert_eq!</span>(directory.pack_for_cell(MISSING_PACK_LOOKUP_CELL), <span class="prelude-val">None</span>);
-<a href=#113 id=113 data-nosnippet>113</a>    }
-<a href=#114 id=114 data-nosnippet>114</a>
-<a href=#115 id=115 data-nosnippet>115</a>    <span class="attr">#[test]
-<a href=#116 id=116 data-nosnippet>116</a>    </span><span class="kw">fn </span>test_pack_directory_preserves_layer_cell_membership() {
-<a href=#117 id=117 data-nosnippet>117</a>        <span class="kw">let </span><span class="kw-2">mut </span>directory = PackDirectory::new();
-<a href=#118 id=118 data-nosnippet>118</a>
-<a href=#119 id=119 data-nosnippet>119</a>        directory.insert_pack(FIRST_TEST_PACK_ID, FIRST_PACK_CELLS.to_vec());
-<a href=#120 id=120 data-nosnippet>120</a>
-<a href=#121 id=121 data-nosnippet>121</a>        <span class="macro">assert_eq!</span>(
-<a href=#122 id=122 data-nosnippet>122</a>            directory.cell_ids(FIRST_TEST_PACK_ID),
-<a href=#123 id=123 data-nosnippet>123</a>            <span class="prelude-val">Some</span>(FIRST_PACK_CELLS_SORTED.as_slice())
-<a href=#124 id=124 data-nosnippet>124</a>        );
-<a href=#125 id=125 data-nosnippet>125</a>    }
-<a href=#126 id=126 data-nosnippet>126</a>}
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// Remove a pack and all its cell mappings from the directory.
+<a href=#71 id=71 data-nosnippet>71</a>    ///
+<a href=#72 id=72 data-nosnippet>72</a>    /// Returns the cell IDs that belonged to the pack (empty if not found).
+<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>remove_pack(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pack_id: PackId) -&gt; Vec&lt;CellId&gt; {
+<a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cell_ids) = <span class="self">self</span>.cells_by_pack.remove(<span class="kw-2">&amp;</span>pack_id) {
+<a href=#75 id=75 data-nosnippet>75</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>cell_id <span class="kw">in </span><span class="kw-2">&amp;</span>cell_ids {
+<a href=#76 id=76 data-nosnippet>76</a>                <span class="self">self</span>.pack_by_cell.remove(<span class="kw-2">&amp;</span>cell_id);
+<a href=#77 id=77 data-nosnippet>77</a>            }
+<a href=#78 id=78 data-nosnippet>78</a>            cell_ids
+<a href=#79 id=79 data-nosnippet>79</a>        } <span class="kw">else </span>{
+<a href=#80 id=80 data-nosnippet>80</a>            Vec::new()
+<a href=#81 id=81 data-nosnippet>81</a>        }
+<a href=#82 id=82 data-nosnippet>82</a>    }
+<a href=#83 id=83 data-nosnippet>83</a>
+<a href=#84 id=84 data-nosnippet>84</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>next_pack_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; PackId {
+<a href=#85 id=85 data-nosnippet>85</a>        <span class="self">self</span>.cells_by_pack
+<a href=#86 id=86 data-nosnippet>86</a>            .keys()
+<a href=#87 id=87 data-nosnippet>87</a>            .copied()
+<a href=#88 id=88 data-nosnippet>88</a>            .max()
+<a href=#89 id=89 data-nosnippet>89</a>            .map_or(FIRST_ASSIGNED_PACK_ID, |pack_id| pack_id + <span class="number">1</span>)
+<a href=#90 id=90 data-nosnippet>90</a>    }
+<a href=#91 id=91 data-nosnippet>91</a>
+<a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">fn </span>add_cell(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pack_id: PackId, cell_id: CellId) {
+<a href=#93 id=93 data-nosnippet>93</a>        <span class="self">self</span>.cells_by_pack.entry(pack_id).or_default().push(cell_id);
+<a href=#94 id=94 data-nosnippet>94</a>        <span class="self">self</span>.pack_by_cell.insert(cell_id, pack_id);
+<a href=#95 id=95 data-nosnippet>95</a>    }
+<a href=#96 id=96 data-nosnippet>96</a>
+<a href=#97 id=97 data-nosnippet>97</a>    <span class="kw">fn </span>sort_pack_cells(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#98 id=98 data-nosnippet>98</a>        <span class="kw">for </span>cell_ids <span class="kw">in </span><span class="self">self</span>.cells_by_pack.values_mut() {
+<a href=#99 id=99 data-nosnippet>99</a>            cell_ids.sort_unstable();
+<a href=#100 id=100 data-nosnippet>100</a>            cell_ids.dedup();
+<a href=#101 id=101 data-nosnippet>101</a>        }
+<a href=#102 id=102 data-nosnippet>102</a>    }
+<a href=#103 id=103 data-nosnippet>103</a>}
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a><span class="attr">#[cfg(test)]
+<a href=#106 id=106 data-nosnippet>106</a></span><span class="kw">mod </span>tests {
+<a href=#107 id=107 data-nosnippet>107</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
+<a href=#108 id=108 data-nosnippet>108</a>
+<a href=#109 id=109 data-nosnippet>109</a>    <span class="kw">const </span>FIRST_TEST_PACK_ID: PackId = <span class="number">7</span>;
+<a href=#110 id=110 data-nosnippet>110</a>    <span class="kw">const </span>SECOND_TEST_PACK_ID: PackId = <span class="number">11</span>;
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">const </span>FIRST_PACK_CELLS: [CellId; <span class="number">3</span>] = [<span class="number">30</span>, <span class="number">10</span>, <span class="number">20</span>];
+<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">const </span>FIRST_PACK_CELLS_SORTED: [CellId; <span class="number">3</span>] = [<span class="number">10</span>, <span class="number">20</span>, <span class="number">30</span>];
+<a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">const </span>SECOND_PACK_CELLS: [CellId; <span class="number">2</span>] = [<span class="number">40</span>, <span class="number">50</span>];
+<a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">const </span>FIRST_PACK_LOOKUP_CELL: CellId = <span class="number">10</span>;
+<a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">const </span>SECOND_PACK_LOOKUP_CELL: CellId = <span class="number">50</span>;
+<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">const </span>MISSING_PACK_LOOKUP_CELL: CellId = <span class="number">99</span>;
+<a href=#117 id=117 data-nosnippet>117</a>
+<a href=#118 id=118 data-nosnippet>118</a>    <span class="attr">#[test]
+<a href=#119 id=119 data-nosnippet>119</a>    </span><span class="kw">fn </span>test_pack_directory_finds_pack_by_cell_id() {
+<a href=#120 id=120 data-nosnippet>120</a>        <span class="kw">let </span><span class="kw-2">mut </span>directory = PackDirectory::new();
+<a href=#121 id=121 data-nosnippet>121</a>        directory.insert_pack(FIRST_TEST_PACK_ID, FIRST_PACK_CELLS.to_vec());
+<a href=#122 id=122 data-nosnippet>122</a>        directory.insert_pack(SECOND_TEST_PACK_ID, SECOND_PACK_CELLS.to_vec());
+<a href=#123 id=123 data-nosnippet>123</a>
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="macro">assert_eq!</span>(directory.pack_for_cell(FIRST_PACK_LOOKUP_CELL), <span class="prelude-val">Some</span>(FIRST_TEST_PACK_ID));
+<a href=#125 id=125 data-nosnippet>125</a>        <span class="macro">assert_eq!</span>(directory.pack_for_cell(SECOND_PACK_LOOKUP_CELL), <span class="prelude-val">Some</span>(SECOND_TEST_PACK_ID));
+<a href=#126 id=126 data-nosnippet>126</a>        <span class="macro">assert_eq!</span>(directory.pack_for_cell(MISSING_PACK_LOOKUP_CELL), <span class="prelude-val">None</span>);
+<a href=#127 id=127 data-nosnippet>127</a>    }
+<a href=#128 id=128 data-nosnippet>128</a>
+<a href=#129 id=129 data-nosnippet>129</a>    <span class="attr">#[test]
+<a href=#130 id=130 data-nosnippet>130</a>    </span><span class="kw">fn </span>test_pack_directory_preserves_layer_cell_membership() {
+<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">let </span><span class="kw-2">mut </span>directory = PackDirectory::new();
+<a href=#132 id=132 data-nosnippet>132</a>
+<a href=#133 id=133 data-nosnippet>133</a>        directory.insert_pack(FIRST_TEST_PACK_ID, FIRST_PACK_CELLS.to_vec());
+<a href=#134 id=134 data-nosnippet>134</a>
+<a href=#135 id=135 data-nosnippet>135</a>        <span class="macro">assert_eq!</span>(
+<a href=#136 id=136 data-nosnippet>136</a>            directory.cell_ids(FIRST_TEST_PACK_ID),
+<a href=#137 id=137 data-nosnippet>137</a>            <span class="prelude-val">Some</span>(FIRST_PACK_CELLS_SORTED.as_slice())
+<a href=#138 id=138 data-nosnippet>138</a>        );
+<a href=#139 id=139 data-nosnippet>139</a>    }
+<a href=#140 id=140 data-nosnippet>140</a>}
 </code></pre></div></section></main></body></html>

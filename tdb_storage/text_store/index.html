@@ -1,0 +1,56 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Append-only text store — durable persistence for KV pack fact text."><title>tdb_storage::text_store - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_storage" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module text_store</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_storage/index.html">tdb_<wbr>storage</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module text_<wbr>store</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#file-format" title="File format">File format</a></li><li><a href="#durability-contract" title="Durability contract">Durability contract</a></li><li><a href="#recovery-contract" title="Recovery contract">Recovery contract</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#constants" title="Constants">Constants</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate tdb_<wbr>storage</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_storage</a></div><h1>Module <span>text_<wbr>store</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_storage/text_store.rs.html#1-237">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Append-only text store — durable persistence for KV pack fact text.</p>
+<p>Maps <code>PackId → String</code> with crash-safe append semantics. Text is written
+alongside tensor data so both survive restarts and crashes together.</p>
+<h2 id="file-format"><a class="doc-anchor" href="#file-format">§</a>File format</h2><div class="example-wrap"><pre class="language-text"><code>┌─────────────────────────────┐
+│ pack_id: u64 (8 bytes, LE)  │
+│ text_len: u32 (4 bytes, LE) │
+│ text: u8[text_len]          │
+├─────────────────────────────┤
+│ … next record …             │
+└─────────────────────────────┘</code></pre></div>
+<p>All integers are little-endian. On open, the file is scanned sequentially
+to rebuild the in-memory <code>HashMap</code>. Truncated trailing records (from a
+crash mid-write) are silently discarded — the same recovery model as
+<a href="../block_pool/struct.BlockPool.html" title="struct tdb_storage::block_pool::BlockPool"><code>BlockPool</code></a>.</p>
+<h2 id="durability-contract"><a class="doc-anchor" href="#durability-contract">§</a>Durability contract</h2>
+<p><a href="struct.TextStore.html#method.store" title="method tdb_storage::text_store::TextStore::store"><code>TextStore::store</code></a> appends and fsyncs before returning. A crash after
+<code>store</code> returns guarantees the text is on disk.</p>
+<h2 id="recovery-contract"><a class="doc-anchor" href="#recovery-contract">§</a>Recovery contract</h2>
+<p><a href="struct.TextStore.html#method.open" title="associated function tdb_storage::text_store::TextStore::open"><code>TextStore::open</code></a> rebuilds the <code>HashMap</code> from the file. If the last
+record is truncated, it is skipped. No data is served that wasn’t fsynced.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.TextStore.html" title="struct tdb_storage::text_store::TextStore">Text<wbr>Store</a></dt><dd>Append-only store mapping <code>PackId</code> to original fact text.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.RECORD_HEADER_SIZE.html" title="constant tdb_storage::text_store::RECORD_HEADER_SIZE">RECORD_<wbr>HEADER_<wbr>SIZE</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="constant" href="constant.TEXT_STORE_FILENAME.html" title="constant tdb_storage::text_store::TEXT_STORE_FILENAME">TEXT_<wbr>STORE_<wbr>FILENAME</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl></section></div></main></body></html>

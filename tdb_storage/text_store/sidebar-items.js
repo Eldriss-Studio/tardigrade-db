@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["RECORD_HEADER_SIZE","TEXT_STORE_FILENAME"],"struct":["TextStore"]};

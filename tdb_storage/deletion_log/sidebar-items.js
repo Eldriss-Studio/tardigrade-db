@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DELETION_LOG_FILENAME","RECORD_SIZE"],"struct":["DeletionLog"]};
