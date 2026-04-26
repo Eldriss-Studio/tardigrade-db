@@ -47,8 +47,16 @@ class KnowledgePackStore:
         else:
             self.query_layer = query_layer
 
-        # Pack ID -> original fact text. Persisted as sidecar JSON
-        # so text survives server restarts alongside KV tensors.
+        # Pack ID -> original fact text. DEPRECATED dual-write: text is now
+        # durably stored in the Rust engine's text_store (see crates/tdb-storage).
+        # The JSON sidecar is retained so pre-migration databases (text in JSON
+        # only) still work — KnowledgePackStore migrates them on init via
+        # _migrate_text_to_rust, and reads prefer engine.pack_text() with the
+        # sidecar as fallback.
+        #
+        # TODO(v0.2): drop sidecar writes from store()/forget() once we're
+        # confident all deployments have run migration. Reads can keep the
+        # fallback for one more version, then drop _text_registry entirely.
         self._text_registry_path = self._find_engine_dir() / "text_registry.json"
         self._text_registry = self._load_text_registry()
 
