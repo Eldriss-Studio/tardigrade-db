@@ -66,20 +66,24 @@ def main():
     print("=" * 60)
     print()
 
+    # Reasoning behavior (e.g. Qwen3's `<think>` blocks) is controlled by
+    # KnowledgePackStore via the tokenizer's `enable_thinking=False` kwarg —
+    # tokenizers that don't support it silently ignore the flag. The example
+    # query stays clean: no model-specific tags or post-hoc output stripping.
     print("User: When should we schedule our next sync?")
     text, tokens, had = kps.generate(
-        "When should we schedule the next sync? /no_think",
-        max_new_tokens=80, do_sample=False,
+        "When should we schedule the next sync?",
+        max_new_tokens=120, do_sample=False,
     )
-    print(f"  Agent (memory={had}, tokens={tokens}): {text[:100]}")
+    print(f"  Agent (memory={had}, tokens={tokens}): {text}")
     print()
 
     print("User: When is the Meridian deadline?")
     text, tokens, had = kps.generate_with_trace(
-        "When is the Meridian project deadline? /no_think",
-        k=1, max_new_tokens=80, do_sample=False,
+        "When is the Meridian project deadline?",
+        k=1, max_new_tokens=120, do_sample=False,
     )
-    print(f"  Agent (memory={had}, tokens={tokens}): {text[:100]}")
+    print(f"  Agent (memory={had}, tokens={tokens}): {text}")
     print()
 
     # -- Memory graph ----------------------------------------------------------

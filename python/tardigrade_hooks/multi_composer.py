@@ -154,7 +154,7 @@ class SequentialRecomputeComposer(CompositionStrategy):
 
             messages = [{"role": "system", "content": fact_text}]
             formatted = self.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False
+                messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
             )
             input_ids = self.tokenizer.encode(formatted, return_tensors="pt")
 

@@ -142,7 +142,7 @@ class KnowledgePackStore:
         # Chat template wrapping
         messages = [{"role": "system", "content": fact_text}]
         formatted = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
+            messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
         )
         input_ids = self.tokenizer.encode(formatted, return_tensors="pt")
         seq_len = input_ids.shape[1]
@@ -249,7 +249,7 @@ class KnowledgePackStore:
         # The stored fact used system template. The query should use user template.
         fact_messages = [{"role": "system", "content": "placeholder"}]
         fact_fmt = self.tokenizer.apply_chat_template(
-            fact_messages, tokenize=False, add_generation_prompt=False
+            fact_messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
         )
 
         messages = [
@@ -257,7 +257,7 @@ class KnowledgePackStore:
             {"role": "user", "content": query_text},
         ]
         full_fmt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
 
         # The query portion starts after the system template
@@ -271,11 +271,31 @@ class KnowledgePackStore:
 
         return cache, query_ids, attention_mask
 
+    @staticmethod
+    def _normalize_gen_kwargs(gen_kwargs):
+        """Suppress sampling defaults when greedy decoding is requested.
+
+        Models like Qwen3 ship `temperature`/`top_p`/`top_k` defaults in their
+        generation_config for sampling mode. Calling `model.generate()` with
+        `do_sample=False` then triggers transformers' "generation flags not
+        valid and may be ignored" warning — informational but noisy.
+
+        When the caller explicitly opts into greedy decoding, we explicitly
+        null those fields (without mutating the model's config) so the call
+        is clean. We never override values the caller passed themselves —
+        `setdefault` only fills in unset keys.
+        """
+        if gen_kwargs.get("do_sample") is False:
+            for key in ("temperature", "top_p", "top_k"):
+                gen_kwargs.setdefault(key, None)
+        return gen_kwargs
+
     def generate(self, query_text, **gen_kwargs):
         """Full pipeline: retrieve memory, inject KV, generate response.
 
         Returns (generated_text, prompt_tokens, had_memory).
         """
+        gen_kwargs = self._normalize_gen_kwargs(gen_kwargs)
         cache, query_ids, attn_mask = self.retrieve_and_inject(query_text)
         q_len = query_ids.shape[1]
 
@@ -384,14 +404,14 @@ class KnowledgePackStore:
 
         fact_messages = [{"role": "system", "content": "placeholder"}]
         fact_fmt = self.tokenizer.apply_chat_template(
-            fact_messages, tokenize=False, add_generation_prompt=False
+            fact_messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
         )
         messages = [
             {"role": "system", "content": "placeholder"},
             {"role": "user", "content": query_text},
         ]
         full_fmt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
         full_ids = self.tokenizer.encode(full_fmt, return_tensors="pt")
         fact_len = len(self.tokenizer.encode(fact_fmt))
@@ -408,6 +428,7 @@ class KnowledgePackStore:
 
         Returns (generated_text, prompt_tokens, had_memory).
         """
+        gen_kwargs = self._normalize_gen_kwargs(gen_kwargs)
         cache, query_ids, attn_mask = self.retrieve_with_trace(
             query_text, k=k, composer=composer, boost_factor=boost_factor
         )
@@ -465,14 +486,14 @@ class KnowledgePackStore:
         # Query IDs: user template continuation after system
         fact_messages = [{"role": "system", "content": "placeholder"}]
         fact_fmt = self.tokenizer.apply_chat_template(
-            fact_messages, tokenize=False, add_generation_prompt=False
+            fact_messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
         )
         messages = [
             {"role": "system", "content": "placeholder"},
             {"role": "user", "content": query_text},
         ]
         full_fmt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
         full_ids = self.tokenizer.encode(full_fmt, return_tensors="pt")
         fact_len = len(self.tokenizer.encode(fact_fmt))
@@ -489,6 +510,7 @@ class KnowledgePackStore:
 
         Returns (generated_text, prompt_tokens, had_memory).
         """
+        gen_kwargs = self._normalize_gen_kwargs(gen_kwargs)
         cache, query_ids, attn_mask = self.retrieve_and_inject_multi(
             query_text, k=k, composer=composer
         )
