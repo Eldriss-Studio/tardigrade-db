@@ -229,17 +229,60 @@ if HAS_VLLM:
         def start_load_kv(self, forward_context, **kwargs) -> None:
             """Load stored KV cache from TardigradeDB into vLLM's paged buffer.
 
-            For each request with a matched pack, converts TardigradeDB's flat
-            KV arrays to vLLM's paged block format and copies into the
-            allocated block slots.
+            Adapter step: converts TardigradeDB flat [K|V] arrays to vLLM's
+            paged block format, then copies into pre-allocated GPU block slots.
 
-            Note: Full async implementation would use GPU DMA. Current
-            implementation is synchronous CPU copy.
+            For each matched request:
+              1. Retrieve the stashed pack data (from scheduler-side matching)
+              2. Per layer: flat_to_blocks → torch tensor → GPU copy into slots
+              3. Clean up per-request state
+
+            Synchronous per-block copy for correctness. Batch GPU transfer
+            (scatter via advanced indexing) is a future optimization.
             """
-            # In production, this would receive connector metadata from
-            # build_connector_meta and load specific packs into specific
-            # block positions. For now, the load state is in self._load_packs.
-            pass
+            import torch
+
+            for req_id, load_info in list(self._load_packs.items()):
+                meta = self._load_meta.get(req_id)
+                if meta is None:
+                    continue
+
+                pack = load_info["pack"]
+                seq_len = load_info["seq_len"]
+                block_ids = meta["block_ids"]
+
+                for layer_entry in pack["layers"]:
+                    layer_idx = layer_entry["layer_idx"]
+                    layer_data = np.array(layer_entry["data"], dtype=np.float32)
+
+                    k_blocks, v_blocks = flat_to_blocks(
+                        layer_data, self.num_kv_heads, self.head_dim,
+                        self.block_size,
+                    )
+
+                    # forward_context.kv_caches[layer] = (k_cache, v_cache)
+                    # each shaped (num_total_blocks, block_size, num_kv_heads, head_dim)
+                    kv_cache = forward_context.kv_caches[layer_idx]
+                    k_cache, v_cache = kv_cache[0], kv_cache[1]
+
+                    k_tensor = torch.from_numpy(k_blocks)
+                    v_tensor = torch.from_numpy(v_blocks)
+
+                    # Copy each block into its allocated GPU slot
+                    num_blocks = k_tensor.shape[0]
+                    for i in range(min(num_blocks, len(block_ids))):
+                        k_cache[block_ids[i]].copy_(k_tensor[i])
+                        v_cache[block_ids[i]].copy_(v_tensor[i])
+
+                logger.debug(
+                    f"Loaded pack {pack.get('pack_id', '?')} "
+                    f"({len(pack.get('layers', []))} layers, "
+                    f"{len(block_ids)} blocks) for request {req_id}"
+                )
+
+                # Clean up this request's load state
+                del self._load_packs[req_id]
+                self._load_meta.pop(req_id, None)
 
         def wait_for_layer_load(self, layer_name: str) -> None:
             """Block until layer KV is loaded. Synchronous for now."""
@@ -332,8 +375,11 @@ if HAS_VLLM:
             request,
             block_ids,
         ) -> None:
-            """Clean up per-request state."""
-            pass
+            """Clean up per-request state (defensive — start_load_kv already cleans)."""
+            req_id = getattr(request, "request_id", id(request))
+            self._load_packs.pop(req_id, None)
+            self._load_meta.pop(req_id, None)
+            self._save_buffers.pop(req_id, None)
 
         def shutdown(self) -> None:
             """Clean shutdown — engine handles its own persistence."""
