@@ -184,7 +184,7 @@ kps.store_linked(["Fact A about Tomoko", "Fact B about Tomoko"])
 
 ### Why Python Exists in This Project
 
-The Rust kernel (storage, retrieval, governance, indexing — 228 tests) is a self-contained library. It does not need Python.
+The Rust kernel (storage, retrieval, governance, indexing — 238 tests) is a self-contained library. It does not need Python.
 
 Python exists for one reason: **to bridge TardigradeDB to model inference frameworks**. HuggingFace Transformers is the only practical way to access a model's KV cache (`past_key_values`) on local hardware. The Python layer (`tardigrade_hooks`) captures those tensors and feeds them to the Rust engine via PyO3 bindings.
 
@@ -374,7 +374,7 @@ Two semantically related prompts find each other through **latent-space attentio
 
 ## Testing
 
-### Rust (228 tests)
+### Rust (238 tests)
 
 ```bash
 cargo nextest run --workspace --exclude tdb-python    # all unit/acceptance tests
@@ -518,7 +518,7 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] Multi-memory: trace-linked retrieval (`store_linked`, `store_and_link`, trace-boosted scoring) — 70% at 140 memories
 - [x] Durable text persistence — Rust-side `TextStore` (append-only, fsynced) replaces fragile JSON sidecar, with lazy migration of legacy data
 - [x] Delete API — `delete_pack` / `tardigrade_forget` with crash-safe `DeletionLog`
-- [x] 357 tests (228 Rust + 129 Python)
+- [x] 370 tests (238 Rust + 132 Python)
 
 ### Next up
 

@@ -105,17 +105,27 @@ class KnowledgePackStore:
     def _migrate_text_to_rust(self):
         """Backfill durable Rust text_store from legacy JSON sidecar entries.
 
-        Idempotent: skips entries already present in the Rust store.
-        Stale entries (text in JSON for packs that have been deleted)
-        are silently skipped — the engine returns CellNotFound for them.
+        Uses a single batched fsync regardless of entry count — collapses
+        what would be N sequential fsyncs into one. At 10K legacy entries
+        this is the difference between ~10s of init blockage and <1s.
+
+        Pre-filters two cases before calling the strict batch API:
+        - Already-migrated entries (text_store matches sidecar) — skip.
+        - Stale entries (sidecar references a deleted pack) — skip via
+          pack_exists. The batch API is fail-fast, so these would error
+          the whole batch otherwise.
+
+        Idempotent: re-running on a migrated DB is a fast no-op (pending
+        list is empty, no fsync).
         """
-        for pack_id, text in self._text_registry.items():
-            if self.engine.pack_text(pack_id) != text:
-                try:
-                    self.engine.set_pack_text(pack_id, text)
-                except Exception:
-                    # Pack was deleted — sidecar is stale, skip it.
-                    pass
+        pending = [
+            (pack_id, text)
+            for pack_id, text in self._text_registry.items()
+            if self.engine.pack_exists(pack_id)
+            and self.engine.pack_text(pack_id) != text
+        ]
+        if pending:
+            self.engine.set_pack_texts(pending)
 
     def store(self, fact_text, salience=80.0, auto_link=True, auto_link_threshold=None):
         """Store a fact's KV cache across all layers.

@@ -914,20 +914,52 @@ impl Engine {
         self.text_store.get(pack_id)
     }
 
+    /// Whether a pack with the given ID exists (and has not been deleted).
+    ///
+    /// Distinguishes "pack exists but has no text" from "pack doesn't exist"
+    /// — both cases return `None` from [`Self::pack_text`].
+    pub fn pack_exists(&self, pack_id: PackId) -> bool {
+        self.pack_directory.cell_ids(pack_id).is_some()
+    }
+
     /// Set or update the stored text for an existing pack.
     ///
-    /// Useful for migrating legacy text from external sidecars into the
-    /// durable Rust text store, or for editing memory text in place.
+    /// Thin wrapper over [`Self::set_pack_texts`] for the single-entry case.
     /// Last-writer-wins semantics — the latest call's text is what reads return.
     ///
     /// # Errors
     ///
     /// Returns `CellNotFound` if the pack does not exist.
     pub fn set_pack_text(&mut self, pack_id: PackId, text: &str) -> Result<()> {
-        if self.pack_directory.cell_ids(pack_id).is_none() {
-            return Err(TardigradeError::CellNotFound(pack_id));
+        self.set_pack_texts(&[(pack_id, text)])
+    }
+
+    /// Set or update text for many packs in a single batched fsync.
+    ///
+    /// Validates all `pack_id`s exist before any write — fail-fast: if any
+    /// pack is missing, returns `CellNotFound` and **no entries are written**.
+    /// This matches the existing batch convention from [`Self::mem_write_batch`]
+    /// and avoids partial-write states.
+    ///
+    /// # When to use
+    ///
+    /// - Migrating a legacy text sidecar into the durable text store
+    /// - Bulk-editing many memories in one operation
+    ///
+    /// For a single entry, prefer [`Self::set_pack_text`] for readability —
+    /// it delegates here, so semantics are identical.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CellNotFound` for the first missing pack ID encountered, with
+    /// no on-disk side effects.
+    pub fn set_pack_texts(&mut self, entries: &[(PackId, &str)]) -> Result<()> {
+        for (pack_id, _) in entries {
+            if !self.pack_exists(*pack_id) {
+                return Err(TardigradeError::CellNotFound(*pack_id));
+            }
         }
-        self.text_store.store(pack_id, text).map_err(|e| TardigradeError::Io { source: e })
+        self.text_store.store_batch(entries).map_err(|e| TardigradeError::Io { source: e })
     }
 
     /// Delete a pack permanently.

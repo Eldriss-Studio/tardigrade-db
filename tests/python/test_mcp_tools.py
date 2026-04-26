@@ -319,6 +319,54 @@ def test_forgotten_pack_text_gone_after_reopen(tmp_path, gpt2, tokenizer):
 # -- Corrupted sidecar handling (Gap #6) ---------------------------------------
 
 
+# -- Batch text + pack_exists bindings (Gap #5) --------------------------------
+
+
+def test_engine_pack_exists_direct(tmp_path, gpt2, tokenizer):
+    """GIVEN a stored pack and a missing pack_id,
+    WHEN engine.pack_exists() is called from Python,
+    THEN it returns True and False respectively."""
+    engine = tardigrade_db.Engine(str(tmp_path))
+    kps = KnowledgePackStore(engine, gpt2, tokenizer, owner=1)
+    pack_id = kps.store("Exists")
+
+    assert engine.pack_exists(pack_id) is True
+    assert engine.pack_exists(9999) is False
+
+    kps.forget(pack_id)
+    assert engine.pack_exists(pack_id) is False
+
+
+def test_engine_set_pack_texts_batch(tmp_path, gpt2, tokenizer):
+    """GIVEN multiple stored packs,
+    WHEN engine.set_pack_texts() is called with a list of (pack_id, text),
+    THEN all texts are persisted in a single batched fsync."""
+    engine = tardigrade_db.Engine(str(tmp_path))
+    kps = KnowledgePackStore(engine, gpt2, tokenizer, owner=1)
+    id_a = kps.store("Original A")
+    id_b = kps.store("Original B")
+
+    engine.set_pack_texts([(id_a, "Replaced A"), (id_b, "Replaced B")])
+
+    assert engine.pack_text(id_a) == "Replaced A"
+    assert engine.pack_text(id_b) == "Replaced B"
+
+
+def test_engine_set_pack_texts_fails_fast_on_missing_pack(tmp_path, gpt2, tokenizer):
+    """GIVEN a batch where one pack_id doesn't exist,
+    WHEN engine.set_pack_texts() is called,
+    THEN it raises and no entries are written (fail-fast atomicity)."""
+    engine = tardigrade_db.Engine(str(tmp_path))
+    kps = KnowledgePackStore(engine, gpt2, tokenizer, owner=1)
+    real_id = kps.store("Original")
+
+    with pytest.raises(Exception):
+        engine.set_pack_texts([(real_id, "First"), (9999, "Boom")])
+
+    # Original text is unchanged — proves no partial writes occurred.
+    assert engine.pack_text(real_id) == "Original"
+
+
 def test_corrupted_text_registry_does_not_crash_init(tmp_path, gpt2, tokenizer, capsys):
     """GIVEN a corrupted text_registry.json on disk,
     WHEN KnowledgePackStore opens the database,

@@ -25,3 +25,7 @@ tempfile = { workspace = true }
 [[bench]]
 name = "engine"
 harness = false
+
+[[bench]]
+name = "text_migration"
+harness = false
