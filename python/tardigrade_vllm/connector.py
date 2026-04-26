@@ -38,8 +38,26 @@ except ImportError:
 
 import tardigrade_db
 from tardigrade_vllm.format import blocks_to_flat, flat_to_blocks
+from tardigrade_vllm.slot_resolver import BatchSlice, RequestSlotResolver
 
 logger = logging.getLogger("tardigrade_vllm")
+
+
+def _parse_layer_index(layer_name: str):
+    """Extract the integer following the ``layers`` segment in a layer name.
+
+    Handles both ``"layers.0.self_attn"`` (vLLM 0.9.x) and
+    ``"model.layers.0.self_attn.attn"`` (vLLM 0.19+). Returns ``None`` if
+    no integer is found in the expected position.
+    """
+    parts = layer_name.split(".")
+    for i, p in enumerate(parts):
+        if p == "layers" and i + 1 < len(parts):
+            try:
+                return int(parts[i + 1])
+            except ValueError:
+                continue
+    return None
 
 
 if HAS_VLLM:
@@ -129,10 +147,15 @@ if HAS_VLLM:
             # We use the embedding table to convert tokens → vectors cheaply.
             self._embed_weights = None  # lazy-loaded from model weights
 
-            # Per-request state
-            self._save_buffers = {}  # request_id → {layer_idx: (k_blocks, v_blocks)}
+            # Per-request state. save_buffers is keyed by step-local
+            # batch_index for now; Step 2 will key by stable request_id once
+            # update_state_after_alloc correlation is wired up.
+            self._save_buffers: dict = {}  # batch_index → {layer_idx: (kv_layer, BatchSlice)}
             self._load_packs = {}  # request_id → {pack_data, seq_len}
             self._load_meta = {}  # request_id → {block_ids, num_tokens}
+
+            # Strategy for extracting per-request slices from attn_metadata
+            self._slot_resolver = RequestSlotResolver()
 
             # Minimum retrieval score to consider a match
             self._match_threshold = float(config.get("match_threshold", 150.0))
@@ -341,103 +364,70 @@ if HAS_VLLM:
             attn_metadata,
             **kwargs,
         ) -> None:
-            """Save a layer's KV cache from vLLM to TardigradeDB.
+            """Accumulate one layer's KV for each in-flight request this step.
 
-            Accumulates layers per request. When all layers for a request
-            are collected, writes a complete pack to the engine.
+            Called per layer per forward pass. We use the slot resolver to
+            split the layer's KV tensor into per-request slices via
+            ``slot_mapping`` / ``query_start_loc``. Each request's data is
+            buffered separately, keyed by step-local ``batch_index``.
 
-            Note: This is called per-layer during the attention forward pass.
-            The actual pack write happens in wait_for_save() when all layers
-            are accumulated.
+            Step 2 will key by stable ``request_id`` once
+            ``update_state_after_alloc`` correlation is wired up.
             """
-            # vLLM layer_name examples across versions:
-            #   "layers.0.self_attn"               (vLLM 0.9.x)
-            #   "model.layers.0.self_attn.attn"    (vLLM 0.19+)
-            # Find the integer immediately following the "layers" segment.
-            layer_idx = None
-            parts = layer_name.split(".")
-            for i, p in enumerate(parts):
-                if p == "layers" and i + 1 < len(parts):
-                    try:
-                        layer_idx = int(parts[i + 1])
-                        break
-                    except ValueError:
-                        pass
+            layer_idx = _parse_layer_index(layer_name)
             if layer_idx is None:
-                logger.debug(
-                    f"save_kv_layer: could not parse layer index from {layer_name!r}"
-                )
+                logger.debug(f"save_kv_layer: could not parse layer index from {layer_name!r}")
                 return
-
             if kv_layer is None:
                 return
 
-            # Single-batch buffer (vLLM connector is per-step, not per-request)
-            buf = self._save_buffers.setdefault("current", {})
-            buf[layer_idx] = kv_layer
+            slices = self._slot_resolver.resolve(attn_metadata, self.block_size)
+            if not slices:
+                # No per-request slot info — fall back to single-buffer behaviour
+                # so we don't silently drop the step on unknown attn_metadata shapes.
+                slices = [BatchSlice(batch_index=0, block_indices=(), slot_count=0, first_slot=0)]
+
+            for sl in slices:
+                buf = self._save_buffers.setdefault(sl.batch_index, {})
+                buf[layer_idx] = (kv_layer, sl)
 
         def wait_for_save(self) -> None:
-            """Flush accumulated KV layers to TardigradeDB as a pack.
+            """Flush accumulated layers to TardigradeDB, one pack per in-flight request.
 
-            Called after the forward pass completes. Writes all accumulated
-            layers as a single atomic pack.
+            For each batch_index buffered this step, slice the layer KV
+            tensors to this request's blocks (per ``BatchSlice``) and write
+            an atomic multi-layer pack.
             """
-            buf = self._save_buffers.pop("current", None)
-            if not buf or len(buf) < self.num_layers:
-                logger.debug(
-                    f"wait_for_save: skipping write — buf_size="
-                    f"{len(buf) if buf else 0}, expected={self.num_layers}"
-                )
+            if not self._save_buffers:
                 return
 
-            # In vLLM 0.19, kv_layer is the FULL GPU KV cache for that layer:
-            #   torch.Tensor of shape [2, num_blocks, block_size, num_kv_heads, head_dim]
-            #   where dim 0 is K (idx 0) vs V (idx 1).
-            #
-            # Saving the full cache would be ~12 GiB across 28 layers — we only
-            # want this request's blocks. Without per-request block_ids in
-            # attn_metadata yet, save block 0 as a proof-of-round-trip.
-            #
-            # TODO: thread per-request slot_mapping/block_ids from attn_metadata
-            # so we save exactly the tokens this request produced.
-            BLOCK_SLICE = 1  # number of leading blocks to capture per layer
-
-            layer_payloads = []
-            for layer_idx in sorted(buf.keys()):
-                kv = buf[layer_idx]
-
-                if not hasattr(kv, "shape"):
-                    # Older vLLM format: tuple (k_cache, v_cache) — backward compat
-                    if hasattr(kv, "__len__") and len(kv) == 2:
-                        k_cache, v_cache = kv
-                        k_np = (k_cache.detach().cpu().numpy().astype(np.float32)
-                                if hasattr(k_cache, "detach")
-                                else np.asarray(k_cache, dtype=np.float32))
-                        v_np = (v_cache.detach().cpu().numpy().astype(np.float32)
-                                if hasattr(v_cache, "detach")
-                                else np.asarray(v_cache, dtype=np.float32))
-                    else:
-                        continue
-                else:
-                    # vLLM 0.19+ format: single Tensor [2, blocks, bs, h, d]
-                    if kv.dim() != 5 or kv.shape[0] != 2:
-                        logger.debug(
-                            f"wait_for_save: unexpected kv_layer shape "
-                            f"for layer {layer_idx}: {tuple(kv.shape)}"
-                        )
-                        continue
-                    # Cast to float32 in torch first — numpy can't handle bfloat16
-                    import torch as _torch
-                    sliced = (
-                        kv[:, :BLOCK_SLICE]
-                        .detach()
-                        .to(_torch.float32)
-                        .cpu()
-                        .numpy()
+            for batch_idx in sorted(self._save_buffers.keys()):
+                layer_buf = self._save_buffers[batch_idx]
+                if len(layer_buf) < self.num_layers:
+                    logger.debug(
+                        f"wait_for_save: skipping batch_idx={batch_idx} "
+                        f"— have {len(layer_buf)} layers, expected {self.num_layers}"
                     )
-                    k_np = sliced[0]  # (BLOCK_SLICE, bs, h, d)
-                    v_np = sliced[1]
+                    continue
+                self._write_pack_for_batch(layer_buf)
 
+            self._save_buffers.clear()
+
+        def _write_pack_for_batch(self, layer_buf: dict) -> None:
+            """Build and write a pack from one request's accumulated layers.
+
+            ``layer_buf`` is ``{layer_idx: (kv_layer_tensor, BatchSlice)}``.
+            Slices each layer to ``BatchSlice.block_indices`` and trims to
+            ``slot_count`` valid tokens before flattening.
+            """
+            import torch as _torch
+
+            layer_payloads: list[tuple[int, np.ndarray]] = []
+            for layer_idx in sorted(layer_buf.keys()):
+                kv, sl = layer_buf[layer_idx]
+                k_np, v_np = self._extract_kv_slice(kv, sl, _torch)
+                if k_np is None:
+                    continue
                 # Flatten to TardigradeDB format: [K_flat | V_flat]
                 flat = np.concatenate([k_np.ravel(), v_np.ravel()])
                 layer_payloads.append((layer_idx, flat))
@@ -446,23 +436,77 @@ if HAS_VLLM:
                 logger.debug("wait_for_save: no layer payloads built")
                 return
 
-            # Generate a simple retrieval key (mean of first layer K values)
+            # Retrieval key: mean of layer-0 K projection over the request's tokens.
+            # Step 6 will replace this with the engine's empirically-validated
+            # hidden-states / per-token K strategy.
             first_layer_data = layer_payloads[0][1]
             half = len(first_layer_data) // 2
-            k_mean = first_layer_data[:half].reshape(-1, self.kv_dim).mean(axis=0)
-            # Use mean-pooled K as a simple retrieval key
-            retrieval_key = k_mean
+            k_first_layer = first_layer_data[:half].reshape(-1, self.kv_dim)
+            retrieval_key = k_first_layer.mean(axis=0).astype(np.float32)
 
             try:
                 pack_id = self.engine.mem_write_pack(
                     self.owner, retrieval_key, layer_payloads, 80.0
                 )
                 logger.debug(
-                    f"wait_for_save: wrote pack {pack_id} "
-                    f"({len(layer_payloads)} layers)"
+                    f"wait_for_save: wrote pack {pack_id} ({len(layer_payloads)} layers)"
                 )
             except Exception as e:
                 logger.warning(f"wait_for_save: write failed: {e!r}")
+
+        def _extract_kv_slice(self, kv, sl: BatchSlice, _torch):
+            """Return (k_np, v_np) for one request's blocks within one layer.
+
+            Handles both vLLM tensor formats:
+              - vLLM 0.19+: single Tensor [2, num_blocks, bs, kv_heads, head_dim]
+              - older: (k_cache, v_cache) tuple
+            And bfloat16 → float32 cast since numpy can't represent bf16.
+
+            Returns (None, None) if the layer's data isn't usable.
+            """
+            # Backward-compat: tuple format (vLLM <= 0.9)
+            if not hasattr(kv, "shape"):
+                if not (hasattr(kv, "__len__") and len(kv) == 2):
+                    return None, None
+                k_cache, v_cache = kv
+                k_np = self._tensor_to_float32_numpy(k_cache, _torch)
+                v_np = self._tensor_to_float32_numpy(v_cache, _torch)
+                return k_np, v_np
+
+            # vLLM 0.19+ format: single Tensor [2, blocks, bs, kv_heads, head_dim]
+            if kv.dim() != 5 or kv.shape[0] != 2:
+                logger.debug(f"_extract_kv_slice: unexpected kv shape {tuple(kv.shape)}")
+                return None, None
+
+            if not sl.block_indices:
+                # No resolver info — fall back to first block as a soft default
+                indices = [0]
+            else:
+                indices = list(sl.block_indices)
+
+            sliced = (
+                kv[:, indices]              # [2, n_blocks, bs, h, d]
+                .detach()
+                .to(_torch.float32)
+                .cpu()
+                .numpy()
+            )
+            # Reshape to (tokens, kv_dim) and trim to the actual valid token count
+            n_blocks = sliced.shape[1]
+            slots_per_block = sliced.shape[2]
+            total_slots = n_blocks * slots_per_block
+            valid = sl.slot_count if sl.slot_count > 0 else total_slots
+            valid = min(valid, total_slots)
+
+            k_np = sliced[0].reshape(total_slots, self.kv_dim)[:valid]
+            v_np = sliced[1].reshape(total_slots, self.kv_dim)[:valid]
+            return k_np, v_np
+
+        @staticmethod
+        def _tensor_to_float32_numpy(t, _torch):
+            if hasattr(t, "detach"):
+                return t.detach().to(_torch.float32).cpu().numpy()
+            return np.asarray(t, dtype=np.float32)
 
         # -- Optional lifecycle methods --------------------------------------------
 

@@ -271,6 +271,97 @@ def test_connector_init_accepts_kv_cache_config_kwarg():
     )
 
 
+# -- RequestSlotResolver tests (Step 1 / Strategy + Parameter Object) ---------
+
+def _make_attn_metadata_mock(slot_mapping, query_start_loc):
+    """Build a minimal mock that mimics vLLM 0.19 FlashAttentionMetadata."""
+    import torch
+    am = MagicMock()
+    am.slot_mapping = torch.tensor(slot_mapping, dtype=torch.long)
+    am.query_start_loc = torch.tensor(query_start_loc, dtype=torch.long)
+    return am
+
+
+def test_resolver_single_request_extracts_block_indices():
+    """GIVEN attn_metadata with one request occupying slots 16..20 (block 1, block_size=16),
+    WHEN resolve() runs,
+    THEN it returns a single BatchSlice with block_indices=(1,) and slot_count=5."""
+    pytest.importorskip("torch")
+    from tardigrade_vllm.slot_resolver import RequestSlotResolver
+
+    am = _make_attn_metadata_mock(
+        slot_mapping=[16, 17, 18, 19, 20],
+        query_start_loc=[0, 5],
+    )
+    slices = RequestSlotResolver().resolve(am, block_size=16)
+
+    assert len(slices) == 1
+    assert slices[0].batch_index == 0
+    assert slices[0].block_indices == (1,)
+    assert slices[0].slot_count == 5
+    assert slices[0].first_slot == 16
+
+
+def test_resolver_two_requests_in_one_step_yield_two_slices():
+    """GIVEN slot_mapping with two requests interleaved (req0: 4 tokens in block 0,
+    req1: 3 tokens in block 2),
+    WHEN resolve() runs,
+    THEN two distinct BatchSlices are returned with different blocks."""
+    pytest.importorskip("torch")
+    from tardigrade_vllm.slot_resolver import RequestSlotResolver
+
+    am = _make_attn_metadata_mock(
+        slot_mapping=[0, 1, 2, 3, 32, 33, 34],  # req0: block 0, req1: block 2
+        query_start_loc=[0, 4, 7],
+    )
+    slices = RequestSlotResolver().resolve(am, block_size=16)
+
+    assert len(slices) == 2
+    assert slices[0].batch_index == 0
+    assert slices[0].block_indices == (0,)
+    assert slices[0].slot_count == 4
+    assert slices[1].batch_index == 1
+    assert slices[1].block_indices == (2,)
+    assert slices[1].slot_count == 3
+
+
+def test_resolver_request_spanning_two_blocks():
+    """GIVEN one request with 20 tokens (more than block_size=16, so 2 blocks),
+    WHEN resolve() runs,
+    THEN block_indices contains both block IDs in sorted order."""
+    pytest.importorskip("torch")
+    from tardigrade_vllm.slot_resolver import RequestSlotResolver
+
+    am = _make_attn_metadata_mock(
+        slot_mapping=list(range(16, 36)),  # slots 16..35 → blocks 1 and 2
+        query_start_loc=[0, 20],
+    )
+    slices = RequestSlotResolver().resolve(am, block_size=16)
+
+    assert len(slices) == 1
+    assert slices[0].block_indices == (1, 2)
+    assert slices[0].slot_count == 20
+
+
+def test_resolver_handles_decode_step_one_token_per_request():
+    """GIVEN a typical decode step where each in-flight request adds one token,
+    WHEN resolve() runs,
+    THEN one BatchSlice per request, each with slot_count=1."""
+    pytest.importorskip("torch")
+    from tardigrade_vllm.slot_resolver import RequestSlotResolver
+
+    # 3 requests each adding 1 token, slots scattered
+    am = _make_attn_metadata_mock(
+        slot_mapping=[21, 5, 67],  # blocks 1, 0, 4 for the three requests
+        query_start_loc=[0, 1, 2, 3],
+    )
+    slices = RequestSlotResolver().resolve(am, block_size=16)
+
+    assert len(slices) == 3
+    assert all(s.slot_count == 1 for s in slices)
+    assert [s.block_indices for s in slices] == [(1,), (0,), (4,)]
+
+
 def test_connector_init_back_compat_with_two_arg_call():
     """GIVEN older callers that may still pass (vllm_config, role),
     WHEN TardigradeConnector is instantiated with two positional args,
