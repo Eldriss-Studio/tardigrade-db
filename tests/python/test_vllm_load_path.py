@@ -242,3 +242,53 @@ def test_load_kv_cleans_up_state():
 
     assert "req_cleanup" not in state["load_packs"]
     assert "req_cleanup" not in state["load_meta"]
+
+
+# -- Connector __init__ signature tests (Gap 6 / vLLM 0.19+) ------------------
+
+def test_connector_init_accepts_kv_cache_config_kwarg():
+    """GIVEN vLLM 0.19+ which inspects connector signatures,
+    WHEN TardigradeConnector.__init__ is introspected,
+    THEN it accepts (vllm_config, kv_cache_config, role) — three required
+    positional args — to avoid the deprecation warning at vllm.factory:126."""
+    import inspect
+
+    vllm = pytest.importorskip("vllm", reason="vLLM not installed")
+    from tardigrade_vllm.connector import TardigradeConnector
+
+    sig = inspect.signature(TardigradeConnector.__init__)
+    params = list(sig.parameters.values())
+    # First param is self; vLLM counts the rest
+    non_self = [p for p in params if p.name != "self"]
+    names = [p.name for p in non_self]
+
+    assert "kv_cache_config" in names, (
+        f"vLLM 0.19+ requires kv_cache_config in __init__ signature, got {names}"
+    )
+    # Order matters: vllm_config, kv_cache_config, role
+    assert names.index("vllm_config") < names.index("kv_cache_config") < names.index("role"), (
+        f"Expected order (vllm_config, kv_cache_config, role), got {names}"
+    )
+
+
+def test_connector_init_back_compat_with_two_arg_call():
+    """GIVEN older callers that may still pass (vllm_config, role),
+    WHEN TardigradeConnector is instantiated with two positional args,
+    THEN it does not crash on signature mismatch (kv_cache_config defaults to None).
+
+    This protects against breaking any test/script that bypasses vLLM's factory
+    and constructs the connector directly with the old signature.
+    """
+    import inspect
+
+    vllm = pytest.importorskip("vllm", reason="vLLM not installed")
+    from tardigrade_vllm.connector import TardigradeConnector
+
+    sig = inspect.signature(TardigradeConnector.__init__)
+    kv_cfg_param = sig.parameters.get("kv_cache_config")
+    assert kv_cfg_param is not None
+    # Must have a default — this is what enables back-compat with 2-arg callers
+    assert kv_cfg_param.default is not inspect.Parameter.empty, (
+        "kv_cache_config must have a default to preserve back-compat with "
+        "callers using the old (vllm_config, role) signature"
+    )

@@ -69,6 +69,33 @@ TardigradeDB:
 
 Semantic search outsources retrieval to a separate system. TardigradeDB does retrieval inside the model's own representation space — the model searches its own memories using its internal activations. When a memory is found, it's injected as pre-computed KV tensors directly into the attention cache, consuming zero prompt tokens.
 
+### What TardigradeDB is NOT trying to be
+
+TardigradeDB is **not** a faster, higher-recall RAG. It is an architecturally different choice with its own trade-offs. Comparing the two head-to-head on "% recall on a benchmark" misses the point.
+
+**Where TardigradeDB chooses differently:**
+
+| Concern | Embedding RAG | TardigradeDB |
+|---------|---------------|--------------|
+| Representation cost | Pay an embedding-model forward per write AND per query | Reuse the LLM's own internal state — no separate model |
+| Prompt-token budget | Retrieved text consumes prompt tokens | Retrieved KV is injected into attention — zero prompt tokens |
+| Round-trip fidelity | text → embed → search → text → re-tokenize | Native tensor path, no encode/decode hops |
+| Index target | Document chunks (text-shaped) | Activation cells (model-shaped) |
+
+**Where RAG remains stronger today (honest):**
+
+- **Vague-query recall on small corpora.** Embedding models are explicitly trained for paraphrase robustness. TardigradeDB's latent-space scoring inherits the LLM's own representational geometry, which is not optimized for that task.
+- **Multi-hop retrieval.** Engineered RAG pipelines with re-ranking and hybrid search outperform the current Trace + Top5Avg pipeline.
+- **Mature ecosystem.** Vector DBs, eval harnesses, and tooling are battle-tested; TardigradeDB is a research kernel.
+
+**Where the choice pays off:**
+
+- **Cross-session memory persistence inside the model's own state.** The ability to save and re-inject pre-computed KV is fundamentally not something a vector DB can do — it would require re-running the model.
+- **Zero prompt-token cost on injection.** Long-running agents with large memory trails don't pay context-window tax for prior knowledge.
+- **One representation surface.** No separate embedding model to fine-tune, drift-monitor, or version-pin against the inference model.
+
+If your problem is "find the right document chunk and paste it into a prompt", use RAG. If your problem is "make an LLM behave as if it had already lived through prior conversations", that's the question TardigradeDB is investigating.
+
 ### Quick comparison
 
 | Dimension | Embedding RAG / vector memory | Traditional KV cache | TardigradeDB (experimental prototype) |

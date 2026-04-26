@@ -44,6 +44,19 @@ logger = logging.getLogger("tardigrade_vllm")
 
 if HAS_VLLM:
 
+    def _looks_like_kv_cache_config(obj) -> bool:
+        """Heuristic: distinguish KVCacheConfig from KVConnectorRole at runtime.
+
+        vLLM's KVConnectorRole is a small enum; KVCacheConfig is a heavier
+        object with attributes like ``num_blocks`` or ``block_size``. Used to
+        disambiguate the second positional arg between old- and new-style
+        connector __init__ calls.
+        """
+        if obj is None:
+            return False
+        # Enums (Role) won't have these attributes
+        return any(hasattr(obj, attr) for attr in ("num_blocks", "block_size", "kv_cache_groups"))
+
     class _TardigradeConnectorMetadata(KVConnectorMetadata):
         """Per-step metadata passed scheduler → worker.
 
@@ -68,10 +81,27 @@ if HAS_VLLM:
         def __init__(
             self,
             vllm_config: "VllmConfig",
-            role: "KVConnectorRole",
+            kv_cache_config=None,
+            role: "KVConnectorRole" = None,
         ):
-            super().__init__(vllm_config, role)
+            # vLLM 0.19+ calls __init__ with three positional args:
+            #   (vllm_config, kv_cache_config, role)
+            # vLLM 0.9.x called it with two:
+            #   (vllm_config, role)
+            # Detect old-style call where the second arg is actually the role.
+            if role is None and kv_cache_config is not None and not _looks_like_kv_cache_config(kv_cache_config):
+                role = kv_cache_config
+                kv_cache_config = None
 
+            # Forward to base; older bases that take only (config, role) still work
+            # because kv_cache_config defaults to None on this side too.
+            try:
+                super().__init__(vllm_config, kv_cache_config, role)
+            except TypeError:
+                # Older vLLM base that only accepts (vllm_config, role)
+                super().__init__(vllm_config, role)
+
+            self.kv_cache_config = kv_cache_config
             config = vllm_config.kv_transfer_config.kv_connector_extra_config or {}
             db_path = config.get("db_path", os.environ.get("TARDIGRADE_DB_PATH", "./tardigrade-memory"))
             self.owner = config.get("owner", int(os.environ.get("TARDIGRADE_OWNER", "1")))
