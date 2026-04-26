@@ -2116,6 +2116,89 @@ fn test_set_pack_text_survives_reopen() {
     assert_eq!(engine.pack_text(pack_id), Some("Migrated text"));
 }
 
+// -- Batch text + pack_exists acceptance tests --
+
+fn write_pack_with_no_text(engine: &mut Engine, key_seed: f32) -> u64 {
+    let key = encode_per_token_keys(&[&[key_seed, 0.0, 0.0, 0.0]]);
+    engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: None,
+        })
+        .unwrap()
+}
+
+#[test]
+fn test_set_pack_texts_batch_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let id_a = write_pack_with_no_text(&mut engine, 1.0);
+    let id_b = write_pack_with_no_text(&mut engine, 2.0);
+    let id_c = write_pack_with_no_text(&mut engine, 3.0);
+
+    engine.set_pack_texts(&[(id_a, "alpha"), (id_b, "beta"), (id_c, "gamma")]).unwrap();
+
+    assert_eq!(engine.pack_text(id_a), Some("alpha"));
+    assert_eq!(engine.pack_text(id_b), Some("beta"));
+    assert_eq!(engine.pack_text(id_c), Some("gamma"));
+}
+
+#[test]
+fn test_set_pack_texts_errors_on_first_missing_pack_with_no_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let real_id = write_pack_with_no_text(&mut engine, 1.0);
+
+    // Mix valid + invalid; the invalid one is in the middle so we can prove
+    // the leading valid entry was *not* written despite preceding the error.
+    let result = engine.set_pack_texts(&[(real_id, "first"), (9999, "boom"), (real_id, "third")]);
+
+    assert!(result.is_err());
+    // The valid leading entry must not have been written — fail-fast = atomic.
+    assert_eq!(engine.pack_text(real_id), None);
+}
+
+#[test]
+fn test_set_pack_texts_empty_batch_is_no_op() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    engine.set_pack_texts(&[]).unwrap();
+    // Empty batch creates nothing on disk; reopen confirms.
+    let engine2 = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine2.pack_count(), 0);
+}
+
+#[test]
+fn test_pack_exists_true_for_stored_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let id = write_pack_with_no_text(&mut engine, 1.0);
+    assert!(engine.pack_exists(id));
+}
+
+#[test]
+fn test_pack_exists_false_for_missing_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = Engine::open(dir.path()).unwrap();
+    assert!(!engine.pack_exists(9999));
+}
+
+#[test]
+fn test_pack_exists_false_after_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+    let id = write_pack_with_no_text(&mut engine, 1.0);
+    assert!(engine.pack_exists(id));
+    engine.delete_pack(id).unwrap();
+    assert!(!engine.pack_exists(id));
+}
+
 // -- Delete API acceptance tests --
 
 #[test]

@@ -393,6 +393,20 @@ impl Engine {
         self.inner.set_pack_text(pack_id, text).map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Set or update text for many packs in a single batched fsync.
+    ///
+    /// `entries` is a list of `(pack_id, text)` tuples. Fail-fast: if any
+    /// `pack_id` is missing, returns an error and no entries are written.
+    fn set_pack_texts(&mut self, entries: Vec<(u64, String)>) -> PyResult<()> {
+        let borrowed: Vec<(u64, &str)> = entries.iter().map(|(id, t)| (*id, t.as_str())).collect();
+        self.inner.set_pack_texts(&borrowed).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Whether a pack with the given ID exists (and has not been deleted).
+    fn pack_exists(&self, pack_id: u64) -> bool {
+        self.inner.pack_exists(pack_id)
+    }
+
     /// Delete a pack permanently. Irreversible.
     fn delete_pack(&mut self, pack_id: u64) -> PyResult<()> {
         self.inner.delete_pack(pack_id).map_err(|e| PyRuntimeError::new_err(e.to_string()))

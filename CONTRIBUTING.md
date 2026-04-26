@@ -2,9 +2,19 @@
 
 ## Development Model
 
-TardigradeDB uses **push-to-main**. There are no long-lived feature branches and no pull request reviews. Every commit lands directly on `main` after passing the full local CI check.
+The `main` branch is **protected**. External contributors must open a pull request and receive at least **one approving review** before merging. Force pushes and branch deletion are blocked.
 
-This means the bar for each individual commit is high: `just ci` must pass completely before you push.
+### For contributors
+
+1. **Fork** the repository and create a feature branch.
+2. Make your changes following the ATDD workflow below.
+3. Run `just ci` locally — all checks must pass.
+4. Open a pull request against `main`. Stale approvals are automatically dismissed when new commits are pushed, so keep your PR up to date.
+5. Address review feedback, then wait for a maintainer to approve and merge.
+
+### For maintainers
+
+Maintainers with admin access may push directly to `main` when appropriate. The branch protection rules do not apply to admins. The bar for each direct commit is the same: `just ci` must pass completely before you push.
 
 ---
 

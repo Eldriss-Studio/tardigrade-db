@@ -59,19 +59,51 @@ impl TextStore {
     }
 
     /// Store text for a pack. Appends to the file and fsyncs.
+    ///
+    /// Thin wrapper over [`store_batch`](Self::store_batch) for the single-entry
+    /// case — the batch path is the canonical implementation.
     pub fn store(&mut self, pack_id: PackId, text: &str) -> io::Result<()> {
+        self.store_batch(&[(pack_id, text)])
+    }
+
+    /// Store many entries in a single append + fsync.
+    ///
+    /// Builds the full record buffer in memory, then performs one `write_all`
+    /// followed by one `sync_all`. For N entries this collapses N fsyncs into
+    /// one — orders of magnitude faster on fsync-bound workloads (migration,
+    /// bulk import).
+    ///
+    /// Last-writer-wins within the batch: if the same `pack_id` appears twice,
+    /// the later entry's text is what reads return after this call returns.
+    ///
+    /// # Recovery
+    ///
+    /// A crash between `write_all` and `sync_all` may leave the file with a
+    /// partial trailing record. [`Self::open`]'s replay discards trailing
+    /// records whose declared length exceeds the remaining bytes — durable
+    /// state is always a valid record prefix.
+    pub fn store_batch(&mut self, entries: &[(PackId, &str)]) -> io::Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let total_capacity: usize =
+            entries.iter().map(|(_, text)| RECORD_HEADER_SIZE + text.len()).sum();
+        let mut buffer = Vec::with_capacity(total_capacity);
+        for (pack_id, text) in entries {
+            let text_bytes = text.as_bytes();
+            buffer.extend_from_slice(&pack_id.to_le_bytes());
+            buffer.extend_from_slice(&(text_bytes.len() as u32).to_le_bytes());
+            buffer.extend_from_slice(text_bytes);
+        }
+
         let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;
-
-        let text_bytes = text.as_bytes();
-        let mut record = Vec::with_capacity(RECORD_HEADER_SIZE + text_bytes.len());
-        record.extend_from_slice(&pack_id.to_le_bytes());
-        record.extend_from_slice(&(text_bytes.len() as u32).to_le_bytes());
-        record.extend_from_slice(text_bytes);
-
-        file.write_all(&record)?;
+        file.write_all(&buffer)?;
         file.sync_all()?;
 
-        self.texts.insert(pack_id, text.to_owned());
+        for (pack_id, text) in entries {
+            self.texts.insert(*pack_id, (*text).to_owned());
+        }
         Ok(())
     }
 
@@ -202,6 +234,60 @@ mod tests {
         // Reopen also picks the latest.
         let store2 = TextStore::open(dir.path()).unwrap();
         assert_eq!(store2.get(1), Some("Updated version"));
+    }
+
+    #[test]
+    fn test_store_batch_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = TextStore::open(dir.path()).unwrap();
+
+        store.store_batch(&[(1, "first"), (2, "second"), (3, "third")]).unwrap();
+
+        assert_eq!(store.get(1), Some("first"));
+        assert_eq!(store.get(2), Some("second"));
+        assert_eq!(store.get(3), Some("third"));
+        assert_eq!(store.len(), 3);
+    }
+
+    #[test]
+    fn test_store_batch_empty_is_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(TEXT_STORE_FILENAME);
+        let mut store = TextStore::open(dir.path()).unwrap();
+
+        store.store_batch(&[]).unwrap();
+
+        // Empty batch must not create the file (avoids gratuitous I/O).
+        assert!(!path.exists());
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn test_store_batch_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut store = TextStore::open(dir.path()).unwrap();
+            store.store_batch(&[(10, "a"), (20, "b"), (30, "c")]).unwrap();
+        }
+
+        let store = TextStore::open(dir.path()).unwrap();
+        assert_eq!(store.get(10), Some("a"));
+        assert_eq!(store.get(20), Some("b"));
+        assert_eq!(store.get(30), Some("c"));
+    }
+
+    #[test]
+    fn test_store_batch_last_writer_wins_within_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = TextStore::open(dir.path()).unwrap();
+
+        store.store_batch(&[(1, "first"), (1, "overwritten")]).unwrap();
+
+        assert_eq!(store.get(1), Some("overwritten"));
+
+        // Reopen reads the file and the second record wins on replay.
+        let store2 = TextStore::open(dir.path()).unwrap();
+        assert_eq!(store2.get(1), Some("overwritten"));
     }
 
     #[test]
