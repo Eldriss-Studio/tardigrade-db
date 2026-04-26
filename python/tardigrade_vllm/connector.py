@@ -44,6 +44,16 @@ logger = logging.getLogger("tardigrade_vllm")
 
 if HAS_VLLM:
 
+    class _TardigradeConnectorMetadata(KVConnectorMetadata):
+        """Per-step metadata passed scheduler → worker.
+
+        Currently empty: in single-process mode the worker reads load state
+        directly from the connector instance's _load_packs / _load_meta dicts.
+        Reserved for future distributed serving where scheduler and worker
+        live in separate processes.
+        """
+        pass
+
     class TardigradeConnector(KVConnectorBase_V1):
         """vLLM KV Connector that persists KV cache in TardigradeDB.
 
@@ -216,13 +226,19 @@ if HAS_VLLM:
                     "num_tokens": num_external_tokens,
                 }
 
-        def build_connector_meta(self, scheduler_output) -> Optional["KVConnectorMetadata"]:
-            """Build metadata for worker-side load. Currently no-op.
+        def build_connector_meta(self, scheduler_output) -> "KVConnectorMetadata":
+            """Build metadata for worker-side load.
 
-            In a full implementation, this would package the matched pack IDs
-            and block mappings for the worker to load during forward.
+            vLLM 0.19+ requires a non-None KVConnectorMetadata instance per
+            scheduler step (asserted in gpu_model_runner). Even when there is
+            nothing scheduler-side to communicate, return an empty instance.
+
+            In a full distributed implementation, this would package the
+            matched pack IDs and block mappings for the worker to load during
+            forward. For single-process testing the worker reads directly from
+            self._load_packs / self._load_meta.
             """
-            return None
+            return _TardigradeConnectorMetadata()
 
         # -- Worker-side methods ---------------------------------------------------
 
@@ -304,19 +320,29 @@ if HAS_VLLM:
             The actual pack write happens in wait_for_save() when all layers
             are accumulated.
             """
-            # Extract layer index from layer_name (e.g., "layers.0.self_attn")
-            try:
-                layer_idx = int(layer_name.split(".")[1])
-            except (IndexError, ValueError):
+            # vLLM layer_name examples across versions:
+            #   "layers.0.self_attn"               (vLLM 0.9.x)
+            #   "model.layers.0.self_attn.attn"    (vLLM 0.19+)
+            # Find the integer immediately following the "layers" segment.
+            layer_idx = None
+            parts = layer_name.split(".")
+            for i, p in enumerate(parts):
+                if p == "layers" and i + 1 < len(parts):
+                    try:
+                        layer_idx = int(parts[i + 1])
+                        break
+                    except ValueError:
+                        pass
+            if layer_idx is None:
+                logger.debug(
+                    f"save_kv_layer: could not parse layer index from {layer_name!r}"
+                )
                 return
 
-            # kv_layer is a tuple of (k_cache, v_cache) tensors
-            # Each is (num_tokens, num_kv_heads, head_dim) or block-shaped
             if kv_layer is None:
                 return
 
-            # Accumulate — keyed by a request identifier from attn_metadata
-            # For simplicity, use a single buffer (batch=1 assumption for now)
+            # Single-batch buffer (vLLM connector is per-step, not per-request)
             buf = self._save_buffers.setdefault("current", {})
             buf[layer_idx] = kv_layer
 
@@ -328,29 +354,66 @@ if HAS_VLLM:
             """
             buf = self._save_buffers.pop("current", None)
             if not buf or len(buf) < self.num_layers:
+                logger.debug(
+                    f"wait_for_save: skipping write — buf_size="
+                    f"{len(buf) if buf else 0}, expected={self.num_layers}"
+                )
                 return
 
-            # Build pack layers from accumulated blocks
-            from tardigrade_hooks.encoding import encode_per_token
+            # In vLLM 0.19, kv_layer is the FULL GPU KV cache for that layer:
+            #   torch.Tensor of shape [2, num_blocks, block_size, num_kv_heads, head_dim]
+            #   where dim 0 is K (idx 0) vs V (idx 1).
+            #
+            # Saving the full cache would be ~12 GiB across 28 layers — we only
+            # want this request's blocks. Without per-request block_ids in
+            # attn_metadata yet, save block 0 as a proof-of-round-trip.
+            #
+            # TODO: thread per-request slot_mapping/block_ids from attn_metadata
+            # so we save exactly the tokens this request produced.
+            BLOCK_SLICE = 1  # number of leading blocks to capture per layer
 
             layer_payloads = []
             for layer_idx in sorted(buf.keys()):
                 kv = buf[layer_idx]
-                if hasattr(kv, '__len__') and len(kv) == 2:
-                    k_cache, v_cache = kv
-                    # Convert to numpy
-                    if hasattr(k_cache, 'detach'):
-                        k_np = k_cache.detach().cpu().numpy().astype(np.float32)
-                        v_np = v_cache.detach().cpu().numpy().astype(np.float32)
-                    else:
-                        k_np = np.asarray(k_cache, dtype=np.float32)
-                        v_np = np.asarray(v_cache, dtype=np.float32)
 
-                    # Flatten to TardigradeDB format: [K_flat | V_flat]
-                    flat = np.concatenate([k_np.ravel(), v_np.ravel()])
-                    layer_payloads.append((layer_idx, flat))
+                if not hasattr(kv, "shape"):
+                    # Older vLLM format: tuple (k_cache, v_cache) — backward compat
+                    if hasattr(kv, "__len__") and len(kv) == 2:
+                        k_cache, v_cache = kv
+                        k_np = (k_cache.detach().cpu().numpy().astype(np.float32)
+                                if hasattr(k_cache, "detach")
+                                else np.asarray(k_cache, dtype=np.float32))
+                        v_np = (v_cache.detach().cpu().numpy().astype(np.float32)
+                                if hasattr(v_cache, "detach")
+                                else np.asarray(v_cache, dtype=np.float32))
+                    else:
+                        continue
+                else:
+                    # vLLM 0.19+ format: single Tensor [2, blocks, bs, h, d]
+                    if kv.dim() != 5 or kv.shape[0] != 2:
+                        logger.debug(
+                            f"wait_for_save: unexpected kv_layer shape "
+                            f"for layer {layer_idx}: {tuple(kv.shape)}"
+                        )
+                        continue
+                    # Cast to float32 in torch first — numpy can't handle bfloat16
+                    import torch as _torch
+                    sliced = (
+                        kv[:, :BLOCK_SLICE]
+                        .detach()
+                        .to(_torch.float32)
+                        .cpu()
+                        .numpy()
+                    )
+                    k_np = sliced[0]  # (BLOCK_SLICE, bs, h, d)
+                    v_np = sliced[1]
+
+                # Flatten to TardigradeDB format: [K_flat | V_flat]
+                flat = np.concatenate([k_np.ravel(), v_np.ravel()])
+                layer_payloads.append((layer_idx, flat))
 
             if not layer_payloads:
+                logger.debug("wait_for_save: no layer payloads built")
                 return
 
             # Generate a simple retrieval key (mean of first layer K values)
@@ -364,9 +427,12 @@ if HAS_VLLM:
                 pack_id = self.engine.mem_write_pack(
                     self.owner, retrieval_key, layer_payloads, 80.0
                 )
-                logger.debug(f"Saved KV pack {pack_id} ({len(layer_payloads)} layers)")
+                logger.debug(
+                    f"wait_for_save: wrote pack {pack_id} "
+                    f"({len(layer_payloads)} layers)"
+                )
             except Exception as e:
-                logger.warning(f"Failed to save KV pack: {e}")
+                logger.warning(f"wait_for_save: write failed: {e!r}")
 
         # -- Optional lifecycle methods --------------------------------------------
 
@@ -374,12 +440,23 @@ if HAS_VLLM:
             self,
             request,
             block_ids,
-        ) -> None:
-            """Clean up per-request state (defensive — start_load_kv already cleans)."""
+        ) -> tuple[bool, Optional[dict]]:
+            """Clean up per-request state.
+
+            vLLM 0.19+ requires this to return (delay_free_blocks, kv_xfer_params):
+              - delay_free_blocks=True if the connector is asynchronously
+                saving/sending and blocks must NOT be freed yet.
+              - kv_xfer_params: optional dict surfaced in request outputs.
+
+            We save synchronously in wait_for_save() during the same forward
+            pass, so blocks can be freed immediately. Defensive cleanup of
+            any leftover per-request state.
+            """
             req_id = getattr(request, "request_id", id(request))
             self._load_packs.pop(req_id, None)
             self._load_meta.pop(req_id, None)
             self._save_buffers.pop(req_id, None)
+            return False, None
 
         def shutdown(self) -> None:
             """Clean shutdown — engine handles its own persistence."""

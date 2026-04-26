@@ -53,19 +53,25 @@ def llm(db_path):
     Uses in-process engine (not HTTP server) for faster testing.
     Scope=module so the model loads once for all tests.
     """
-    from vllm import LLM, SamplingParams
+    from vllm import LLM
+    from vllm.config import KVTransferConfig
 
-    connector_config = {
-        "db_path": db_path,
-        "owner": 1,
-    }
+    kv_config = KVTransferConfig(
+        kv_connector="TardigradeConnector",
+        kv_connector_module_path="tardigrade_vllm.connector",
+        kv_role="kv_both",
+        kv_connector_extra_config={
+            "db_path": db_path,
+            "owner": 1,
+        },
+    )
 
     llm_instance = LLM(
         model=MODEL_NAME,
-        kv_connector="tardigrade_vllm.connector.TardigradeConnector",
-        kv_connector_config=connector_config,
+        kv_transfer_config=kv_config,
         max_model_len=512,  # Keep VRAM usage low
         gpu_memory_utilization=0.8,
+        enforce_eager=True,  # Skip CUDA graph compilation for faster startup
     )
     yield llm_instance
     # Cleanup handled by garbage collection
@@ -75,7 +81,7 @@ def llm(db_path):
 
 @gpu
 @requires_cuda
-def test_save_path_stores_pack_during_generation(llm, engine):
+def test_save_path_stores_pack_during_generation(llm, engine, db_path):
     """GIVEN vLLM serving with TardigradeConnector,
     WHEN a completion request is processed,
     THEN engine.pack_count() increments and the pack has layer data."""
@@ -91,39 +97,39 @@ def test_save_path_stores_pack_during_generation(llm, engine):
     assert len(outputs) == 1
     assert len(outputs[0].outputs[0].text) > 0, "Should generate some text"
 
-    new_count = engine.pack_count()
+    # The connector inside vLLM's EngineCore subprocess writes packs to the
+    # same on-disk path. Re-open the engine here so we observe its writes.
+    fresh_engine = tardigrade_db.Engine(db_path)
+    new_count = fresh_engine.pack_count()
     assert new_count > initial_count, (
-        f"Expected pack_count to increase from {initial_count}, got {new_count}"
+        f"Expected pack_count to increase from {initial_count}, got {new_count} "
+        f"(in-process engine sees {engine.pack_count()})"
     )
 
 
 @gpu
 @requires_cuda
-def test_saved_pack_contains_expected_layers(llm, engine):
+def test_saved_pack_contains_expected_layers(llm, db_path):
     """GIVEN a pack saved during generation,
     WHEN loaded by ID,
     THEN it contains the expected number of layers with non-empty data."""
-    # Ensure at least one pack exists
-    if engine.pack_count() == 0:
-        from vllm import SamplingParams
-        llm.generate(
-            ["A simple test prompt"],
-            SamplingParams(max_tokens=10, temperature=0.0),
-        )
+    from vllm import SamplingParams
 
-    # Load the most recently written pack
-    # (Query with a generic key to find any pack)
-    query_key = np.ones(8, dtype=np.float32)  # Dimension must match model
-    try:
-        results = engine.mem_read_pack(query_key, 1, None)
-        assert len(results) >= 1, "Should find at least one pack"
-        pack = results[0]
-        assert len(pack["layers"]) > 0, "Pack should have layer data"
-        for layer in pack["layers"]:
-            assert len(layer["data"]) > 0, "Layer data should be non-empty"
-    except Exception:
-        # If query dimension doesn't match, just verify pack_count
-        assert engine.pack_count() > 0
+    # Generate to ensure a fresh pack exists this test
+    llm.generate(
+        ["A simple test prompt"],
+        SamplingParams(max_tokens=10, temperature=0.0),
+    )
+
+    # Reopen engine to see writes from EngineCore subprocess
+    fresh_engine = tardigrade_db.Engine(db_path)
+    assert fresh_engine.pack_count() > 0, "Should have at least one pack"
+
+    # Load pack #1 directly by ID — avoids the SLB dimension matching dance
+    pack = fresh_engine.load_pack_by_id(1)
+    assert len(pack["layers"]) > 0, "Pack should have layer data"
+    for layer in pack["layers"]:
+        assert len(layer["data"]) > 0, "Layer data should be non-empty"
 
 
 # -- Load Path Tests ----------------------------------------------------------
@@ -182,13 +188,13 @@ def test_round_trip_produces_coherent_output(llm, engine):
 
 @gpu
 @requires_cuda
-def test_multiple_generations_accumulate_packs(llm, engine):
+def test_multiple_generations_accumulate_packs(llm, db_path):
     """GIVEN multiple generation requests,
     WHEN each completes,
     THEN pack_count increases monotonically."""
     from vllm import SamplingParams
 
-    count_before = engine.pack_count()
+    count_before = tardigrade_db.Engine(db_path).pack_count()
 
     prompts = [
         "The speed of light is approximately",
@@ -197,7 +203,7 @@ def test_multiple_generations_accumulate_packs(llm, engine):
     for prompt in prompts:
         llm.generate([prompt], SamplingParams(max_tokens=10, temperature=0.0))
 
-    count_after = engine.pack_count()
+    count_after = tardigrade_db.Engine(db_path).pack_count()
     assert count_after >= count_before + len(prompts), (
         f"Expected at least {len(prompts)} new packs, "
         f"got {count_after - count_before}"
