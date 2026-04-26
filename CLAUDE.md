@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All implementation phases complete. 370 tests (238 Rust + 132 Python). KV Pack API in Rust engine for atomic multi-layer KV storage and retrieval. KV injection validated byte-identical to text RAG (8/10 novel facts through full Q4 pipeline). Hidden states + Top5Avg retrieval at 96-100% recall. `KnowledgePackStore` is the canonical injection path.
+**Status:** All implementation phases complete. 383+ tests (238 Rust + 145 Python). KV Pack API in Rust engine for atomic multi-layer KV storage and retrieval. KV injection validated byte-identical to text RAG (8/10 novel facts through full Q4 pipeline). Hidden states + Top5Avg retrieval at 96-100% recall. `KnowledgePackStore` is the canonical injection path. **vLLM KV Connector v1 integration** validated end-to-end on Qwen3-0.6B with vLLM 0.19 (5 GPU integration tests passing).
 
 ## Build & Test
 
@@ -39,12 +39,13 @@ cargo test test_rebuild_retriever                     # run a single test by nam
 
 Note: `tdb-python` is excluded from `cargo test/clippy` because PyO3 needs `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` on Python 3.14.
 
-### Python tests (110 tests)
+### Python tests (145 tests)
 
 ```bash
 source .venv/bin/activate
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
-pytest tests/python/ -v
+pytest tests/python/ -v -m "not gpu"        # CPU-only (safe everywhere)
+pytest tests/python/ -v -m gpu              # vLLM round-trip (Linux + GPU + vLLM ≥ 0.19)
 ```
 
 ### Benchmarks
@@ -75,9 +76,9 @@ Captures KV cache from GPT-2 inference on *"The capital of France is"*, then ret
 | Organization | tdb-index | 24 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
 | Governance | tdb-governance | 27 | Importance scoring, tier hysteresis, recency decay, sweep |
 | Engine | tdb-engine | 96 | Write/read, pack API, text storage (single + batch), delete, state rebuild, SLB chain, Vamana activation |
-| Python | pytest | 132 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, migration, diagnostics, RAG baseline |
+| Python | pytest | 145 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, migration, diagnostics, RAG baseline, vLLM connector format/load-path/integration (4+4+4+5 with `-m gpu`) |
 
-Per-crate counts include unit + acceptance + doctest tests. Sum: 6+34+51+24+27+96+132 = 370.
+Per-crate counts include unit + acceptance + doctest tests. Sum: 6+34+51+24+27+96+145 = 383.
 
 ## Crate Structure
 

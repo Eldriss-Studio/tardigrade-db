@@ -53,6 +53,26 @@ Two parallel Codex subagents (different agent models) executed separate Sonia ex
 - `sonia_production_sim.py`: recall was equal between modes (`31.2%` each) but per-token showed much larger SNR separation
 - Both runs completed successfully with no operational blockers
 
+### vLLM KV Connector — End-to-End Round-Trip
+
+**Date:** April 26, 2026
+**Status:** Complete — 5/5 GPU integration tests passing
+
+First validation that TardigradeDB plugs into a production LLM serving framework. The `tardigrade_vllm.connector.TardigradeConnector` implements vLLM's KV Connector v1 API, captures KV during generation, persists packs to TardigradeDB, and runs the scheduler-side semantic match for incoming requests. Tested in WSL2 + Ubuntu 24.04 with an RTX 3070 Ti.
+
+**Setup:** vLLM 0.19.1, PyTorch 2.10 (CUDA 12.8), Qwen3-0.6B (28 layers, 8 KV heads, head_dim=128, kv_dim=1024) loaded in bf16 with `enforce_eager=True` and `max_model_len=512`.
+
+**Findings:**
+- **Save path works on real generation.** A 20-token completion writes 20 packs (one per forward pass), each containing all 28 layers. Mean-pooled K of layer 0 is the retrieval key.
+- **Semantic matching runs.** Scheduler-side `get_num_new_matched_tokens` computes a retrieval key from prompt token IDs via the model's embedding table (no GPU forward), queries `mem_read_pack_with_trace_boost`, and reports matched tokens. No crashes when `start_load_kv` runs.
+- **Round-trip generation stays coherent.** Multi-prompt sessions accumulate packs monotonically and the model still produces valid text.
+- **vLLM 0.19 contract drift surfaced four real bugs vs the 0.9-era code:** `build_connector_meta` must return non-None, `request_finished` must return `(bool, dict|None)`, `kv_layer` is now a single Tensor `[2, blocks, bs, h, d]` (K stacked with V), layer names are `"model.layers.N.self_attn.attn"`, and bf16 needs an explicit cast before `.numpy()`.
+- **Cross-process engine state is NOT shared.** TardigradeDB caches engine state at `Engine::open()`. The connector lives in vLLM's `EngineCore` subprocess; observers must reopen the engine to see fresh writes. This was caught only because the GPU integration test asserted on `pack_count` from a different process.
+
+**Known gap (not an architectural problem, just unfinished work):** `save_kv_layer` doesn't yet thread per-request `slot_mapping` from `attn_metadata`, so the save path captures block 0 of each layer as a placeholder. The pipe is proven; the cargo is a stub. See `docs/guide/vllm-setup.md` for the full status table and limitations.
+
+**Tests:** `tests/python/test_vllm_format.py` (4 unit), `tests/python/test_vllm_connector.py` (4 engine-surface), `tests/python/test_vllm_load_path.py` (4 mock-context for `start_load_kv`), `tests/python/test_vllm_integration.py` (5 GPU acceptance with `-m gpu`).
+
 ### [KV Cache Validation — Full Progression](kv-cache-validation.md)
 
 **Date:** April 22-23, 2026
@@ -92,6 +112,8 @@ Systematic exploration of what to store and how to retrieve, tested on Sonia (16
 | Confidence thresholding | Calibrate "I don't remember" cutoff using SNR | Planned |
 | [Cross-model retrieval](cross-model-memory-test.md) | Store with one model, retrieve with another | Designed |
 | RoPE injection | Test KV injection with rotary position encoding | Planned |
+| **vLLM connector — semantic save** | Thread per-request `slot_mapping` from `attn_metadata` so save captures the request's actual blocks (not placeholder block 0). Validate that re-querying the same prompt returns the stored KV with non-zero overlap. | Planned (next vLLM work) |
+| **vLLM cross-session retrieval** | Save with vLLM run #1, restart, query with vLLM run #2. Confirm load path injects the prior session's KV and `start_load_kv` writes non-zero data into the allocated GPU block slots. | Planned |
 
 ## Running Experiments
 

@@ -39,6 +39,7 @@ At runtime, TardigradeDB acts like a memory engine for agents:
 4. It tracks causal links and importance so memory can evolve over time.
 5. It exposes the engine through Rust APIs and Python bindings (`KnowledgePackStore` for end-to-end injection).
 6. It ships a comparable benchmark harness (`tdb_bench`) for transparent system-to-system evaluation.
+7. It plugs into **vLLM** (production LLM serving) via the official KV Connector v1 API — captures KV during generation, persists as packs, and matches future requests via embedding-table semantic lookup. Validated with Qwen3-0.6B on vLLM 0.19 (5 GPU integration tests passing).
 
 If you only need one mental model: **capture memory state, persist it, retrieve it later with attention-compatible relevance, and inject it directly into the model's attention cache.**
 
@@ -186,9 +187,9 @@ kps.store_linked(["Fact A about Tomoko", "Fact B about Tomoko"])
 
 The Rust kernel (storage, retrieval, governance, indexing — 238 tests) is a self-contained library. It does not need Python.
 
-Python exists for one reason: **to bridge TardigradeDB to model inference frameworks**. HuggingFace Transformers is the only practical way to access a model's KV cache (`past_key_values`) on local hardware. The Python layer (`tardigrade_hooks`) captures those tensors and feeds them to the Rust engine via PyO3 bindings.
+Python exists for two reasons: **to bridge TardigradeDB to model inference frameworks**. HuggingFace Transformers is the only practical way to access a model's KV cache (`past_key_values`) on local hardware. The Python layer (`tardigrade_hooks`) captures those tensors and feeds them to the Rust engine via PyO3 bindings.
 
-In production, this bridge would be replaced by a direct Rust integration with vLLM or SGLang (serving frameworks that expose KV cache internals). The Python layer is an experiment adapter, not a permanent architecture requirement.
+It also hosts the **vLLM KV Connector** (`tardigrade_vllm.connector`), which plugs into vLLM's official KV Connector v1 API (validated end-to-end on vLLM 0.19 with Qwen3-0.6B). See [docs/guide/vllm-setup.md](docs/guide/vllm-setup.md). Long-term, both bridges may be reimplemented as direct Rust integrations with vLLM or SGLang; today they are Python adapters.
 
 **Measured prototype performance** (Apple M-series, release mode, criterion):
 
@@ -326,7 +327,7 @@ cd tardigrade-db
 # Build Rust workspace
 cargo build --workspace
 
-# Run all Rust tests (180 unit/acceptance + doctests)
+# Run all Rust tests (238 unit/acceptance + 10 doctests)
 cargo nextest run --workspace --exclude tdb-python
 cargo test --doc --workspace --exclude tdb-python
 
@@ -384,12 +385,17 @@ cargo fmt --all -- --check                            # format check
 just test-crate tdb-storage                           # single crate
 ```
 
-### Python (110 tests)
+### Python (145 tests)
 
 ```bash
 source .venv/bin/activate
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
-pytest tests/python/ -v
+
+# All CPU tests (skips GPU vLLM tests if vLLM/CUDA missing)
+pytest tests/python/ -v -m "not gpu"
+
+# GPU + vLLM round-trip tests (requires Linux + NVIDIA GPU + vLLM ≥ 0.19)
+pytest tests/python/test_vllm_integration.py -v -m gpu
 ```
 
 ### Benchmarks (criterion)
@@ -445,11 +451,11 @@ PYTHONPATH=python python -m tdb_bench compare \
 | Governance | `tdb-governance` | 22 | Importance scoring, tier hysteresis, recency decay, sweep |
 | Engine | `tdb-engine` | 34 | Write/read, pack API, state rebuild, SLB chain, Vamana activation, throughput |
 | Docs | doctests | 10 | Crate-level usage examples |
-| Python | pytest | 110 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, KnowledgePackStore, multi-memory injection, trace-linked retrieval, store_and_link, RoPE composer, diagnostics, RAG baseline, sweep |
+| Python | pytest | 145 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, KnowledgePackStore, multi-memory injection, trace-linked retrieval, store_and_link, RoPE composer, diagnostics, RAG baseline, sweep, **vLLM connector format/load-path/integration (4 + 4 + 4 + 5 with `-m gpu`)** |
 
 ## Research Milestones Implemented
 
-**All 11 planned prototype phases are implemented.** Current evidence: 117 tests passing and end-to-end demos/experiments working.
+**All 11 planned prototype phases are implemented.** Current evidence: 383+ tests passing (238 Rust + 145 Python including vLLM round-trip on Qwen3-0.6B) and end-to-end demos/experiments working.
 
 ### Storage Layer — Custom from scratch, not a wrapper
 
@@ -518,7 +524,8 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] Multi-memory: trace-linked retrieval (`store_linked`, `store_and_link`, trace-boosted scoring) — 70% at 140 memories
 - [x] Durable text persistence — Rust-side `TextStore` (append-only, fsynced) replaces fragile JSON sidecar, with lazy migration of legacy data
 - [x] Delete API — `delete_pack` / `tardigrade_forget` with crash-safe `DeletionLog`
-- [x] 370 tests (238 Rust + 132 Python)
+- [x] **vLLM KV Connector v1 integration** — `tardigrade_vllm.connector.TardigradeConnector` captures KV during vLLM generation and persists as packs; semantic matching via model embedding table; load path tensor copy implemented. End-to-end validated on Qwen3-0.6B with vLLM 0.19. Known gap: per-request `slot_mapping` not yet threaded — currently saves block 0 as proof of round-trip. See [vllm-setup.md](docs/guide/vllm-setup.md).
+- [x] 370+ tests (238 Rust + 145 Python including vLLM connector + integration suites)
 
 ### Next up
 
@@ -529,7 +536,8 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 ### Future
 
-- [ ] **vLLM / SGLang integration** — Adapter that hooks into their paged KV cache manager for production serving.
+- [ ] **vLLM connector — production-quality save path** — Thread per-request `slot_mapping` from `attn_metadata` through `save_kv_layer` so packs capture only the blocks the request actually used (today saves block 0 as proof of round-trip). Coalesce one pack per request instead of one per forward step. Support multi-request batching (today assumes batch=1).
+- [ ] **SGLang integration** — Equivalent connector for SGLang's KV cache manager.
 - [ ] **CUDA GPU DMA kernels** — Direct NVMe→GPU transfers via cuFile/GDS for GPU-resident inference.
 - [ ] **Disk-aware Vamana** — PageANN-style page-node alignment for billion-scale cold storage on NVMe.
 - [ ] **Multi-model dimension support** — Handle different models (different d_k) in one engine instance.
