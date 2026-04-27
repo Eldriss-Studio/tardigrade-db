@@ -148,9 +148,19 @@ if HAS_VLLM:
             self._embed_weights = None  # lazy-loaded from model weights
 
             # Per-request state. save_buffers is keyed by step-local
-            # batch_index for now; Step 2 will key by stable request_id once
-            # update_state_after_alloc correlation is wired up.
+            # batch_index. Across forward steps, save_kv_layer overwrites the
+            # same (batch_index, layer_idx) entry so we always hold the
+            # latest snapshot.
             self._save_buffers: dict = {}  # batch_index → {layer_idx: (kv_layer, BatchSlice)}
+
+            # Per-request pack tracking for coalescing (Step 2). Maps a stable
+            # request fingerprint (block_indices[0]) to the pack_id we last
+            # wrote for it. On each step we delete the old pack before writing
+            # the new one — net effect: one pack per request, contents = the
+            # latest snapshot. Worker- and scheduler-side connectors are
+            # separate instances, so we can't use request_finished here.
+            self._pack_id_by_fingerprint: dict[int, int] = {}
+
             self._load_packs = {}  # request_id → {pack_data, seq_len}
             self._load_meta = {}  # request_id → {block_ids, num_tokens}
 
@@ -392,11 +402,20 @@ if HAS_VLLM:
                 buf[layer_idx] = (kv_layer, sl)
 
         def wait_for_save(self) -> None:
-            """Flush accumulated layers to TardigradeDB, one pack per in-flight request.
+            """Commit one pack per in-flight request, deduplicated across steps.
 
-            For each batch_index buffered this step, slice the layer KV
-            tensors to this request's blocks (per ``BatchSlice``) and write
-            an atomic multi-layer pack.
+            Coalescing strategy (Step 2): commit on every forward pass, but
+            delete the previous pack for the same request before writing.
+            End state: one pack per request, contents = the latest snapshot.
+
+            Required because vLLM instantiates separate scheduler-side and
+            worker-side connectors — request_finished fires on the scheduler
+            but our buffer lives on the worker, so we can't defer commit to
+            the lifecycle hook.
+
+            Request fingerprint = first block index of the BatchSlice. Stable
+            for the lifetime of the request because block 0 (or whichever the
+            scheduler allocated first) does not get reassigned mid-request.
             """
             if not self._save_buffers:
                 return
@@ -404,21 +423,39 @@ if HAS_VLLM:
             for batch_idx in sorted(self._save_buffers.keys()):
                 layer_buf = self._save_buffers[batch_idx]
                 if len(layer_buf) < self.num_layers:
-                    logger.debug(
-                        f"wait_for_save: skipping batch_idx={batch_idx} "
-                        f"— have {len(layer_buf)} layers, expected {self.num_layers}"
-                    )
                     continue
-                self._write_pack_for_batch(layer_buf)
+
+                # Fingerprint from any layer's BatchSlice (block_indices is
+                # the same across layers within a step for a given request).
+                _, sample_slice = next(iter(layer_buf.values()))
+                fingerprint = (
+                    sample_slice.block_indices[0]
+                    if sample_slice.block_indices
+                    else (-1 - batch_idx)  # synthetic for unknown-block fallback
+                )
+
+                # Drop the previous pack for this request, if any.
+                prior = self._pack_id_by_fingerprint.get(fingerprint)
+                if prior is not None:
+                    try:
+                        self.engine.delete_pack(prior)
+                    except Exception as e:
+                        logger.debug(f"wait_for_save: stale delete failed: {e!r}")
+
+                pack_id = self._write_pack_for_batch(layer_buf)
+                if pack_id is not None:
+                    self._pack_id_by_fingerprint[fingerprint] = pack_id
 
             self._save_buffers.clear()
 
-        def _write_pack_for_batch(self, layer_buf: dict) -> None:
+        def _write_pack_for_batch(self, layer_buf: dict):
             """Build and write a pack from one request's accumulated layers.
 
             ``layer_buf`` is ``{layer_idx: (kv_layer_tensor, BatchSlice)}``.
             Slices each layer to ``BatchSlice.block_indices`` and trims to
             ``slot_count`` valid tokens before flattening.
+
+            Returns the new pack_id on success, None on failure / no payload.
             """
             import torch as _torch
 
@@ -434,7 +471,7 @@ if HAS_VLLM:
 
             if not layer_payloads:
                 logger.debug("wait_for_save: no layer payloads built")
-                return
+                return None
 
             # Retrieval key: mean of layer-0 K projection over the request's tokens.
             # Step 6 will replace this with the engine's empirically-validated
@@ -451,8 +488,10 @@ if HAS_VLLM:
                 logger.debug(
                     f"wait_for_save: wrote pack {pack_id} ({len(layer_payloads)} layers)"
                 )
+                return pack_id
             except Exception as e:
                 logger.warning(f"wait_for_save: write failed: {e!r}")
+                return None
 
         def _extract_kv_slice(self, kv, sl: BatchSlice, _torch):
             """Return (k_np, v_np) for one request's blocks within one layer.
@@ -515,21 +554,19 @@ if HAS_VLLM:
             request,
             block_ids,
         ) -> tuple[bool, Optional[dict]]:
-            """Clean up per-request state.
+            """Scheduler-side lifecycle hook. Cleanup only.
 
-            vLLM 0.19+ requires this to return (delay_free_blocks, kv_xfer_params):
-              - delay_free_blocks=True if the connector is asynchronously
-                saving/sending and blocks must NOT be freed yet.
-              - kv_xfer_params: optional dict surfaced in request outputs.
+            vLLM 0.19+ contract: returns (delay_free_blocks, kv_xfer_params).
+            We save synchronously inside the worker's wait_for_save, so blocks
+            can be freed immediately (False).
 
-            We save synchronously in wait_for_save() during the same forward
-            pass, so blocks can be freed immediately. Defensive cleanup of
-            any leftover per-request state.
+            Cannot commit packs here: scheduler and worker are separate
+            connector instances and the save buffer lives on the worker.
+            Pack coalescing happens via dedup-by-fingerprint in wait_for_save.
             """
             req_id = getattr(request, "request_id", id(request))
             self._load_packs.pop(req_id, None)
             self._load_meta.pop(req_id, None)
-            self._save_buffers.pop(req_id, None)
             return False, None
 
         def shutdown(self) -> None:

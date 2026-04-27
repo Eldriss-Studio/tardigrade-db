@@ -125,8 +125,16 @@ def test_saved_pack_contains_expected_layers(llm, db_path):
     fresh_engine = tardigrade_db.Engine(db_path)
     assert fresh_engine.pack_count() > 0, "Should have at least one pack"
 
-    # Load pack #1 directly by ID — avoids the SLB dimension matching dance
-    pack = fresh_engine.load_pack_by_id(1)
+    # Find any existing pack ID. With the Step 2 dedup-by-fingerprint
+    # strategy, pack IDs are not stable from 1 — earlier IDs get deleted
+    # as later snapshots overwrite them. Probe upward from 1 until we find
+    # an existing one, capped at a generous upper bound.
+    pack = None
+    for pid in range(1, 200):
+        if fresh_engine.pack_exists(pid):
+            pack = fresh_engine.load_pack_by_id(pid)
+            break
+    assert pack is not None, "Could not find any existing pack to inspect"
     assert len(pack["layers"]) > 0, "Pack should have layer data"
     for layer in pack["layers"]:
         assert len(layer["data"]) > 0, "Layer data should be non-empty"
@@ -204,7 +212,10 @@ def test_multiple_generations_accumulate_packs(llm, db_path):
         llm.generate([prompt], SamplingParams(max_tokens=10, temperature=0.0))
 
     count_after = tardigrade_db.Engine(db_path).pack_count()
-    assert count_after >= count_before + len(prompts), (
-        f"Expected at least {len(prompts)} new packs, "
-        f"got {count_after - count_before}"
+    # Step 2: exact equality — one pack per request, not one per forward step.
+    # Before Step 2, this would be ~10 packs per prompt (forward-pass count).
+    new_packs = count_after - count_before
+    assert new_packs == len(prompts), (
+        f"Expected exactly {len(prompts)} new packs (one per request), "
+        f"got {new_packs}"
     )
