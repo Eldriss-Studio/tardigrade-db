@@ -563,14 +563,29 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 ### Future
 
-**Cross-prompt memory injection (the "remember" use case):**
+#### Making the model remember across sessions — four paths to production
 
-- [ ] **Verify KnowledgePackStore claim with synthetic facts** — The HF path reports 8/10 novel facts byte-identical to Text RAG. Verify this holds with synthetic-fact methodology (made-up entities the model can't know from training). This is the real "memory" A/B test.
-- [ ] **Prefix-cache reframing for vLLM** — Define a per-user synthetic "memory prefix" whose KV is stored; on subsequent requests the prefix matches token-identically and vLLM's stock prefix-cache serves it. Turns the v1 connector limitation into a feature.
-- [ ] **SGLang connector contract research** — Check whether SGLang's KV connector has a more flexible contract than vLLM's (can it inject cross-prompt KV, or is it also prefix-cache only?).
-- [ ] **vLLM custom attention plugin** — For true cross-prompt KV injection in production serving, write a custom attention backend that mixes loaded KV with computed KV. Requires vLLM fork; heaviest path.
+The core problem: an LLM forgets everything between requests. TardigradeDB stores the model's own internal state (KV cache tensors) so it can be restored later — making the model behave as if it had already lived through prior conversations. The question is how to get that stored state back into the model at serving time.
 
-**Engine and infrastructure:**
+We discovered that vLLM's KV Connector v1 API only supports **prefix-cache acceleration** (same prompt prefix → skip recomputation). It cannot inject KV from a different prompt to influence generation. So there are four paths to actually making "remember" work in production, ordered from easiest to hardest:
+
+**Path 1 — Verify the HuggingFace path works with synthetic facts**
+
+The `KnowledgePackStore` (in `python/tardigrade_hooks/kp_injector.py`) already passes stored KV directly to HuggingFace's `model.generate(past_key_values=...)`. Earlier experiments report 8/10 novel facts recalled byte-identically to text RAG, with 46% fewer prompt tokens. But those experiments used facts that might exist in the model's training data. The next step is repeating the test with truly synthetic facts (made-up names, dates, and entities the model has never seen) to prove the recall comes from injection, not from the model's prior knowledge. This is hours of work, not days, and answers the fundamental question: does injection actually work?
+
+**Path 2 — Reframe the vLLM connector as a "memory prefix" cache**
+
+vLLM's prefix-cache requires token-identical matching — but we can work with that. The idea: define a fixed "memory prompt" per user or agent (e.g., a structured text block summarizing their accumulated memories), compute its KV once, store it in TardigradeDB, and prepend it to every future request. Because the prefix text is identical each time, vLLM's stock prefix-cache serves the stored KV automatically — no fork, no custom code, no API limitations. The model sees the memory context at zero prefill cost on repeat requests. This turns the v1 connector's limitation into a feature: TardigradeDB becomes a persistent, cross-session, disk-backed prefix cache with governance (promotion, decay, eviction) that plain vLLM doesn't have. Works with stock vLLM today.
+
+**Path 3 — Research SGLang's connector contract**
+
+SGLang is another production LLM serving framework. Its KV transfer/caching API may have a more flexible contract than vLLM's prefix-only model. If SGLang allows injecting KV that doesn't correspond to the literal prompt prefix — i.e., "here's extra context the model should attend to" — then it's the natural serving backend for TardigradeDB's memory injection. This is a research task: read SGLang's source, check the contract, and either build a connector or rule it out. A day of focused work to answer a binary question.
+
+**Path 4 — Custom attention plugin for vLLM (hardest, most flexible)**
+
+If neither Path 2 nor Path 3 is sufficient, the remaining option is to modify vLLM's attention layer directly. vLLM has an attention backend abstraction (`FlashAttention`, `FlashInfer`, `TritonAttention`). A custom backend could mix loaded "memory" KV with the current request's computed KV — effectively extending the attention window with stored activations without them being part of the prompt. This is real systems engineering: it requires a vLLM fork, careful handling of position encoding (RoPE offsets for the injected blocks), and ongoing maintenance as vLLM evolves. But it's the only path that gives full control over how stored memory participates in attention. Worth pursuing only after Paths 1-3 are evaluated.
+
+#### Engine and infrastructure
 
 - [ ] **CUDA GPU DMA kernels** — Direct NVMe→GPU transfers via cuFile/GDS for GPU-resident inference.
 - [ ] **Disk-aware Vamana** — PageANN-style page-node alignment for billion-scale cold storage on NVMe.
