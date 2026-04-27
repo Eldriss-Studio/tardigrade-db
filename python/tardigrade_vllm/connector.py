@@ -192,22 +192,28 @@ if HAS_VLLM:
         def _compute_retrieval_key(self, token_ids):
             """Compute a retrieval key from token IDs using the embedding table.
 
-            Mean-pools token embeddings into a single vector. Lightweight
-            alternative to full hidden-state computation — runs on CPU,
-            no GPU needed, no model forward pass.
+            Step 6: uses the LAST token's embedding (matches the save-side
+            choice of last-token K from the last layer). Mean-pooling lost
+            too much signal for paraphrased queries (engine evidence: 31%
+            recall via mean vs much higher with positional concentration).
+
+            Lightweight: runs on CPU, no GPU/forward pass — just a vocab
+            table lookup.
+
+            Note: this requires hidden_size == kv_dim, which holds for
+            Qwen3-0.6B (1024 == 8*128) but not for every model. A future
+            improvement would project the embedding into kv_dim space.
             """
             embed = self._get_embed_weights()
             if embed.size == 0 or len(token_ids) == 0:
                 return None
 
-            # Look up embeddings for each token
+            # Look up the last valid token's embedding only
             valid_ids = [tid for tid in token_ids if 0 <= tid < embed.shape[0]]
             if not valid_ids:
                 return None
 
-            token_embeds = embed[valid_ids]  # (n_tokens, hidden_size)
-            # Mean-pool to single vector
-            return token_embeds.mean(axis=0).astype(np.float32)
+            return embed[valid_ids[-1]].astype(np.float32)
 
         # -- Scheduler-side methods ------------------------------------------------
 
@@ -473,13 +479,23 @@ if HAS_VLLM:
                 logger.debug("wait_for_save: no layer payloads built")
                 return None
 
-            # Retrieval key: mean of layer-0 K projection over the request's tokens.
-            # Step 6 will replace this with the engine's empirically-validated
-            # hidden-states / per-token K strategy.
-            first_layer_data = layer_payloads[0][1]
-            half = len(first_layer_data) // 2
-            k_first_layer = first_layer_data[:half].reshape(-1, self.kv_dim)
-            retrieval_key = k_first_layer.mean(axis=0).astype(np.float32)
+            # Step 6 retrieval key: LAST-TOKEN K from the LAST LAYER.
+            #
+            # Engine evidence (docs/experiments/kv-cache-validation.md):
+            #   - mean-pool of layer-0 K → 31% recall ("gravity well" — the
+            #     averaged vector lands in a dense region near every other
+            #     averaged vector, so dot products don't discriminate).
+            #   - last-token K from a deep layer → carries the model's
+            #     "current focus" after attending over the full prompt;
+            #     much better signal for paraphrased queries.
+            #
+            # Constraint: mem_write_pack accepts one key per pack. The richer
+            # per-token Top5Avg path would require a different storage
+            # primitive (per-cell write); deferred as a separate plan.
+            last_layer_data = layer_payloads[-1][1]
+            half = len(last_layer_data) // 2
+            k_last_layer = last_layer_data[:half].reshape(-1, self.kv_dim)
+            retrieval_key = k_last_layer[-1].astype(np.float32)  # last token
 
             try:
                 pack_id = self.engine.mem_write_pack(
