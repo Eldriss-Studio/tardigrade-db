@@ -39,7 +39,7 @@ At runtime, TardigradeDB acts like a memory engine for agents:
 4. It tracks causal links and importance so memory can evolve over time.
 5. It exposes the engine through Rust APIs and Python bindings (`KnowledgePackStore` for end-to-end injection).
 6. It ships a comparable benchmark harness (`tdb_bench`) for transparent system-to-system evaluation.
-7. It plugs into **vLLM** (production LLM serving) via the official KV Connector v1 API — captures KV during generation, persists as packs, and matches future requests via embedding-table semantic lookup. Validated with Qwen3-0.6B on vLLM 0.19 (5 GPU integration tests passing).
+7. It plugs into **vLLM** (production LLM serving) via the official KV Connector v1 API as a **persistent prefix-cache accelerator** — captures KV during generation, persists as packs, and accelerates re-serve of identical prompt prefixes. Validated with Qwen3-0.6B on vLLM 0.19. Note: the v1 connector API is prefix-cache only (token-identical prefix matching); cross-prompt "memory" injection requires the HuggingFace `KnowledgePackStore` path instead. See [experiments/README.md](docs/experiments/README.md) for the full architectural analysis.
 
 If you only need one mental model: **capture memory state, persist it, retrieve it later with attention-compatible relevance, and inject it directly into the model's attention cache.**
 
@@ -551,7 +551,7 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] Multi-memory: trace-linked retrieval (`store_linked`, `store_and_link`, trace-boosted scoring) — 70% at 140 memories
 - [x] Durable text persistence — Rust-side `TextStore` (append-only, fsynced) replaces fragile JSON sidecar, with lazy migration of legacy data
 - [x] Delete API — `delete_pack` / `tardigrade_forget` with crash-safe `DeletionLog`
-- [x] **vLLM KV Connector v1 integration** — `tardigrade_vllm.connector.TardigradeConnector` captures KV during vLLM generation and persists as packs; semantic matching via model embedding table; load path tensor copy implemented. End-to-end validated on Qwen3-0.6B with vLLM 0.19. Known gap: per-request `slot_mapping` not yet threaded — currently saves block 0 as proof of round-trip. See [vllm-setup.md](docs/guide/vllm-setup.md).
+- [x] **vLLM KV Connector v1 integration** — `tardigrade_vllm.connector.TardigradeConnector` captures KV during vLLM generation (per-request slot extraction, one pack per request via fingerprint dedup), persists as packs, and supports cross-process state sync via `Engine.refresh()`. Validated on Qwen3-0.6B with vLLM 0.19 (27 tests: 22 CPU + 5 GPU + 1 cross-session). **Architectural finding: the v1 connector API is prefix-cache only (token-identical prefix matching) — it cannot carry cross-prompt KV injection.** The "memory" pitch is served by the HuggingFace `KnowledgePackStore` path instead. See [experiments/README.md](docs/experiments/README.md).
 - [x] 370+ tests (238 Rust + 145 Python including vLLM connector + integration suites)
 
 ### Next up
@@ -563,8 +563,15 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 ### Future
 
-- [ ] **vLLM connector — production-quality save path** — Thread per-request `slot_mapping` from `attn_metadata` through `save_kv_layer` so packs capture only the blocks the request actually used (today saves block 0 as proof of round-trip). Coalesce one pack per request instead of one per forward step. Support multi-request batching (today assumes batch=1).
-- [ ] **SGLang integration** — Equivalent connector for SGLang's KV cache manager.
+**Cross-prompt memory injection (the "remember" use case):**
+
+- [ ] **Verify KnowledgePackStore claim with synthetic facts** — The HF path reports 8/10 novel facts byte-identical to Text RAG. Verify this holds with synthetic-fact methodology (made-up entities the model can't know from training). This is the real "memory" A/B test.
+- [ ] **Prefix-cache reframing for vLLM** — Define a per-user synthetic "memory prefix" whose KV is stored; on subsequent requests the prefix matches token-identically and vLLM's stock prefix-cache serves it. Turns the v1 connector limitation into a feature.
+- [ ] **SGLang connector contract research** — Check whether SGLang's KV connector has a more flexible contract than vLLM's (can it inject cross-prompt KV, or is it also prefix-cache only?).
+- [ ] **vLLM custom attention plugin** — For true cross-prompt KV injection in production serving, write a custom attention backend that mixes loaded KV with computed KV. Requires vLLM fork; heaviest path.
+
+**Engine and infrastructure:**
+
 - [ ] **CUDA GPU DMA kernels** — Direct NVMe→GPU transfers via cuFile/GDS for GPU-resident inference.
 - [ ] **Disk-aware Vamana** — PageANN-style page-node alignment for billion-scale cold storage on NVMe.
 - [ ] **Multi-model dimension support** — Handle different models (different d_k) in one engine instance.

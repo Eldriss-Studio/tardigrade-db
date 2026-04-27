@@ -55,6 +55,20 @@ impl DeletionLog {
         Ok(Self { path, deleted })
     }
 
+    /// Re-read the on-disk file and rebuild the deleted set.
+    ///
+    /// Used by [`Engine::refresh`] to pick up deletions performed by another
+    /// `Engine` handle at the same path. Idempotent: repeated calls with no
+    /// on-disk changes leave the set unchanged.
+    pub fn refresh(&mut self) -> io::Result<()> {
+        self.deleted = if self.path.exists() {
+            Self::replay(&self.path)?
+        } else {
+            HashSet::new()
+        };
+        Ok(())
+    }
+
     /// Mark a pack as deleted. Appends to the file and fsyncs.
     pub fn mark_deleted(&mut self, pack_id: PackId) -> io::Result<()> {
         let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;

@@ -120,6 +120,9 @@ if HAS_VLLM:
                 super().__init__(vllm_config, role)
 
             self.kv_cache_config = kv_cache_config
+            # Stored for lazy embedding-table load in _get_embed_weights.
+            # The base class doesn't expose vllm_config under this name.
+            self.vllm_config = vllm_config
             config = vllm_config.kv_transfer_config.kv_connector_extra_config or {}
             db_path = config.get("db_path", os.environ.get("TARDIGRADE_DB_PATH", "./tardigrade-memory"))
             self.owner = config.get("owner", int(os.environ.get("TARDIGRADE_OWNER", "1")))
@@ -184,7 +187,12 @@ if HAS_VLLM:
                 self._embed_weights = model.get_input_embeddings().weight.detach().cpu().numpy()
                 del model
                 logger.info(f"Loaded embedding table: {self._embed_weights.shape}")
-            except Exception as e:
+            except (ImportError, OSError, ValueError, RuntimeError) as e:
+                # Narrow catch: only legitimate failures (transformers missing,
+                # model not on disk, HF auth error, OOM). Programming errors
+                # like AttributeError MUST propagate so they fail loudly in
+                # tests instead of being silently masked. (See feedback memory:
+                # ATDD must test each method directly.)
                 logger.warning(f"Could not load embedding weights: {e}")
                 self._embed_weights = np.array([])  # empty = disable matching
             return self._embed_weights
@@ -229,6 +237,11 @@ if HAS_VLLM:
             the engine for matching packs. If a match is found above threshold,
             reports the number of loadable tokens.
             """
+            # Re-sync from disk so this scheduler-side handle sees writes
+            # made by the worker-side connector (separate Engine instance).
+            # Cheap when nothing changed; idempotent.
+            self.engine.refresh()
+
             if self.engine.pack_count() == 0:
                 return 0, False
 
@@ -257,6 +270,10 @@ if HAS_VLLM:
                 logger.debug(f"Retrieval failed: {e}")
                 return 0, False
 
+            logger.warning(
+                f"[match] got={len(packs)} top_score="
+                f"{packs[0]['score'] if packs else None} thr={self._match_threshold}"
+            )
             if not packs or packs[0]["score"] < self._match_threshold:
                 return 0, False
 
@@ -278,6 +295,9 @@ if HAS_VLLM:
             logger.debug(
                 f"Matched pack {pack['pack_id']} (score={pack['score']:.1f}, "
                 f"seq_len={seq_len}) for request {req_id}"
+            )
+            logger.warning(
+                f"[match-OK] returning seq_len={seq_len} (matched pack {pack['pack_id']})"
             )
             return seq_len, True  # async load supported
 

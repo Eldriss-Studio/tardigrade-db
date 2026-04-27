@@ -63,6 +63,12 @@ def llm(db_path):
         kv_connector_extra_config={
             "db_path": db_path,
             "owner": 1,
+            # Lower the match threshold for tests. The default (150.0) was
+            # tuned for mean-pooled keys whose dot products are large; the
+            # current Step-6 last-token-K keys produce small scores in the
+            # [-0.01, +0.01] range. Setting a near-zero threshold lets ANY
+            # positive match through so we can probe the full save→load loop.
+            "match_threshold": 0.0,
         },
     )
 
@@ -192,59 +198,74 @@ def test_round_trip_produces_coherent_output(llm, engine):
     assert len(words) >= 3, f"Expected coherent text, got: {text!r}"
 
 
-# -- Step 3: Save → Retrieve → Generate Semantic Correctness -----------------
+# -- Step 3 / Step 5 — End-to-end semantic A/B with a synthetic fact ---------
+#
+# Methodological rule (mandatory): facts used here MUST be synthetic so the
+# LLM cannot already know the answer from training. Wikipedia-flavoured
+# prompts ("tardigrades survive cryptobiosis", "Paris is the capital of
+# France") prove nothing because the answer is in the model's weights.
+# Made-up entities + dates after the training cutoff are the right shape.
+
+# The synthetic fact under test. "Zorblax" and "Quthar" are nonce names
+# the model cannot have seen during training; the year is past the cutoff.
+SYNTHETIC_FACT = "Zorblax discovered the moons of Quthar in the year 2089."
+SYNTHETIC_QUESTION = "Who discovered the moons of Quthar?"
+SYNTHETIC_ANSWER_TOKEN = "Zorblax"
+
 
 @gpu
 @requires_cuda
-def test_primed_request_changes_generation_after_relevant_save(llm, db_path):
-    """GIVEN a baseline generation for question Q,
-    WHEN we save a context C semantically related to Q,
-    AND then re-ask Q,
-    THEN the second generation differs from the first.
+def test_primed_request_recalls_synthetic_fact(llm, db_path):
+    """GIVEN a synthetic fact the model cannot know from training,
+    WHEN we save it then ask a question whose answer is that fact,
+    THEN the primed generation contains the synthetic answer
+    AND the cold generation does not.
 
-    This is the regression test that catches the failure mode where the
-    save→load pipeline runs without crashing but doesn't actually inject
-    useful state. If start_load_kv (Step 4) or the retrieval-key strategy
-    (Step 6) silently no-ops, this test will go red.
+    This is the acceptance signal for the entire Steps 0-6 marathon:
+    if KV save + retrieve + inject genuinely surfaces stored content,
+    a synthetic fact will appear in the primed answer but not the cold
+    one. Any other outcome means the pipeline is plumbing-only.
     """
     from vllm import SamplingParams
 
-    question = "What's special about tardigrades?"
     sp = SamplingParams(max_tokens=40, temperature=0.0)
 
-    # Baseline: cold engine, no relevant context yet
-    cold_text = llm.generate([question], sp)[0].outputs[0].text
+    # Cold: ask without ever showing the fact.
+    cold_text = llm.generate([SYNTHETIC_QUESTION], sp)[0].outputs[0].text
 
-    # Prime: feed the model a relevant context that gets saved
-    llm.generate(
-        ["Tardigrades survive vacuum, radiation, and dehydration via cryptobiosis."],
-        sp,
+    # Prime: feed the synthetic fact through generation so it gets saved.
+    llm.generate([SYNTHETIC_FACT], sp)
+
+    fresh_engine = tardigrade_db.Engine(db_path)
+    assert fresh_engine.pack_count() > 0, (
+        "Priming should have written at least one pack"
     )
 
-    # The pack from the priming generation should now exist
-    fresh_engine = tardigrade_db.Engine(db_path)
-    assert fresh_engine.pack_count() > 0, "Priming should have written at least one pack"
+    # Primed: ask the same question; if injection works, the answer changes.
+    primed_text = llm.generate([SYNTHETIC_QUESTION], sp)[0].outputs[0].text
 
-    # Re-ask the same question — primed request
-    primed_text = llm.generate([question], sp)[0].outputs[0].text
+    cold_has = SYNTHETIC_ANSWER_TOKEN.lower() in cold_text.lower()
+    primed_has = SYNTHETIC_ANSWER_TOKEN.lower() in primed_text.lower()
 
-    # Both must be coherent text
-    assert len(cold_text) > 5
-    assert len(primed_text) > 5
+    # Sanity check on the methodology: the cold answer MUST NOT contain the
+    # synthetic name. If it does, the fact wasn't actually synthetic and the
+    # whole test is meaningless.
+    assert not cold_has, (
+        f"Cold generation already mentions {SYNTHETIC_ANSWER_TOKEN!r}; "
+        f"the test fact is not actually synthetic. Pick a different name. "
+        f"Cold output: {cold_text!r}"
+    )
 
-    # The two generations should not be identical. With temperature=0.0 the
-    # only thing that can change them is something the model "saw" between
-    # the two calls — i.e., the load path actually did something. This is
-    # a soft assertion: if both happen to be identical, either the load is
-    # genuinely no-op (real bug to investigate) or the model happens to
-    # produce the same trajectory anyway (rare but possible).
-    if cold_text == primed_text:
-        pytest.skip(
-            "Cold and primed generations are identical — load path may be "
-            "no-op, OR Qwen3-0.6B happens to produce the same deterministic "
-            "trajectory either way. Step 4 (GPU write verification) is the "
-            "hard assertion; this test is a softer regression catcher."
-        )
+    # The real assertion: injection surfaced the saved fact.
+    # RED today (Steps 0-6 done, but Step 5 not yet implemented).
+    # GREEN once Engine.refresh() lets the scheduler-side connector see
+    # worker writes and matching can occur.
+    assert primed_has, (
+        f"Primed generation does not mention {SYNTHETIC_ANSWER_TOKEN!r} — "
+        f"KV injection did not surface the saved fact. "
+        f"Cold:   {cold_text!r}\n"
+        f"Primed: {primed_text!r}"
+    )
 
 
 # -- Cleanup Tests ------------------------------------------------------------

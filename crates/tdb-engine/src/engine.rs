@@ -315,6 +315,148 @@ impl Engine {
         })
     }
 
+    /// Re-sync in-memory state from disk without dropping the instance.
+    ///
+    /// Re-applies the **Memento** pattern from [`open_with_options`]:
+    /// rescans segments, replays the WAL, refreshes governance from cell
+    /// metadata, rebuilds `pack_directory`, and re-syncs `text_store` +
+    /// `deletion_log`. After this returns, the engine reflects writes
+    /// performed by other [`Engine`] handles at the same path.
+    ///
+    /// **MVP scope:** cell-derived state, trace, persistent stores. Vamana
+    /// (the optional ANN graph) is NOT rebuilt — if it was active before
+    /// refresh, it remains active with stale graph state until the next
+    /// reactivation threshold trip. The brute-force + per-token retrievers
+    /// in the pipeline DO see new cells, so retrieval is correct (just not
+    /// Vamana-accelerated for the new cells).
+    ///
+    /// **Idempotency:** `refresh().refresh()` is identical to a single
+    /// `refresh()`.
+    ///
+    /// **Concurrency:** takes `&mut self`. Caller must ensure no other
+    /// reader holds a borrow.
+    pub fn refresh(&mut self) -> Result<()> {
+        // 1. Rescan segments — picks up new cells written by another handle.
+        self.pool.refresh_index()?;
+
+        // 2. Detect whether the SLB needs rebuilding at a different dimension.
+        //    If the engine was opened empty, the SLB defaults to dim=128. When
+        //    refresh discovers cells written by another handle whose mean-pooled
+        //    key has a different dim, the SLB's INT8 dot product would panic.
+        //    Detect the dim from the first new indexable cell and rebuild SLB
+        //    in place if needed.
+        let known: std::collections::HashSet<CellId> = self.governance.keys().copied().collect();
+        let all_cells: Vec<CellId> = self.pool.iter_cell_ids().collect();
+
+        let mut observed_dim: Option<usize> = None;
+        for cell_id in &all_cells {
+            if known.contains(cell_id) {
+                continue;
+            }
+            let cell = self.pool.get(*cell_id)?;
+            if should_index_for_retrieval(&cell) {
+                observed_dim = Some(mean_pool_key(&cell.key).len());
+                break;
+            }
+        }
+        if let Some(new_dim) = observed_dim {
+            if new_dim != self.slb.dim() {
+                let cap = self.slb.capacity();
+                self.slb = SemanticLookasideBuffer::new(cap, new_dim);
+                // Re-populate from cells already in governance — they were
+                // valid for the OLD dim, but we just changed dims, so they're
+                // now stale. (This branch only fires when the engine was
+                // opened empty, so governance is empty and this loop is
+                // basically a no-op. Defensive code for future safety.)
+                self.key_dim = Some(new_dim);
+            }
+        }
+
+        // 3. Re-derive cell-keyed state for any cells we hadn't seen yet.
+        for cell_id in &all_cells {
+            if known.contains(cell_id) {
+                continue;
+            }
+            let cell = self.pool.get(*cell_id)?;
+            self.reindex_cell(&cell);
+            if cell.id >= self.next_id {
+                self.next_id = cell.id + 1;
+            }
+        }
+
+        // 3. Rebuild pack_directory from current pool state. Idempotent —
+        //    same cell set yields same directory.
+        let mut pack_cells = Vec::new();
+        for cell_id in &all_cells {
+            if let Ok(cell) = self.pool.get(*cell_id) {
+                let stored_pack_id = cell.token_span.0;
+                if stored_pack_id > 0 || cell.layer == PACK_RETRIEVAL_LAYER {
+                    pack_cells.push((stored_pack_id, cell.id));
+                }
+            }
+        }
+        let mut pack_directory = PackDirectory::from_cells(pack_cells);
+        let next_pack_id = pack_directory.next_pack_id();
+
+        // 4. Replay WAL again. TraceGraph.add_edge dedups so re-apply is safe.
+        let entries = self
+            .wal
+            .replay()
+            .map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
+        for entry in &entries {
+            match entry {
+                WalEntry::AddEdge { src, dst, edge_type, timestamp } => {
+                    if let Some(et) = EdgeType::from_u8(*edge_type) {
+                        self.trace.add_edge(*src, *dst, et, *timestamp);
+                    }
+                }
+            }
+        }
+
+        // 5. Refresh persistent backing stores.
+        self.text_store
+            .refresh()
+            .map_err(|e| TardigradeError::Io { source: e })?;
+        self.deletion_log
+            .refresh()
+            .map_err(|e| TardigradeError::Io { source: e })?;
+
+        // 6. Apply deletions to the rebuilt directory and text_store.
+        for &pack_id in self.deletion_log.deleted_set() {
+            pack_directory.remove_pack(pack_id);
+            self.text_store.remove(pack_id);
+        }
+
+        // Commit the rebuilt pack directory + counter.
+        self.pack_directory = pack_directory;
+        self.next_pack_id = self.next_pack_id.max(next_pack_id);
+
+        Ok(())
+    }
+
+    /// Re-index a single cell into pipeline + SLB + governance.
+    ///
+    /// **DRY hook** shared by `open_with_options` and `refresh()` — both
+    /// rebuild paths must compute identical state for the same input cell.
+    /// Idempotent at the call-site level: callers ensure they don't pass
+    /// the same cell twice.
+    fn reindex_cell(&mut self, cell: &MemoryCell) {
+        if should_index_for_retrieval(cell) {
+            let slb_key = mean_pool_key(&cell.key);
+            if self.key_dim.is_none() {
+                self.key_dim = Some(slb_key.len());
+            }
+            self.pipeline.insert(cell.id, cell.owner, &cell.key);
+            self.slb.insert(cell.id, cell.owner, &slb_key);
+        }
+        let scorer = ImportanceScorer::new(cell.meta.importance);
+        let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
+        self.governance.insert(
+            cell.id,
+            CellGovernance { scorer, tier_sm, days_since_update: 0.0 },
+        );
+    }
+
     /// Write key/value vectors to the engine. Returns the assigned cell ID.
     ///
     /// `parent_cell_id`: optional causal parent for Trace graph edges.

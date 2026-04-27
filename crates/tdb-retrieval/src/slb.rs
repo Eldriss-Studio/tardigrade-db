@@ -66,6 +66,21 @@ impl SemanticLookasideBuffer {
         }
     }
 
+    /// The vector dimensionality this SLB was constructed with.
+    ///
+    /// Used by [`Engine::refresh`] to detect when the SLB needs to be
+    /// rebuilt at a different dimension (e.g., when the engine was opened
+    /// empty with the default dim=128 and the first cells written by
+    /// another handle have a different key dimension).
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Capacity (max number of active entries before LRU eviction).
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// Insert or update a cell in the SLB.
     /// If at capacity, evicts the least-recently-used entry.
     pub fn insert(&mut self, cell_id: CellId, owner: OwnerId, key: &[f32]) {

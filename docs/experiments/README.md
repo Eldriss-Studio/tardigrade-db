@@ -53,25 +53,51 @@ Two parallel Codex subagents (different agent models) executed separate Sonia ex
 - `sonia_production_sim.py`: recall was equal between modes (`31.2%` each) but per-token showed much larger SNR separation
 - Both runs completed successfully with no operational blockers
 
-### vLLM KV Connector — End-to-End Round-Trip
+### vLLM KV Connector — End-to-End Round-Trip + Architectural Discovery
 
-**Date:** April 26, 2026
-**Status:** Complete — 5/5 GPU integration tests passing
+**Date:** April 26-27, 2026
+**Status:** Complete — save/load plumbing validated; architectural limit of v1 API discovered
 
-First validation that TardigradeDB plugs into a production LLM serving framework. The `tardigrade_vllm.connector.TardigradeConnector` implements vLLM's KV Connector v1 API, captures KV during generation, persists packs to TardigradeDB, and runs the scheduler-side semantic match for incoming requests. Tested in WSL2 + Ubuntu 24.04 with an RTX 3070 Ti.
+First validation that TardigradeDB plugs into a production LLM serving framework. The `tardigrade_vllm.connector.TardigradeConnector` implements vLLM's KV Connector v1 API, captures KV during generation, persists packs to TardigradeDB, and supports cross-process state sync via `Engine.refresh()`. Tested in WSL2 + Ubuntu 24.04 with an RTX 3070 Ti.
 
 **Setup:** vLLM 0.19.1, PyTorch 2.10 (CUDA 12.8), Qwen3-0.6B (28 layers, 8 KV heads, head_dim=128, kv_dim=1024) loaded in bf16 with `enforce_eager=True` and `max_model_len=512`.
 
-**Findings:**
-- **Save path works on real generation.** A 20-token completion writes 20 packs (one per forward pass), each containing all 28 layers. Mean-pooled K of layer 0 is the retrieval key.
-- **Semantic matching runs.** Scheduler-side `get_num_new_matched_tokens` computes a retrieval key from prompt token IDs via the model's embedding table (no GPU forward), queries `mem_read_pack_with_trace_boost`, and reports matched tokens. No crashes when `start_load_kv` runs.
-- **Round-trip generation stays coherent.** Multi-prompt sessions accumulate packs monotonically and the model still produces valid text.
-- **vLLM 0.19 contract drift surfaced four real bugs vs the 0.9-era code:** `build_connector_meta` must return non-None, `request_finished` must return `(bool, dict|None)`, `kv_layer` is now a single Tensor `[2, blocks, bs, h, d]` (K stacked with V), layer names are `"model.layers.N.self_attn.attn"`, and bf16 needs an explicit cast before `.numpy()`.
-- **Cross-process engine state is NOT shared.** TardigradeDB caches engine state at `Engine::open()`. The connector lives in vLLM's `EngineCore` subprocess; observers must reopen the engine to see fresh writes. This was caught only because the GPU integration test asserted on `pack_count` from a different process.
+**Save path findings (validated):**
+- Per-request slot extraction via `RequestSlotResolver` (Strategy + Parameter Object pattern) — saves the actual request's KV blocks, not placeholder block 0.
+- One pack per request via fingerprint dedup (was 20 packs per 20-token completion).
+- Cross-session persistence proven: vLLM run #1 writes packs, run #2 reads them on startup.
+- `Engine.refresh()` (Memento re-application) — scheduler-side connector re-syncs from worker-side writes in place. SLB dimension auto-adapts when first cells arrive.
 
-**Known gap (not an architectural problem, just unfinished work):** `save_kv_layer` doesn't yet thread per-request `slot_mapping` from `attn_metadata`, so the save path captures block 0 of each layer as a placeholder. The pipe is proven; the cargo is a stub. See `docs/guide/vllm-setup.md` for the full status table and limitations.
+**Load path findings (validated mechanically):**
+- `start_load_kv` correctly writes K/V data into GPU block slots — verified with Spy-pattern CPU tests using real `torch.Tensor.copy_()`.
+- Per-method ATDD tests for `get_num_new_matched_tokens` catch silent-failure bugs (narrowed exception handling, structural attribute checks).
 
-**Tests:** `tests/python/test_vllm_format.py` (4 unit), `tests/python/test_vllm_connector.py` (4 engine-surface), `tests/python/test_vllm_load_path.py` (4 mock-context for `start_load_kv`), `tests/python/test_vllm_integration.py` (5 GPU acceptance with `-m gpu`).
+**vLLM 0.19 API drift (fixed):**
+- `build_connector_meta()` must return non-None (asserted in gpu_model_runner)
+- `request_finished()` must return `(bool, dict|None)` tuple
+- `kv_layer` is a single Tensor `[2, blocks, bs, h, d]` (K stacked with V along dim 0)
+- Layer names: `"model.layers.N.self_attn.attn"` (not `"layers.N.self_attn"`)
+- bf16 must be cast to float32 in torch before `.numpy()`
+- `__init__` must accept `kv_cache_config` as second arg (deprecated signature warning)
+
+**Critical architectural discovery — vLLM v1 KV Connector is prefix-cache only:**
+
+The v1 connector API (`base.py:451-480`) requires **token-identical prefix matching**. `get_num_new_matched_tokens` returns "how many of this prompt's first N tokens have pre-computed KV" — vLLM skips prefill for those positions and trusts the loaded KV as-if-computed. All in-tree connectors (LMCache, SharedStorage, ExampleConnector) are prefix-cache offloads.
+
+**There is no mechanism in the v1 API for cross-prompt KV injection** — injecting KV from prompt A to influence generation of prompt B. The connector simply cannot make the model produce different output for the same prompt by loading unrelated stored KV. Verified by:
+1. Reading `base.py` contract documentation (explicit: "only consider the largest prefix of prompt-tokens for which KV cache is actually available")
+2. Tracing the scheduler path in `scheduler.py` (sets `num_computed_tokens = local + external`, then attention only computes positions beyond that)
+3. Testing with a synthetic fact ("Zorblax discovered the moons of Quthar in 2089") — cold and primed generations are byte-identical because the connector has no way to inject cross-prompt memory through this API
+
+**Implication:** The vLLM connector is a valid **persistent prefix-cache accelerator** (same prompt → reuse stored KV, skip prefill). It is NOT the vehicle for the "cross-session memory" pitch. That pitch is served by the HuggingFace `KnowledgePackStore` path, which passes `past_key_values` directly to `model.generate()` and is not bound by the prefix-cache contract. Documented results via that path: 8/10 novel facts byte-identical to Text RAG, 46% fewer prompt tokens.
+
+**Tests (27 total):** 15 CPU (`test_vllm_load_path.py`: resolver, spy, per-method ATDD, signatures) + 4 CPU (`test_vllm_format.py` + `test_vllm_connector.py`) + 3 CPU (`test_engine_refresh.py`) + 6 GPU (`test_vllm_integration.py`: save, pack contents, semantic match, coherent output, synthetic-fact A/B [RED — architecturally impossible via v1], accumulation) + 1 GPU (`test_vllm_cross_session.py`: cross-process persistence).
+
+**Next steps identified:**
+1. Prefix-cache reframing: per-user synthetic "memory prefix" that's token-identical across requests → stock vLLM prefix-cache serves it. Feasible now.
+2. Verify KnowledgePackStore's 8/10 claim with synthetic facts (Zorblax-style) via HF directly — the real "memory" A/B test.
+3. Research SGLang's connector contract for a potentially more flexible production serving path.
+4. Optional: vLLM custom attention plugin for true cross-prompt KV injection (heavy, requires fork).
 
 ### [KV Cache Validation — Full Progression](kv-cache-validation.md)
 

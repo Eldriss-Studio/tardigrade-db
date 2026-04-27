@@ -301,6 +301,19 @@ impl Engine {
         self.inner.pack_count()
     }
 
+    /// Re-sync in-memory state from disk.
+    ///
+    /// Use when another process or `Engine` handle has written to the same
+    /// directory and this handle needs to see those writes. Re-applies the
+    /// Memento pattern from `open()`: rescans segments, replays the WAL,
+    /// refreshes governance / pack_directory / text_store / deletion_log.
+    /// Idempotent and cheap when nothing changed on disk.
+    fn refresh(&mut self) -> PyResult<()> {
+        self.inner
+            .refresh()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Get the importance score of a pack.
     fn pack_importance(&self, pack_id: u64) -> Option<f32> {
         self.inner.pack_importance(pack_id)

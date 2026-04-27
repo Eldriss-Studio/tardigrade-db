@@ -58,6 +58,20 @@ impl TextStore {
         Ok(Self { path, texts })
     }
 
+    /// Re-read the on-disk file and rebuild the in-memory index.
+    ///
+    /// Used by [`Engine::refresh`] to pick up writes from another `Engine`
+    /// handle at the same path. Idempotent: repeated calls with no on-disk
+    /// changes leave the index unchanged.
+    pub fn refresh(&mut self) -> io::Result<()> {
+        self.texts = if self.path.exists() {
+            Self::replay(&self.path)?
+        } else {
+            HashMap::new()
+        };
+        Ok(())
+    }
+
     /// Store text for a pack. Appends to the file and fsyncs.
     ///
     /// Thin wrapper over [`store_batch`](Self::store_batch) for the single-entry

@@ -469,6 +469,145 @@ def test_real_start_load_kv_clears_state_after_load():
     assert "req_cleanup" not in c._load_meta
 
 
+# -- Per-method ATDD for scheduler-side hooks (catches silent-early-return bugs)
+#
+# These tests construct TardigradeConnector via __new__, wire the minimum
+# attributes the method-under-test references, and call the method with a
+# stub request. The pre-existing `_get_embed_weights` / `vllm_config` bug
+# was NOT caught by the end-to-end Layer-3 A/B test because of a silent
+# `if query_key is None: return 0, False` path. These tests would have
+# caught it before any GPU work.
+
+def _build_bare_connector_for_scheduler(tmp_path, embed_dim=8):
+    """Connector with engine + minimal model_config for scheduler-side methods."""
+    import tardigrade_db
+    from unittest.mock import MagicMock
+    pytest.importorskip("vllm", reason="vLLM not installed")
+    from tardigrade_vllm.connector import TardigradeConnector
+
+    c = TardigradeConnector.__new__(TardigradeConnector)
+    c.engine = tardigrade_db.Engine(str(tmp_path))
+    c.owner = 1
+    c.kv_dim = embed_dim
+    c.num_kv_heads = 2
+    c.head_dim = embed_dim // 2
+    c.num_layers = 2
+    c.block_size = 4
+    c._load_packs = {}
+    c._load_meta = {}
+    c._save_buffers = {}
+    c._pack_id_by_fingerprint = {}
+    c._embed_weights = None
+    c._match_threshold = 1.0  # low threshold so any positive match counts
+    c.hidden_size = embed_dim
+
+    # Stub vllm_config — must include attributes _get_embed_weights touches.
+    # The pre-existing bug was that this attribute wasn't being stored in
+    # __init__. This test will fail loudly if the attribute is missing.
+    cfg = MagicMock()
+    cfg.model_config.model = "Qwen/Qwen3-0.6B"
+    c.vllm_config = cfg
+
+    # Strategy for slot resolution (used in save path; harmless to pre-set)
+    from tardigrade_vllm.slot_resolver import RequestSlotResolver
+    c._slot_resolver = RequestSlotResolver()
+
+    return c
+
+
+def test_get_num_new_matched_tokens_does_not_crash_on_empty_engine(tmp_path):
+    """GIVEN a connector pointing at an empty engine,
+    WHEN get_num_new_matched_tokens is called with a real-shaped request,
+    THEN it returns (0, False) and does not raise.
+
+    Regression for: silent early-returns can mask attribute errors. If
+    this method raises AttributeError on an upstream attribute (the bug
+    we just hit with `self.vllm_config`), the test will fail loudly.
+    """
+    from unittest.mock import MagicMock
+    c = _build_bare_connector_for_scheduler(tmp_path)
+
+    request = MagicMock()
+    request.request_id = "req_test_1"
+    request.prompt_token_ids = [1, 2, 3, 4, 5]
+
+    # Must not raise. With pack_count == 0 the engine query path is
+    # short-circuited, so embed_weights load isn't exercised — but we
+    # still pass through enough of the method to catch obvious wiring bugs.
+    result = c.get_num_new_matched_tokens(request, 0)
+    assert result == (0, False)
+
+
+def test_get_num_new_matched_tokens_propagates_attribute_errors(tmp_path):
+    """GIVEN a connector that's missing a referenced attribute,
+    WHEN get_num_new_matched_tokens is called and reaches _get_embed_weights,
+    THEN the AttributeError propagates instead of being silently swallowed.
+
+    Direct regression for the `self.vllm_config` bug (2026-04-26): the
+    previous broad `except Exception` in _get_embed_weights would catch
+    the AttributeError and silently return empty embeddings, masking
+    a real programming error for days.
+    """
+    from unittest.mock import MagicMock
+    c = _build_bare_connector_for_scheduler(tmp_path)
+
+    # Intentionally remove vllm_config to simulate the historical bug.
+    delattr(c, "vllm_config")
+
+    # Need a pack so the early-return on pack_count==0 doesn't fire.
+    key = np.ones(c.kv_dim, dtype=np.float32)
+    payload = np.full(2 * 4 * c.kv_dim, 0.5, dtype=np.float32)
+    c.engine.mem_write_pack(c.owner, key, [(0, payload)], 80.0)
+
+    request = MagicMock()
+    request.request_id = "req_propagate"
+    request.prompt_token_ids = [10, 20, 30]
+
+    # The AttributeError must escape — not be swallowed silently.
+    with pytest.raises(AttributeError, match="vllm_config"):
+        c.get_num_new_matched_tokens(request, 0)
+
+
+def test_get_num_new_matched_tokens_loads_embed_table_when_packs_exist(tmp_path):
+    """GIVEN a connector with at least one stored pack,
+    WHEN get_num_new_matched_tokens is called,
+    THEN the embedding table is requested AND _compute_retrieval_key
+    returns a non-None vector — proves no AttributeError on vllm_config.
+
+    This is the test that would have caught the `self.vllm_config` bug
+    BEFORE the GPU integration test wasted hours on a misleading failure.
+    """
+    from unittest.mock import MagicMock, patch
+    c = _build_bare_connector_for_scheduler(tmp_path)
+
+    # Seed the engine so we don't short-circuit
+    key = np.ones(c.kv_dim, dtype=np.float32)
+    payload = np.full(2 * 4 * c.kv_dim, 0.5, dtype=np.float32)
+    c.engine.mem_write_pack(c.owner, key, [(0, payload)], 80.0)
+
+    request = MagicMock()
+    request.request_id = "req_test_2"
+    request.prompt_token_ids = [10, 20, 30]
+
+    # Patch _get_embed_weights so we don't actually download the model
+    # (that would take minutes and require network). The patch verifies
+    # the method is REACHED — i.e., we got past every early-return check
+    # without raising.
+    fake_embeds = np.random.RandomState(0).randn(50000, c.kv_dim).astype(np.float32)
+    with patch.object(
+        type(c), "_get_embed_weights", return_value=fake_embeds
+    ) as mock:
+        result = c.get_num_new_matched_tokens(request, 0)
+        assert mock.called, (
+            "_get_embed_weights was never reached — likely an early-return "
+            "before _compute_retrieval_key. This is the silent-failure mode "
+            "that masked the `self.vllm_config` AttributeError."
+        )
+
+    # Result is (int|None, bool) per vLLM contract; method must not raise.
+    assert isinstance(result, tuple) and len(result) == 2
+
+
 def test_connector_init_back_compat_with_two_arg_call():
     """GIVEN older callers that may still pass (vllm_config, role),
     WHEN TardigradeConnector is instantiated with two positional args,

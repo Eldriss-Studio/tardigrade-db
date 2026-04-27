@@ -61,6 +61,40 @@ impl BlockPool {
         Ok(Self { dir: dir.to_path_buf(), segments, index, segment_size_threshold })
     }
 
+    /// Re-scan segment files on disk and merge any new entries into the
+    /// in-memory index. Picks up cells written by another `BlockPool`
+    /// handle at the same path.
+    ///
+    /// Idempotent: re-scanning a segment that hasn't grown leaves the
+    /// index unchanged. New segment files (if another writer rolled over)
+    /// are opened and added to `self.segments`. Existing segment file
+    /// handles are not re-opened.
+    pub fn refresh_index(&mut self) -> Result<()> {
+        let segment_ids = list_segments(&self.dir)?;
+
+        // Pick up any newly-created segments (other writer rolled over).
+        let known: std::collections::HashSet<u32> =
+            self.segments.iter().map(|s| s.id()).collect();
+        for &seg_id in &segment_ids {
+            if !known.contains(&seg_id) {
+                self.segments.push(Segment::open(&self.dir, seg_id)?);
+            }
+        }
+
+        // Re-scan every segment (cheap — header reads only) and merge into
+        // the index. `scan_segment` is idempotent on append-only files.
+        for &seg_id in &segment_ids {
+            let entries = scan_segment(&self.dir, seg_id)?;
+            for (cell_id, byte_offset) in entries {
+                self.index
+                    .entry(cell_id)
+                    .or_insert(RecordLocation { segment_id: seg_id, byte_offset });
+            }
+        }
+
+        Ok(())
+    }
+
     /// Append a memory cell to the pool. Returns the cell ID on success.
     pub fn append(&mut self, cell: &MemoryCell) -> Result<CellId> {
         self.ensure_active_segment_has_capacity()?;

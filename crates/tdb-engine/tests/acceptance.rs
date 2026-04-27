@@ -2380,3 +2380,150 @@ fn test_delete_pack_preserves_other_packs() {
     assert_eq!(r2.pack.text.as_deref(), Some("Pack 2"));
     assert!(engine.load_pack_by_id(ids[1]).is_err());
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Step 5 (Gap 7) ATDD Layer 1 — Engine::refresh() cross-handle visibility.
+//
+// Pattern under test: Memento (re-applied). `Engine::open` already builds
+// in-memory state from durable history; `Engine::refresh` re-runs the same
+// rebuild in place so a separately-opened Engine handle sees writes made
+// by another handle at the same path.
+//
+// Each test here MUST fail until Step 5b lands (no method named `refresh`).
+// ─────────────────────────────────────────────────────────────────────────
+
+fn _refresh_test_pack(seed: f32) -> KVPack {
+    let retrieval_key = encode_per_token_keys(&[&[seed, 0.0, 0.0, 0.0]]);
+    KVPack {
+        id: 0,
+        owner: 1,
+        retrieval_key,
+        layers: (0..4)
+            .map(|i| KVLayerPayload { layer_idx: i, data: vec![seed + i as f32; 32] })
+            .collect(),
+        salience: 80.0,
+        text: None,
+    }
+}
+
+/// Step 5a-L1.1: cross-handle write visibility after refresh.
+/// GIVEN two Engine handles open at the same dir,
+/// WHEN handle A writes a pack and handle B calls refresh(),
+/// THEN B.pack_count() reflects A's write.
+#[test]
+fn test_refresh_picks_up_writes_from_other_handle() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = Engine::open(dir.path()).unwrap();
+    let mut b = Engine::open(dir.path()).unwrap();
+
+    assert_eq!(a.pack_count(), 0);
+    assert_eq!(b.pack_count(), 0);
+
+    let pack_id = a.mem_write_pack(&_refresh_test_pack(1.0)).unwrap();
+
+    // Without refresh, B is stale.
+    assert_eq!(b.pack_count(), 0, "stale view expected before refresh");
+
+    b.refresh().unwrap();
+    assert_eq!(b.pack_count(), 1, "refresh should expose A's write");
+    assert!(b.pack_exists(pack_id));
+}
+
+/// Step 5a-L1.2: refresh must be idempotent — calling it twice with no
+/// intervening writes yields the same state.
+#[test]
+fn test_refresh_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = Engine::open(dir.path()).unwrap();
+    a.mem_write_pack(&_refresh_test_pack(2.0)).unwrap();
+
+    let mut b = Engine::open(dir.path()).unwrap();
+    b.refresh().unwrap();
+    let count_after_first = b.pack_count();
+    b.refresh().unwrap();
+    assert_eq!(
+        b.pack_count(),
+        count_after_first,
+        "second refresh must be a no-op"
+    );
+}
+
+/// Step 5a-L1.3: WAL-derived state (TraceGraph) must also re-apply.
+/// GIVEN handle A links two packs in the trace graph,
+/// WHEN handle B calls refresh(),
+/// THEN B can traverse the link via pack_links().
+#[test]
+fn test_refresh_picks_up_trace_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = Engine::open(dir.path()).unwrap();
+    let mut b = Engine::open(dir.path()).unwrap();
+
+    let p1 = a.mem_write_pack(&_refresh_test_pack(3.0)).unwrap();
+    let p2 = a.mem_write_pack(&_refresh_test_pack(4.0)).unwrap();
+    a.add_pack_link(p1, p2).unwrap();
+
+    b.refresh().unwrap();
+    assert!(b.pack_exists(p1));
+    assert!(b.pack_exists(p2));
+    let links_from_p1 = b.pack_links(p1);
+    assert!(
+        links_from_p1.contains(&p2),
+        "refresh must replay WAL trace edges; got {links_from_p1:?}"
+    );
+}
+
+/// Step 5a-L1.5: SLB dimension must adapt when another handle writes cells
+/// with a different key dimension than the empty engine's SLB default (128).
+///
+/// Regression for: pyo3_runtime.PanicException
+///   "query dimension 1024 does not match SLB dimension 128"
+/// observed when the connector (Qwen3-0.6B, kv_dim=1024) queried via a
+/// scheduler-side handle that had been opened against an empty path.
+#[test]
+fn test_refresh_rebuilds_slb_when_key_dim_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut writer = Engine::open(dir.path()).unwrap();
+    // Reader opens at empty dir — its SLB defaults to dim=128.
+    let mut reader = Engine::open(dir.path()).unwrap();
+
+    // Writer stores a pack with a 64-dim retrieval key. encode_per_token_keys
+    // produces a flattened encoded key whose mean-pool dim is what matters.
+    let key = encode_per_token_keys(&[&vec![0.5_f32; 1024]]);
+    let pack = KVPack {
+        id: 0,
+        owner: 1,
+        retrieval_key: key.clone(),
+        layers: vec![KVLayerPayload { layer_idx: 0, data: vec![0.5; 64] }],
+        salience: 80.0,
+        text: None,
+    };
+    let _pid = writer.mem_write_pack(&pack).unwrap();
+
+    // Refresh reader, then issue a query at the writer's key dim. Before the
+    // fix, this panics inside SLB; after the fix, it returns results.
+    reader.refresh().unwrap();
+    let query = encode_per_token_keys(&[&vec![0.5_f32; 1024]]);
+    let _results = reader.mem_read_pack(&query, 1, None).unwrap();
+}
+
+/// Step 5a-L1.4: DeletionLog mutations from another handle must propagate.
+/// GIVEN A writes then deletes a pack,
+/// WHEN B refreshes (after each step),
+/// THEN B sees the pack first, then sees it gone.
+#[test]
+fn test_refresh_handles_deletions_from_other_handle() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = Engine::open(dir.path()).unwrap();
+    let mut b = Engine::open(dir.path()).unwrap();
+
+    let pid = a.mem_write_pack(&_refresh_test_pack(5.0)).unwrap();
+    b.refresh().unwrap();
+    assert!(b.pack_exists(pid), "B should see pack after first refresh");
+
+    a.delete_pack(pid).unwrap();
+    b.refresh().unwrap();
+    assert!(
+        !b.pack_exists(pid),
+        "refresh must propagate deletions from another handle"
+    );
+}
