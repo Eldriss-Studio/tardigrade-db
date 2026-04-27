@@ -213,6 +213,10 @@
     "timestamp_unix": 1777269970,
     "top_k": 5
   },
+  "run_validity": {
+    "reason": "no_successful_results_for=letta,mem0_oss,tardigrade",
+    "state": "invalid"
+  },
   "status_summary": {
     "skipped": 6
   },
