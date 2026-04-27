@@ -195,33 +195,19 @@ impl Engine {
         vamana_threshold: usize,
         segment_size: Option<u64>,
     ) -> Result<Self> {
+        // Open durable backing stores (files + WAL handle).
         let pool = match segment_size {
             Some(size) => BlockPool::open_with_segment_size(dir, size)?,
             None => BlockPool::open(dir)?,
         };
-
-        // Open or create the SynapticStore (Repository for LoRA adapters).
         let synaptic_store =
             SynapticStore::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
-
-        // Open or create the WAL for trace graph durability.
         let wal = Wal::open(dir).map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
+        let text_store = TextStore::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
+        let deletion_log = DeletionLog::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
 
-        // Replay WAL to rebuild TraceGraph (Observer pattern recovery).
-        let mut trace = TraceGraph::new();
-        let wal_entries = wal.replay().map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
-        for entry in &wal_entries {
-            match entry {
-                WalEntry::AddEdge { src, dst, edge_type, timestamp } => {
-                    if let Some(et) = EdgeType::from_u8(*edge_type) {
-                        trace.add_edge(*src, *dst, et, *timestamp);
-                    }
-                }
-            }
-        }
-
-        // Rebuild derived state from persisted cells (Memento pattern).
-        // Pipeline: PerTokenRetriever (Top5Avg) → BruteForceRetriever (fallback).
+        // Retrieval pipeline: PerTokenRetriever (Top5Avg) → BruteForce (fallback).
+        // Stages must exist before refresh() inserts cells.
         let mut pipeline = RetrieverPipeline::new();
         pipeline.add_stage(Box::new(
             tdb_retrieval::per_token::PerTokenRetriever::with_scoring_mode(
@@ -230,89 +216,31 @@ impl Engine {
         ));
         pipeline.add_stage(Box::new(tdb_retrieval::attention::BruteForceRetriever::new()));
 
-        let mut governance = HashMap::new();
-        let mut next_id: CellId = 0;
-        let mut key_dim: Option<usize> = None;
-        let mut slb_entries: Vec<(CellId, OwnerId, Vec<f32>)> = Vec::new();
-
-        let cell_ids: Vec<CellId> = pool.iter_cell_ids().collect();
-
-        // Rebuild retrieval index from persisted cells.
-        // Vamana is added as a pipeline stage lazily when cell count crosses threshold.
-        for cell_id in &cell_ids {
-            let cell = pool.get(*cell_id)?;
-
-            if should_index_for_retrieval(&cell) {
-                let slb_key = mean_pool_key(&cell.key);
-                if key_dim.is_none() {
-                    key_dim = Some(slb_key.len());
-                }
-
-                pipeline.insert(cell.id, cell.owner, &cell.key);
-                slb_entries.push((cell.id, cell.owner, slb_key));
-            }
-
-            let scorer = ImportanceScorer::new(cell.meta.importance);
-            let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
-            governance.insert(cell.id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
-
-            if cell.id >= next_id {
-                next_id = cell.id + 1;
-            }
-        }
-
-        let dim = key_dim.unwrap_or(128);
-        let mut slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, dim);
-
-        // Populate SLB with mean-pooled keys (computed during rebuild above).
-        for (cell_id, owner, slb_key) in slb_entries {
-            slb.insert(cell_id, owner, &slb_key);
-        }
-
-        // Rebuild pack directory from persisted cells.
-        // Pack cells store pack_id in token_span.0. PACK_RETRIEVAL_LAYER marks the key cell.
-        let mut pack_cells = Vec::new();
-        for cell_id in &cell_ids {
-            if let Ok(cell) = pool.get(*cell_id) {
-                let stored_pack_id = cell.token_span.0;
-                if stored_pack_id > 0 || cell.layer == PACK_RETRIEVAL_LAYER {
-                    pack_cells.push((stored_pack_id, cell.id));
-                }
-            }
-        }
-        let mut pack_directory = PackDirectory::from_cells(pack_cells);
-        let next_pack_id = pack_directory.next_pack_id();
-
-        // Open or create the text store for KV pack fact text.
-        let mut text_store = TextStore::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
-
-        // Open or create the deletion log and filter deleted packs from
-        // both pack_directory and text_store. Text records remain on disk
-        // (append-only) but are masked from reads — same as cell records.
-        let deletion_log = DeletionLog::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
-        for &pack_id in deletion_log.deleted_set() {
-            pack_directory.remove_pack(pack_id);
-            text_store.remove(pack_id);
-        }
-
-        Ok(Self {
+        // Construct with empty derived state, then rebuild via refresh().
+        // DRY: open and refresh share the same Memento rebuild path
+        // (reindex_cell, pack_directory scan, WAL replay, deletion filter).
+        let mut engine = Self {
             pool,
             pipeline,
-            slb,
+            slb: SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, 128),
             vamana: None,
-            trace,
+            trace: TraceGraph::new(),
             wal,
             synaptic_store,
-            governance,
-            next_id,
+            governance: HashMap::new(),
+            next_id: 0,
             dir: dir.to_path_buf(),
             vamana_threshold,
-            pack_directory,
-            next_pack_id,
-            key_dim: if cell_ids.is_empty() { None } else { key_dim },
+            pack_directory: PackDirectory::new(),
+            next_pack_id: 0,
+            key_dim: None,
             text_store,
             deletion_log,
-        })
+        };
+
+        engine.refresh()?;
+
+        Ok(engine)
     }
 
     /// Re-sync in-memory state from disk without dropping the instance.
