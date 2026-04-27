@@ -73,8 +73,7 @@ impl BlockPool {
         let segment_ids = list_segments(&self.dir)?;
 
         // Pick up any newly-created segments (other writer rolled over).
-        let known: std::collections::HashSet<u32> =
-            self.segments.iter().map(|s| s.id()).collect();
+        let known: std::collections::HashSet<u32> = self.segments.iter().map(Segment::id).collect();
         for &seg_id in &segment_ids {
             if !known.contains(&seg_id) {
                 self.segments.push(Segment::open(&self.dir, seg_id)?);

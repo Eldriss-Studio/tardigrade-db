@@ -81,6 +81,10 @@ impl PackDirectory {
         }
     }
 
+    pub(crate) fn pack_ids(&self) -> impl Iterator<Item = &PackId> {
+        self.cells_by_pack.keys()
+    }
+
     pub(crate) fn next_pack_id(&self) -> PackId {
         self.cells_by_pack
             .keys()

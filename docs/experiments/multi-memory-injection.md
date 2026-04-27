@@ -6,7 +6,7 @@
 
 ## Final Conclusion (April 25, 2026)
 
-**Single-memory injection works.** 8/10, byte-identical to text RAG, zero prompt tokens. This is the core product.
+**Single-memory injection works.** 8/10, byte-identical to text RAG, zero prompt tokens. This is the core product. (Later confirmed with [fully synthetic gibberish facts](synthetic-kv-injection.md): 9/10, 100% recall ratio — proving recall comes from injected KV, not model training data.)
 
 **Multi-memory works with agent-controlled linking.** `store_linked()` and `store_and_link()` let the agent decide what's related. Trace-boosted retrieval gets 70% at 140 memories on cross-referencing queries. The agent's LLM handles entity resolution — the engine stores the links.
 

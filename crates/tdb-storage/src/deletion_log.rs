@@ -61,11 +61,7 @@ impl DeletionLog {
     /// `Engine` handle at the same path. Idempotent: repeated calls with no
     /// on-disk changes leave the set unchanged.
     pub fn refresh(&mut self) -> io::Result<()> {
-        self.deleted = if self.path.exists() {
-            Self::replay(&self.path)?
-        } else {
-            HashSet::new()
-        };
+        self.deleted = if self.path.exists() { Self::replay(&self.path)? } else { HashSet::new() };
         Ok(())
     }
 

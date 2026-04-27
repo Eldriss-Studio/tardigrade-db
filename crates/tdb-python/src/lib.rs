@@ -309,14 +309,32 @@ impl Engine {
     /// refreshes governance / pack_directory / text_store / deletion_log.
     /// Idempotent and cheap when nothing changed on disk.
     fn refresh(&mut self) -> PyResult<()> {
-        self.inner
-            .refresh()
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        self.inner.refresh().map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Get the importance score of a pack.
     fn pack_importance(&self, pack_id: u64) -> Option<f32> {
         self.inner.pack_importance(pack_id)
+    }
+
+    /// Enumerate all packs, optionally filtered by owner.
+    ///
+    /// Returns a list of dicts with keys: pack_id, owner, tier, importance, text.
+    /// Sorted by importance descending. Draft packs included (caller filters).
+    #[pyo3(signature = (owner=None))]
+    fn list_packs(&self, py: Python<'_>, owner: Option<u64>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        let packs = self.inner.list_packs(owner);
+        let py_list = pyo3::types::PyList::empty(py);
+        for (pack_id, pack_owner, tier, importance) in packs {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("pack_id", pack_id)?;
+            dict.set_item("owner", pack_owner)?;
+            dict.set_item("tier", tier as u8)?;
+            dict.set_item("importance", importance)?;
+            dict.set_item("text", self.inner.pack_text(pack_id))?;
+            py_list.append(dict)?;
+        }
+        Ok(py_list.into_any().unbind())
     }
 
     /// Load a pack by ID without retrieval scoring.

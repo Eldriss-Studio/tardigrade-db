@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All implementation phases complete. 383+ tests (238 Rust + 145 Python). KV Pack API in Rust engine for atomic multi-layer KV storage and retrieval. KV injection validated byte-identical to text RAG (8/10 novel facts through full Q4 pipeline). Hidden states + Top5Avg retrieval at 96-100% recall. `KnowledgePackStore` is the canonical injection path. **vLLM KV Connector v1 integration** validated end-to-end on Qwen3-0.6B with vLLM 0.19 (5 GPU integration tests passing).
+**Status:** All implementation phases complete. 441+ tests (241 Rust + 200 Python). KV Pack API in Rust engine for atomic multi-layer KV storage and retrieval. **KV injection verified with fully synthetic gibberish facts** (9/10 recall, 100% ratio vs text RAG on Qwen3-0.6B — proving recall comes from injected KV, not model training data). Hidden states + Top5Avg retrieval at 96-100% recall. `KnowledgePackStore` is the canonical injection path. **`MemoryPrefixBuilder`** composes governed memory prefixes for vLLM prefix-cache deployment. **vLLM KV Connector v1 integration** validated end-to-end on Qwen3-0.6B with vLLM 0.19 (5 GPU integration tests passing).
 
 ## Build & Test
 
@@ -71,14 +71,14 @@ Captures KV cache from GPT-2 inference on *"The capital of France is"*, then ret
 | Layer | Crate | Tests | What's covered |
 |-------|-------|-------|----------------|
 | Core | tdb-core | 6 | Builder, SynapticBank, KVPack types, tier defaults |
-| Storage | tdb-storage | 34 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore (single + batch), DeletionLog |
-| Retrieval | tdb-retrieval | 51 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter |
-| Organization | tdb-index | 24 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
-| Governance | tdb-governance | 27 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | tdb-engine | 96 | Write/read, pack API, text storage (single + batch), delete, state rebuild, SLB chain, Vamana activation |
-| Python | pytest | 145 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, migration, diagnostics, RAG baseline, vLLM connector format/load-path/integration (4+4+4+5 with `-m gpu`) |
+| Storage | tdb-storage | 33 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore (single + batch), DeletionLog |
+| Retrieval | tdb-retrieval | 48 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter |
+| Organization | tdb-index | 23 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
+| Governance | tdb-governance | 26 | Importance scoring, tier hysteresis, recency decay, sweep |
+| Engine | tdb-engine | 105 | Write/read, pack API, text storage (single + batch), delete, state rebuild, SLB chain, Vamana activation, list_packs |
+| Python | pytest | 200 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, migration, diagnostics, RAG baseline, vLLM connector format/load-path/integration (4+4+4+5 with `-m gpu`), synthetic-fact KV injection (7), prefix builder (11), vLLM prefix client (13), vLLM prefix e2e (4 GPU) |
 
-Per-crate counts include unit + acceptance + doctest tests. Sum: 6+34+51+24+27+96+145 = 383.
+Per-crate counts include unit + acceptance + doctest tests. Sum: 6+33+48+23+26+105+200 = 441.
 
 ## Crate Structure
 

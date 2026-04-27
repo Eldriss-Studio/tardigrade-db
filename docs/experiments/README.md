@@ -94,10 +94,55 @@ The v1 connector API (`base.py:451-480`) requires **token-identical prefix match
 **Tests (27 total):** 15 CPU (`test_vllm_load_path.py`: resolver, spy, per-method ATDD, signatures) + 4 CPU (`test_vllm_format.py` + `test_vllm_connector.py`) + 3 CPU (`test_engine_refresh.py`) + 6 GPU (`test_vllm_integration.py`: save, pack contents, semantic match, coherent output, synthetic-fact A/B [RED — architecturally impossible via v1], accumulation) + 1 GPU (`test_vllm_cross_session.py`: cross-process persistence).
 
 **Next steps identified:**
-1. Prefix-cache reframing: per-user synthetic "memory prefix" that's token-identical across requests → stock vLLM prefix-cache serves it. Feasible now.
-2. Verify KnowledgePackStore's 8/10 claim with synthetic facts (Zorblax-style) via HF directly — the real "memory" A/B test.
+1. ~~Prefix-cache reframing: per-user synthetic "memory prefix" that's token-identical across requests → stock vLLM prefix-cache serves it.~~ **Done — [Path 2 adapter built](memory-prefix-adapter.md): `MemoryPrefixBuilder` assembles governed memory prefixes. Next: wire into vLLM connector.**
+2. ~~Verify KnowledgePackStore's 8/10 claim with synthetic facts (Zorblax-style) via HF directly — the real "memory" A/B test.~~ **Done — [Path 1 verified](synthetic-kv-injection.md): 9/10 with fully synthetic gibberish, 100% recall ratio vs text RAG.**
 3. Research SGLang's connector contract for a potentially more flexible production serving path.
 4. Optional: vLLM custom attention plugin for true cross-prompt KV injection (heavy, requires fork).
+
+### [Path 2: Memory Prefix Adapter](memory-prefix-adapter.md)
+
+**Date:** April 27, 2026  
+**Status:** Complete — end-to-end verified on GPU with vLLM 0.19.1 + Qwen3-0.6B (4/4 tests passing)
+
+A deployment adapter that bridges TardigradeDB's governed memory to vLLM's prefix-cache contract. `MemoryPrefixBuilder` assembles a deterministic text prefix per owner from their Core/Validated memories, ordered by importance. Because the same owner's prefix is token-identical across requests, vLLM's stock prefix-cache serves it at zero prefill cost.
+
+**Key components:**
+- **`engine.list_packs(owner=N)`** — new Rust engine API enumerating all packs for an owner with tier, importance, and text metadata. Sorted by importance descending.
+- **`MemoryPrefixBuilder`** — Facade that filters by governance tier (Core always, Validated optionally, Draft never), applies optional token budget, and formats via pluggable strategies.
+- **`PrefixResult`** — value object with `text`, `version` (content hash for staleness detection), `pack_ids`, and `token_estimate`.
+- **Format strategies:** `BulletListFormat` ("Memory context:\n- fact1\n- fact2") and `TierAnnotatedFormat` ("- [Core] fact1\n- [Validated] fact2").
+
+**Design decisions:**
+- This is an output adapter, not a pivot. The HuggingFace direct-injection path (Path 1) coexists alongside — both read from the same engine, same storage, same governance. The prefix path just formats memories as text instead of injecting KV tensors.
+- Version is a SHA-256 content hash (truncated to 64 bits) — deterministic, no external state, changes when memory content changes.
+- Token budget drops lowest-importance memories first when the prefix exceeds the limit.
+
+**Tests (15 total):** 4 Rust acceptance tests for `list_packs` (empty, all, owner filter, importance sorting) + 11 Python ATDD tests for `MemoryPrefixBuilder` (empty, tier filtering, determinism, ordering, budget, versioning, format strategy, newline escaping).
+
+**Scripts:** `python/tardigrade_hooks/prefix_builder.py`, `python/tardigrade_hooks/prefix_format.py`
+
+**Wired (April 27, 2026):** `VLLMMemoryClient` (`python/tardigrade_vllm/prefix_client.py`) wraps `MemoryPrefixBuilder` for vLLM serving. `prepare_prompt(query)` prepends the governed prefix as raw text; `prepare_messages(messages)` injects it as/into a system message for OpenAI-style chat APIs. 13 ATDD tests validate prompt composition, message merging, owner isolation, budget enforcement, version tracking, and input immutability.
+
+### [Path 1: Synthetic-Fact KV Injection Verification](synthetic-kv-injection.md)
+
+**Date:** April 27, 2026  
+**Status:** Complete — **PASS**
+
+The existential test for TardigradeDB's core value proposition: does KV injection transfer knowledge the model has *never seen*? Uses 10 fully synthetic gibberish facts (nonsense proper nouns, fake units, made-up numbers) that cannot exist in any training corpus. Compares text RAG (fact pasted in prompt) vs KV injection (stored KV tensors injected via `KnowledgePackStore`).
+
+**Model:** Qwen3-0.6B (596M) on CPU, float32  
+**Corpus:** 10 gibberish facts (e.g., "The capital of Vrenthar is Zyphlox-9", "Agent Snibblex reported that the vault code is 9-Quornth-44")
+
+**Key findings:**
+- **Text RAG: 9/10** — one miss due to `</think>` tag truncation at max_new_tokens boundary
+- **KV Injection: 9/10** — matches text RAG exactly (100% recall ratio vs the 70% gate)
+- **236 total prompt tokens saved** (~23.6 per query average)
+- KV injection got one fact right (#9, "88.2 frenzils") that text RAG missed
+- The one KV miss (#8) dropped the quantity "5 klombs" but kept the substance "purazine"
+- **Verdict:** KV injection transfers truly novel knowledge. Any correct recall is unambiguous — these gibberish strings cannot come from model weights.
+
+**Scripts:** `experiments/synthetic_kv_injection_experiment.py`, `experiments/synthetic_facts_corpus.py`  
+**Tests:** 7 ATDD tests in `tests/python/test_synthetic_kv_injection.py` (6 structural on GPT-2, 1 gate on Qwen3-0.6B)
 
 ### [KV Cache Validation — Full Progression](kv-cache-validation.md)
 
@@ -127,6 +172,8 @@ Systematic exploration of what to store and how to retrieve, tested on Sonia (16
 
 | Experiment | Goal | Status |
 |-----------|------|--------|
+| **[Synthetic-fact KV injection](synthetic-kv-injection.md)** | Does KV injection transfer knowledge the model has never seen? | **Complete — PASS: 9/10, 100% recall ratio vs text RAG** |
+| **[Memory prefix adapter](memory-prefix-adapter.md)** | Governed memory → deterministic text prefix for vLLM prefix-cache | **Complete — 4/4 GPU tests passing on vLLM 0.19.1** |
 | **100-memory scale test** | Does Q*K retrieval hold at realistic memory counts? | **Complete — 40% recall, needs scoring improvements** |
 | **Traditional RAG baseline** | Compare current Q*K retrieval against standard embedding retrieval | **Complete — RAG got 100% recall on this corpus** |
 | **Hidden states + top5_pair_avg validation** | Validate 100% recall path through engine pipeline | **Next up** |

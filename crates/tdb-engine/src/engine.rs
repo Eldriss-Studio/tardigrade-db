@@ -287,17 +287,17 @@ impl Engine {
                 break;
             }
         }
-        if let Some(new_dim) = observed_dim {
-            if new_dim != self.slb.dim() {
-                let cap = self.slb.capacity();
-                self.slb = SemanticLookasideBuffer::new(cap, new_dim);
-                // Re-populate from cells already in governance — they were
-                // valid for the OLD dim, but we just changed dims, so they're
-                // now stale. (This branch only fires when the engine was
-                // opened empty, so governance is empty and this loop is
-                // basically a no-op. Defensive code for future safety.)
-                self.key_dim = Some(new_dim);
-            }
+        if let Some(new_dim) = observed_dim
+            && new_dim != self.slb.dim()
+        {
+            let cap = self.slb.capacity();
+            self.slb = SemanticLookasideBuffer::new(cap, new_dim);
+            // Re-populate from cells already in governance — they were
+            // valid for the OLD dim, but we just changed dims, so they're
+            // now stale. (This branch only fires when the engine was
+            // opened empty, so governance is empty and this loop is
+            // basically a no-op. Defensive code for future safety.)
+            self.key_dim = Some(new_dim);
         }
 
         // 3. Re-derive cell-keyed state for any cells we hadn't seen yet.
@@ -327,10 +327,7 @@ impl Engine {
         let next_pack_id = pack_directory.next_pack_id();
 
         // 4. Replay WAL again. TraceGraph.add_edge dedups so re-apply is safe.
-        let entries = self
-            .wal
-            .replay()
-            .map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
+        let entries = self.wal.replay().map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
         for entry in &entries {
             match entry {
                 WalEntry::AddEdge { src, dst, edge_type, timestamp } => {
@@ -342,12 +339,8 @@ impl Engine {
         }
 
         // 5. Refresh persistent backing stores.
-        self.text_store
-            .refresh()
-            .map_err(|e| TardigradeError::Io { source: e })?;
-        self.deletion_log
-            .refresh()
-            .map_err(|e| TardigradeError::Io { source: e })?;
+        self.text_store.refresh().map_err(|e| TardigradeError::Io { source: e })?;
+        self.deletion_log.refresh().map_err(|e| TardigradeError::Io { source: e })?;
 
         // 6. Apply deletions to the rebuilt directory and text_store.
         for &pack_id in self.deletion_log.deleted_set() {
@@ -379,10 +372,7 @@ impl Engine {
         }
         let scorer = ImportanceScorer::new(cell.meta.importance);
         let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
-        self.governance.insert(
-            cell.id,
-            CellGovernance { scorer, tier_sm, days_since_update: 0.0 },
-        );
+        self.governance.insert(cell.id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
     }
 
     /// Write key/value vectors to the engine. Returns the assigned cell ID.
@@ -1074,6 +1064,38 @@ impl Engine {
         let cell_ids = self.pack_directory.cell_ids(pack_id)?;
         let retrieval_cell_id = *cell_ids.first()?;
         self.governance.get(&retrieval_cell_id).map(|g| g.scorer.importance())
+    }
+
+    /// Enumerate all packs, optionally filtered by owner.
+    ///
+    /// Returns `(pack_id, owner, tier, importance)` sorted by importance
+    /// descending. Packs without governance default to `(Draft, 0.0)`.
+    pub fn list_packs(&self, owner_filter: Option<OwnerId>) -> Vec<(PackId, OwnerId, Tier, f32)> {
+        let mut results = Vec::new();
+        for &pack_id in self.pack_directory.pack_ids() {
+            let Some(cell_ids) = self.pack_directory.cell_ids(pack_id) else {
+                continue;
+            };
+            let Some(&retrieval_cell_id) = cell_ids.first() else {
+                continue;
+            };
+            let owner = match self.pool.get(retrieval_cell_id) {
+                Ok(cell) => cell.owner,
+                Err(_) => continue,
+            };
+            if let Some(filter) = owner_filter
+                && owner != filter
+            {
+                continue;
+            }
+            let (tier, importance) = self
+                .governance
+                .get(&retrieval_cell_id)
+                .map_or((Tier::Draft, 0.0), |g| (g.tier_sm.current(), g.scorer.importance()));
+            results.push((pack_id, owner, tier, importance));
+        }
+        results.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+        results
     }
 
     /// Load a pack by ID without retrieval scoring.

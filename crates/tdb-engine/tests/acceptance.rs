@@ -2441,11 +2441,7 @@ fn test_refresh_is_idempotent() {
     b.refresh().unwrap();
     let count_after_first = b.pack_count();
     b.refresh().unwrap();
-    assert_eq!(
-        b.pack_count(),
-        count_after_first,
-        "second refresh must be a no-op"
-    );
+    assert_eq!(b.pack_count(), count_after_first, "second refresh must be a no-op");
 }
 
 /// Step 5a-L1.3: WAL-derived state (TraceGraph) must also re-apply.
@@ -2522,8 +2518,62 @@ fn test_refresh_handles_deletions_from_other_handle() {
 
     a.delete_pack(pid).unwrap();
     b.refresh().unwrap();
-    assert!(
-        !b.pack_exists(pid),
-        "refresh must propagate deletions from another handle"
-    );
+    assert!(!b.pack_exists(pid), "refresh must propagate deletions from another handle");
+}
+
+// -- list_packs ---------------------------------------------------------------
+
+#[test]
+fn test_list_packs_returns_all_packs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = vec![1.0_f32; TEST_PACK_LAYER_PAYLOAD_DIM];
+    engine.mem_write_pack(&test_pack(&[1.0], key.clone())).unwrap();
+    engine.mem_write_pack(&test_pack(&[2.0], key.clone())).unwrap();
+
+    let packs = engine.list_packs(None);
+    assert_eq!(packs.len(), 2, "should list all packs");
+}
+
+#[test]
+fn test_list_packs_filters_by_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = vec![1.0_f32; TEST_PACK_LAYER_PAYLOAD_DIM];
+    engine.mem_write_pack(&test_pack_for_owner(1, &[1.0], key.clone())).unwrap();
+    engine.mem_write_pack(&test_pack_for_owner(2, &[2.0], key.clone())).unwrap();
+    engine.mem_write_pack(&test_pack_for_owner(1, &[3.0], key.clone())).unwrap();
+
+    let owner1 = engine.list_packs(Some(1));
+    let owner2 = engine.list_packs(Some(2));
+    assert_eq!(owner1.len(), 2);
+    assert_eq!(owner2.len(), 1);
+}
+
+#[test]
+fn test_list_packs_sorted_by_importance_descending() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = vec![1.0_f32; TEST_PACK_LAYER_PAYLOAD_DIM];
+    engine.mem_write_pack(&test_pack(&[1.0], key.clone())).unwrap();
+    let pid_b = engine.mem_write_pack(&test_pack(&[2.0], key.clone())).unwrap();
+
+    // Boost pid_b by loading it several times (each access adds +3).
+    for _ in 0..5 {
+        let _ = engine.load_pack_by_id(pid_b);
+    }
+
+    let packs = engine.list_packs(None);
+    assert_eq!(packs[0].0, pid_b, "higher-importance pack should be first");
+    assert!(packs[0].3 > packs[1].3, "importance should be descending");
+}
+
+#[test]
+fn test_list_packs_empty_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = Engine::open(dir.path()).unwrap();
+    assert!(engine.list_packs(None).is_empty());
 }

@@ -6,7 +6,7 @@
 
 TardigradeDB is not a traditional database with tables and indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-> **Research status (April 24, 2026): experimental prototype**
+> **Research status (April 27, 2026): experimental prototype**
 >
 > TardigradeDB is a research experiment, not a production-ready database.
 > Current results are from controlled demos, experiments, and benchmarks.
@@ -35,11 +35,11 @@ At runtime, TardigradeDB acts like a memory engine for agents:
 
 1. It stores model KV activations durably (`mem_write`, `mem_write_pack`) in quantized form.
 2. It retrieves relevant past activations (`mem_read`, `mem_read_pack`) using per-token latent-space scoring with Top5Avg aggregation.
-3. It injects retrieved KV tensors directly into the model's attention cache — producing **byte-identical output** to having the text in the prompt, at **46% fewer prompt tokens**.
+3. It injects retrieved KV tensors directly into the model's attention cache — **verified with fully synthetic gibberish facts** (9/10 recall on Qwen3-0.6B, matching text RAG at 100% ratio). Any correct recall is unambiguous proof — these nonsense strings can only come from the injected KV tensors.
 4. It tracks causal links and importance so memory can evolve over time.
-5. It exposes the engine through Rust APIs and Python bindings (`KnowledgePackStore` for end-to-end injection).
+5. It exposes the engine through Rust APIs and Python bindings (`KnowledgePackStore` for end-to-end injection, `MemoryPrefixBuilder` for governed text prefixes).
 6. It ships a comparable benchmark harness (`tdb_bench`) for transparent system-to-system evaluation.
-7. It plugs into **vLLM** (production LLM serving) via the official KV Connector v1 API as a **persistent prefix-cache accelerator** — captures KV during generation, persists as packs, and accelerates re-serve of identical prompt prefixes. Validated with Qwen3-0.6B on vLLM 0.19. Note: the v1 connector API is prefix-cache only (token-identical prefix matching); cross-prompt "memory" injection requires the HuggingFace `KnowledgePackStore` path instead. See [experiments/README.md](docs/experiments/README.md) for the full architectural analysis.
+7. It plugs into **vLLM** (production LLM serving) via two paths: (a) the KV Connector v1 API as a **persistent prefix-cache accelerator**, and (b) `MemoryPrefixBuilder` which assembles governed memory prefixes that vLLM's stock prefix-cache serves automatically. See [experiments/README.md](docs/experiments/README.md) for the full architectural analysis.
 
 If you only need one mental model: **capture memory state, persist it, retrieve it later with attention-compatible relevance, and inject it directly into the model's attention cache.**
 
@@ -569,13 +569,13 @@ The core problem: an LLM forgets everything between requests. TardigradeDB store
 
 We discovered that vLLM's KV Connector v1 API only supports **prefix-cache acceleration** (same prompt prefix → skip recomputation). It cannot inject KV from a different prompt to influence generation. So there are four paths to actually making "remember" work in production, ordered from easiest to hardest:
 
-**Path 1 — Verify the HuggingFace path works with synthetic facts**
+**Path 1 — Verify the HuggingFace path works with synthetic facts** ✅
 
-The `KnowledgePackStore` (in `python/tardigrade_hooks/kp_injector.py`) already passes stored KV directly to HuggingFace's `model.generate(past_key_values=...)`. Earlier experiments report 8/10 novel facts recalled byte-identically to text RAG, with 46% fewer prompt tokens. But those experiments used facts that might exist in the model's training data. The next step is repeating the test with truly synthetic facts (made-up names, dates, and entities the model has never seen) to prove the recall comes from injection, not from the model's prior knowledge. This is hours of work, not days, and answers the fundamental question: does injection actually work?
+**Verified (April 27, 2026).** 10 fully synthetic gibberish facts — nonsense proper nouns ("Zyphlox-9", "9-Quornth-44", "Yombliquid-X"), fake units ("zennits", "drazeks", "plonks"), invented entities ("Vrenthar", "Gorflax-12") — that cannot exist in any training corpus. `KnowledgePackStore` injected stored KV via `model.generate(past_key_values=...)` on Qwen3-0.6B. **Result: 9/10, matching text RAG exactly (100% recall ratio), with 236 prompt tokens saved.** Any correct recall is unambiguous proof — these gibberish strings can only come from the injected KV tensors. See `docs/experiments/synthetic-kv-injection.md` for the full writeup.
 
-**Path 2 — Reframe the vLLM connector as a "memory prefix" cache**
+**Path 2 — Reframe the vLLM connector as a "memory prefix" cache** ✅
 
-vLLM's prefix-cache requires token-identical matching — but we can work with that. The idea: define a fixed "memory prompt" per user or agent (e.g., a structured text block summarizing their accumulated memories), compute its KV once, store it in TardigradeDB, and prepend it to every future request. Because the prefix text is identical each time, vLLM's stock prefix-cache serves the stored KV automatically — no fork, no custom code, no API limitations. The model sees the memory context at zero prefill cost on repeat requests. This turns the v1 connector's limitation into a feature: TardigradeDB becomes a persistent, cross-session, disk-backed prefix cache with governance (promotion, decay, eviction) that plain vLLM doesn't have. Works with stock vLLM today.
+**Complete (April 27, 2026).** `VLLMMemoryClient` (in `python/tardigrade_vllm/prefix_client.py`) prepends governed memory prefixes to prompts before they reach vLLM. `prepare_prompt(query)` for raw text, `prepare_messages(messages)` for OpenAI-style chat. Backed by `MemoryPrefixBuilder` which selects Core/Validated memories ordered by importance, applies optional token budgets, and tracks staleness via content-hash versioning. Because the same owner's prefix is token-identical across requests, vLLM's stock prefix-cache serves the stored KV at zero prefill cost. Per-owner isolation, pluggable format strategies (`BulletListFormat`, `TierAnnotatedFormat`), and draft exclusion all built in. The HuggingFace direct-injection path (Path 1) and the vLLM prefix path coexist as two output adapters on the same engine.
 
 **Path 3 — Research SGLang's connector contract**
 

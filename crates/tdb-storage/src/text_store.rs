@@ -64,11 +64,7 @@ impl TextStore {
     /// handle at the same path. Idempotent: repeated calls with no on-disk
     /// changes leave the index unchanged.
     pub fn refresh(&mut self) -> io::Result<()> {
-        self.texts = if self.path.exists() {
-            Self::replay(&self.path)?
-        } else {
-            HashMap::new()
-        };
+        self.texts = if self.path.exists() { Self::replay(&self.path)? } else { HashMap::new() };
         Ok(())
     }
 

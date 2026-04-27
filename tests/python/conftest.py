@@ -8,3 +8,7 @@ def pytest_configure(config):
         "markers",
         "gpu: marks tests that require a CUDA GPU and vLLM runtime",
     )
+    config.addinivalue_line(
+        "markers",
+        "slow: marks tests that require large model downloads and long runtime",
+    )
