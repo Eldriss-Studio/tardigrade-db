@@ -362,6 +362,113 @@ def test_resolver_handles_decode_step_one_token_per_request():
     assert [s.block_indices for s in slices] == [(1,), (0,), (4,)]
 
 
+# -- Step 4: real start_load_kv writes to GPU buffer (Spy pattern) ------------
+#
+# Constructs TardigradeConnector via __new__ to skip the heavyweight vLLM
+# init, then directly invokes .start_load_kv on a mock forward_context built
+# from real torch tensors so .copy_() actually moves data. CPU-only.
+
+def _build_bare_connector(num_kv_heads, head_dim, block_size, num_layers):
+    """Construct a TardigradeConnector with the minimum attributes start_load_kv touches."""
+    pytest.importorskip("vllm", reason="vLLM not installed")
+    from tardigrade_vllm.connector import TardigradeConnector
+
+    c = TardigradeConnector.__new__(TardigradeConnector)
+    c.num_kv_heads = num_kv_heads
+    c.head_dim = head_dim
+    c.block_size = block_size
+    c.num_layers = num_layers
+    c.kv_dim = num_kv_heads * head_dim
+    c._load_packs = {}
+    c._load_meta = {}
+    return c
+
+
+def _mock_torch_forward_context(num_layers, num_total_blocks, block_size, num_kv_heads, head_dim):
+    """Build a mock forward_context with torch CPU tensors for kv_caches."""
+    torch = pytest.importorskip("torch")
+    ctx = MagicMock()
+    shape = (num_total_blocks, block_size, num_kv_heads, head_dim)
+    kv_caches = []
+    for _ in range(num_layers):
+        k = torch.zeros(shape, dtype=torch.float32)
+        v = torch.zeros(shape, dtype=torch.float32)
+        kv_caches.append((k, v))
+    ctx.kv_caches = kv_caches
+    return ctx
+
+
+def test_real_start_load_kv_writes_block_slot():
+    """GIVEN a manually-staged pack with all-ones K and known V data,
+    WHEN TardigradeConnector.start_load_kv runs,
+    THEN the allocated GPU block slot is non-zero in both K and V caches."""
+    torch = pytest.importorskip("torch")
+    num_kv_heads, head_dim, block_size = 2, 4, 4
+    num_layers, num_total_blocks = 2, 8
+    seq_len = 4  # exactly 1 block worth
+
+    c = _build_bare_connector(num_kv_heads, head_dim, block_size, num_layers)
+    ctx = _mock_torch_forward_context(num_layers, num_total_blocks, block_size,
+                                       num_kv_heads, head_dim)
+
+    # Stage a known pack: K = +1.0 everywhere, V = -1.0 everywhere
+    kv_dim = num_kv_heads * head_dim
+    k_flat = np.ones(seq_len * kv_dim, dtype=np.float32)
+    v_flat = -np.ones(seq_len * kv_dim, dtype=np.float32)
+    payload = np.concatenate([k_flat, v_flat])
+    pack_layers = [{"layer_idx": li, "data": payload.tolist()}
+                   for li in range(num_layers)]
+    c._load_packs["req_spy"] = {
+        "pack": {"pack_id": 99, "layers": pack_layers},
+        "seq_len": seq_len,
+    }
+    c._load_meta["req_spy"] = {"block_ids": [3], "num_tokens": seq_len}
+
+    # Sanity check: pre-state is zero
+    for k_cache, v_cache in ctx.kv_caches:
+        assert torch.all(k_cache == 0)
+        assert torch.all(v_cache == 0)
+
+    c.start_load_kv(ctx)
+
+    # Block 3 of every layer should now contain the staged data
+    for layer_idx in range(num_layers):
+        k_cache, v_cache = ctx.kv_caches[layer_idx]
+        assert torch.all(k_cache[3] == 1.0), (
+            f"Layer {layer_idx}: K cache block 3 not written to all-ones; "
+            f"got max={k_cache[3].max().item()}, min={k_cache[3].min().item()}"
+        )
+        assert torch.all(v_cache[3] == -1.0), (
+            f"Layer {layer_idx}: V cache block 3 not written to -1.0"
+        )
+        # Untouched block stays zero
+        assert torch.all(k_cache[0] == 0)
+
+
+def test_real_start_load_kv_clears_state_after_load():
+    """GIVEN a staged pack, WHEN start_load_kv runs,
+    THEN _load_packs and _load_meta no longer contain the request."""
+    torch = pytest.importorskip("torch")
+    num_kv_heads, head_dim, block_size = 2, 4, 4
+    num_layers, num_total_blocks = 1, 4
+
+    c = _build_bare_connector(num_kv_heads, head_dim, block_size, num_layers)
+    ctx = _mock_torch_forward_context(num_layers, num_total_blocks, block_size,
+                                       num_kv_heads, head_dim)
+
+    payload = np.zeros(2 * 4 * (num_kv_heads * head_dim), dtype=np.float32)
+    pack_layers = [{"layer_idx": 0, "data": payload.tolist()}]
+    c._load_packs["req_cleanup"] = {
+        "pack": {"pack_id": 1, "layers": pack_layers}, "seq_len": 4,
+    }
+    c._load_meta["req_cleanup"] = {"block_ids": [1], "num_tokens": 4}
+
+    c.start_load_kv(ctx)
+
+    assert "req_cleanup" not in c._load_packs
+    assert "req_cleanup" not in c._load_meta
+
+
 def test_connector_init_back_compat_with_two_arg_call():
     """GIVEN older callers that may still pass (vllm_config, role),
     WHEN TardigradeConnector is instantiated with two positional args,
