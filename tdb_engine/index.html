@@ -33,7 +33,7 @@
   <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
 </div>
 
-</head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tdb_engine</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tdb_engine/index.html">tdb_<wbr>engine</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#why-does-this-crate-exist" title="Why does this crate exist?">Why does this crate exist?</a></li><li><a href="#what-happens-when-you-write" title="What happens when you write">What happens when you write</a></li><li><a href="#what-happens-when-you-read" title="What happens when you read">What happens when you read</a></li><li><a href="#crash-recovery-memento-pattern" title="Crash recovery (Memento pattern)">Crash recovery (Memento pattern)</a></li><li><a href="#causal-memory-trace-graph" title="Causal memory (Trace graph)">Causal memory (Trace graph)</a></li><li><a href="#synaptic-bank-lora-adapters" title="Synaptic bank (`LoRA` adapters)">Synaptic bank (<code>LoRA</code> adapters)</a></li><li><a href="#python-bridge" title="Python bridge">Python bridge</a></li><li><a href="#usage-rust" title="Usage (Rust)">Usage (Rust)</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>tdb_<wbr>engine</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tdb_engine/lib.rs.html#1-177">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The brain of <code>TardigradeDB</code> — a unified facade that turns five independent
+</head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tdb_engine</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tdb_engine/index.html">tdb_<wbr>engine</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#why-does-this-crate-exist" title="Why does this crate exist?">Why does this crate exist?</a></li><li><a href="#what-happens-when-you-write" title="What happens when you write">What happens when you write</a></li><li><a href="#what-happens-when-you-read" title="What happens when you read">What happens when you read</a></li><li><a href="#crash-recovery-and-cross-process-sync-memento-pattern" title="Crash recovery and cross-process sync (Memento pattern)">Crash recovery and cross-process sync (Memento pattern)</a></li><li><a href="#causal-memory-trace-graph" title="Causal memory (Trace graph)">Causal memory (Trace graph)</a></li><li><a href="#synaptic-bank-lora-adapters" title="Synaptic bank (`LoRA` adapters)">Synaptic bank (<code>LoRA</code> adapters)</a></li><li><a href="#python-bridge" title="Python bridge">Python bridge</a></li><li><a href="#usage-rust" title="Usage (Rust)">Usage (Rust)</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>tdb_<wbr>engine</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tdb_engine/lib.rs.html#1-189">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The brain of <code>TardigradeDB</code> — a unified facade that turns five independent
 subsystems into a single, coherent memory for autonomous AI agents.</p>
 <h2 id="why-does-this-crate-exist"><a class="doc-anchor" href="#why-does-this-crate-exist">§</a>Why does this crate exist?</h2>
 <p>An LLM agent that can reason over its own history needs four things to happen
@@ -55,10 +55,10 @@ causal edge tracking) happens as automatic side effects.</p>
   ├─ Storage:     BlockPool::append → Q4-compress key+value, fsync to segment
   │               (on-disk metadata includes importance + tier for crash recovery)
   │
-  ├─ Retrieval:   BruteForceRetriever::insert → index key for latent-space queries
-  │               SLB::insert → cache key in INT8 for sub-5μs hot-path lookups
+  ├─ Retrieval:   Pipeline::insert → PerTokenRetriever + BruteForce
+  │               SLB::insert → cache mean-pooled key for hot-path lookups
   │
-  ├─ Index:       if Vamana active → insert_online (graph ANN)
+  ├─ Index:       if Vamana active → insert (graph ANN)
   │               if cell_count ≥ threshold → lazy-activate Vamana
   │
   └─ Trace:       if parent_cell_id provided →
@@ -72,19 +72,23 @@ when the engine reopens.</p>
 (<strong>Chain of Responsibility</strong> pattern), merging results across stages:</p>
 <div class="example-wrap"><pre class="language-text"><code>mem_read(query_key, k, owner_filter)
   │
-  ├─ Stage 1: SLB (hot path)
-  │  INT8 quantized keys, NEON SDOT / AVX2
+  ├─ SLB (hot cache, separate from pipeline)
+  │  INT8 quantized mean-pooled keys, NEON SDOT / AVX2
   │  Sub-5μs per query at 4096 entries
   │  Exploits conversational locality — recent cells are cached
   │
-  ├─ Stage 2: Vamana (warm path, if active)
-  │  DiskANN-style graph with robust pruning
-  │  Multi-seed greedy beam search
-  │  Activated when cell count crosses threshold
+  ├─ Pipeline Stage 1: PerTokenRetriever (primary)
+  │  Inverted Multi-Key Index with Top5Avg scoring
+  │  INT8 per-token dot products, tuneable via PerTokenConfig
+  │  100% recall at 100 memories (validated on Qwen3-0.6B)
   │
-  └─ Stage 3: BruteForce (cold path)
-     Exhaustive scaled dot-product: score = (q · k) / √d_k
-     Exact results, owner-filtered per-agent partitions
+  ├─ Pipeline Stage 2: BruteForce (fallback)
+  │  Exhaustive scaled dot-product: score = (q · k) / √d_k
+  │  Exact results, owner-filtered per-agent partitions
+  │
+  └─ Pipeline Stage 3: Vamana (optional, lazy-activated)
+     DiskANN-style graph with robust pruning
+     Activated when cell count crosses threshold
 
   Then for each result:
     → recency_decay(Δt) multiplier (21-day half-life)
@@ -93,20 +97,27 @@ when the engine reopens.</p>
     → SLB::insert → cache for future hot-path hits</code></pre></div>
 <p>Results are deduplicated by <code>CellId</code>, sorted by decay-adjusted score, and
 truncated to k.</p>
-<h2 id="crash-recovery-memento-pattern"><a class="doc-anchor" href="#crash-recovery-memento-pattern">§</a>Crash recovery (Memento pattern)</h2>
-<p>On <a href="engine/struct.Engine.html#method.open" title="associated function tdb_engine::engine::Engine::open"><code>Engine::open</code></a>, the engine rebuilds all in-memory derived state from
-durable sources:</p>
-<div class="example-wrap"><pre class="language-text"><code>Engine::open(dir)
-  ├─ BlockPool::open → scan segments, rebuild CellId → offset index
+<h2 id="crash-recovery-and-cross-process-sync-memento-pattern"><a class="doc-anchor" href="#crash-recovery-and-cross-process-sync-memento-pattern">§</a>Crash recovery and cross-process sync (Memento pattern)</h2>
+<p>On <a href="engine/struct.Engine.html#method.open" title="associated function tdb_engine::engine::Engine::open"><code>Engine::open</code></a> and <a href="engine/struct.Engine.html#method.refresh" title="method tdb_engine::engine::Engine::refresh"><code>refresh</code></a>, the engine rebuilds all in-memory
+derived state from durable sources:</p>
+<div class="example-wrap"><pre class="language-text"><code>Engine::open(dir) / Engine::refresh()
+  ├─ BlockPool::open/refresh_index → scan segments
+  ├─ Pipeline rebuild → fresh PerTokenRetriever + BruteForce
+  │  (Vamana reset; re-activated lazily if cell count ≥ threshold)
   ├─ For each persisted cell:
-  │    BruteForceRetriever::insert(key)
+  │    Pipeline::insert(key) + SLB::insert(mean_pooled_key)
   │    ImportanceScorer::new(persisted_importance)
   │    TierStateMachine::with_tier(persisted_tier)
   ├─ WAL::replay → rebuild TraceGraph from logged edges
+  ├─ PackDirectory::from_cells → rebuild pack membership
+  ├─ DeletionLog::refresh → filter deleted packs
   └─ next_id = max(persisted_ids) + 1</code></pre></div>
-<p>This means the engine can crash at any point and recover all state that was
-durably committed (fsync’d). In-flight writes that didn’t complete fsync
-are discarded — the partial record detection in segment scanning handles this.</p>
+<p><code>refresh()</code> provides the same guarantee as a fresh <code>open()</code>: two Engine
+handles sharing a path stay synchronized. The vLLM connector relies on
+this for scheduler ↔ worker coordination.</p>
+<p>The engine can crash at any point and recover all state that was durably
+committed (fsync’d). In-flight writes that didn’t complete fsync are
+discarded — partial record detection in segment scanning handles this.</p>
 <h2 id="causal-memory-trace-graph"><a class="doc-anchor" href="#causal-memory-trace-graph">§</a>Causal memory (Trace graph)</h2>
 <p>When a cell is written with <code>parent_cell_id = Some(parent)</code>, the engine
 records a directed <code>CausedBy</code> edge in the Trace graph, durably logged via
@@ -153,4 +164,4 @@ ancestors = engine.trace_ancestors(cell_id)</code></pre></div><h2 id="usage-rust
 <span class="comment">// Close and reopen — all state is recovered from disk.
 </span>drop(engine);
 <span class="kw">let </span>engine2 = Engine::open(dir).unwrap();
-<span class="macro">assert_eq!</span>(engine2.cell_count(), <span class="number">1</span>);</code></pre></div></div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="batch_cache/index.html" title="mod tdb_engine::batch_cache">batch_<wbr>cache</a></dt><dd><code>BatchQuantizedKVCache</code> — handles concurrent Q4 inference over multiple agents.</dd><dt><a class="mod" href="engine/index.html" title="mod tdb_engine::engine">engine</a></dt><dd>Top-level engine: Facade over storage, retrieval, governance, and organization layers.</dd><dt><a class="mod" href="pack_directory/index.html" title="mod tdb_engine::pack_directory">pack_<wbr>directory</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>KV pack directory — Value Object for pack membership and reverse lookup.</dd><dt><a class="mod" href="pack_materialization/index.html" title="mod tdb_engine::pack_materialization">pack_<wbr>materialization</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Pack-read materialization value objects.</dd><dt><a class="mod" href="scheduler/index.html" title="mod tdb_engine::scheduler">scheduler</a></dt><dd>Interleaved prefill/decode scheduler.</dd></dl></section></div></main></body></html>
+<span class="macro">assert_eq!</span>(engine2.cell_count(), <span class="number">1</span>);</code></pre></div></div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="engine/index.html" title="mod tdb_engine::engine">engine</a></dt><dd>Top-level engine: Facade over storage, retrieval, governance, and organization layers.</dd><dt><a class="mod" href="pack_directory/index.html" title="mod tdb_engine::pack_directory">pack_<wbr>directory</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>KV pack directory — Value Object for pack membership and reverse lookup.</dd><dt><a class="mod" href="pack_materialization/index.html" title="mod tdb_engine::pack_materialization">pack_<wbr>materialization</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Pack-read materialization value objects.</dd><dt><a class="mod" href="scheduler/index.html" title="mod tdb_engine::scheduler">scheduler</a></dt><dd>Interleaved prefill/decode scheduler.</dd></dl></section></div></main></body></html>

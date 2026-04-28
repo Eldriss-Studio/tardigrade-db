@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["batch_cache","engine","pack_directory","pack_materialization","scheduler"]};
+window.SIDEBAR_ITEMS = {"mod":["engine","pack_directory","pack_materialization","scheduler"]};

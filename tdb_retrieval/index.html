@@ -33,29 +33,38 @@
   <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
 </div>
 
-</head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tdb_retrieval</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tdb_retrieval/index.html">tdb_<wbr>retrieval</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#two-level-retrieval" title="Two-Level Retrieval">Two-Level Retrieval</a><ul><li><a href="#why-brute-force-not-ann" title="Why Brute Force, Not ANN?">Why Brute Force, Not ANN?</a></li><li><a href="#semantic-lookaside-buffer" title="Semantic Lookaside Buffer">Semantic Lookaside Buffer</a></li></ul></li><li><a href="#usage" title="Usage">Usage</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>tdb_<wbr>retrieval</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tdb_retrieval/lib.rs.html#1-83">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Latent-space retrieval for <code>TardigradeDB</code> — find relevant memory cells by attention scoring.</p>
+</head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tdb_retrieval</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tdb_retrieval/index.html">tdb_<wbr>retrieval</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#three-stage-retrieval-pipeline" title="Three-Stage Retrieval Pipeline">Three-Stage Retrieval Pipeline</a><ul><li><a href="#why-brute-force-not-ann" title="Why Brute Force, Not ANN?">Why Brute Force, Not ANN?</a></li><li><a href="#semantic-lookaside-buffer" title="Semantic Lookaside Buffer">Semantic Lookaside Buffer</a></li></ul></li><li><a href="#usage" title="Usage">Usage</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>tdb_<wbr>retrieval</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tdb_retrieval/lib.rs.html#1-92">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Latent-space retrieval for <code>TardigradeDB</code> — find relevant memory cells by attention scoring.</p>
 <p><code>TardigradeDB</code> does not use cosine similarity over text embeddings. Relevance is computed
 as <strong>scaled dot-product attention</strong> directly in the model’s latent space:</p>
 <div class="example-wrap"><pre class="language-text"><code>score(q, k) = (q · k) / √d_k</code></pre></div>
 <p>This is the same formula used inside a transformer’s attention head. Querying memory
 with a key vector from a live inference pass means the retrieval metric is identical
 to how the model itself relates tokens — no separate embedding model required.</p>
-<h2 id="two-level-retrieval"><a class="doc-anchor" href="#two-level-retrieval">§</a>Two-Level Retrieval</h2><div class="example-wrap"><pre class="language-text"><code>query key vector
+<h2 id="three-stage-retrieval-pipeline"><a class="doc-anchor" href="#three-stage-retrieval-pipeline">§</a>Three-Stage Retrieval Pipeline</h2><div class="example-wrap"><pre class="language-text"><code>query key vector
       │
       ▼
+┌─────────────────────────────────────────┐
+│  PerTokenRetriever (primary)            │
+│  • Inverted Multi-Key Index             │
+│  • INT8 per-token scoring (Top5Avg)     │
+│  • 100% recall at 100 memories          │
+│  • Tuneable via PerTokenConfig           │
+└─────────────┬───────────────────────────┘
+              │ insufficient results
+              ▼
+┌─────────────────────────────────────────┐
+│  BruteForceRetriever (fallback)         │
+│  • Full f32 exhaustive scan             │
+│  • Owner-filtered per-agent partitions  │
+│  • Valid up to ~10K cells per agent     │
+└─────────────────────────────────────────┘
+
+Parallel hot cache (separate from pipeline):
 ┌─────────────────────────────────────────┐
 │  SemanticLookasideBuffer (hot path)     │
 │  • Fixed-capacity LRU, INT8 keys        │
 │  • Target: &lt; 5 μs via SIMD dot product  │
-│  • HIT → return immediately             │
-└─────────────┬───────────────────────────┘
-              │ MISS
-              ▼
-┌─────────────────────────────────────────┐
-│  BruteForceRetriever (cold path)        │
-│  • Full f32 exhaustive scan             │
-│  • Owner-filtered per-agent partitions  │
-│  • Valid up to ~10K cells per agent     │
+│  • Warmed on every read/write           │
 └─────────────────────────────────────────┘</code></pre></div><h3 id="why-brute-force-not-ann"><a class="doc-anchor" href="#why-brute-force-not-ann">§</a>Why Brute Force, Not ANN?</h3>
 <p>The <a href="https://arxiv.org/abs/2409.17264">MemArt paper</a> (which this architecture cites) demonstrates that at typical
 per-agent memory scales (&lt;10K blocks), SIMD brute-force matmul outperforms HNSW
