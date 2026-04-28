@@ -398,7 +398,7 @@ Two semantically related prompts find each other through **latent-space attentio
 
 ## Testing
 
-### Rust (249 tests)
+### Rust (263 tests)
 
 ```bash
 cargo nextest run --workspace --exclude tdb-python    # all unit/acceptance tests
@@ -408,7 +408,7 @@ cargo fmt --all -- --check                            # format check
 just test-crate tdb-storage                           # single crate
 ```
 
-### Python (201+ tests)
+### Python (216 tests)
 
 ```bash
 source .venv/bin/activate
@@ -467,17 +467,17 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 | Layer | Crate | Tests | Coverage |
 |-------|-------|-------|----------|
-| Core types | `tdb-core` | 6 | Builder, SynapticBank, KVPack types, tier defaults |
+| Core types | `tdb-core` | 6 | Builder, SynapticBank, KVPack types, tier defaults, retrieval boost |
 | Storage | `tdb-storage` | 33 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore, DeletionLog |
 | Retrieval | `tdb-retrieval` | 51 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig |
 | Organization | `tdb-index` | 23 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
 | Governance | `tdb-governance` | 26 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | `tdb-engine` | 110 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation, refresh, WAL checkpoint, active governance (tier boost + eviction), throughput |
-| Python | pytest | 201+ | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, KnowledgePackStore, multi-memory injection, trace-linked retrieval, retrieval key strategies (3), MCP tools, diagnostics, prefix builder, vLLM connector/prefix client, **vLLM integration (GPU)** |
+| Engine | `tdb-engine` | 124 | Write/read, pack API, text storage, delete, state rebuild, Vamana activation, refresh + WAL checkpoint, active governance, semantic edges, multi-agent isolation (3×5), status API |
+| Python | pytest | 216 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, KnowledgePackStore, retrieval key strategies (14), semantic edges (4), SynapticBank (6), multi-agent (5), MCP tools, prefix builder, vLLM connector/prefix client |
 
 ## Research Milestones Implemented
 
-**All prototype phases implemented + P1 architectural unification complete.** Current evidence: 450+ tests passing (249 Rust + 201+ Python including vLLM round-trip on Qwen3-0.6B) and end-to-end demos/experiments verified.
+**All prototype phases + P1-P3 architectural unification complete.** Current evidence: 479 tests passing (263 Rust + 216 Python including vLLM round-trip on Qwen3-0.6B) and end-to-end demos/experiments verified.
 
 ### Storage Layer — Custom from scratch, not a wrapper
 

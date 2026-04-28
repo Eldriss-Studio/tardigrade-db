@@ -184,6 +184,23 @@ Architectural gap analysis found 18 disconnections between TardigradeDB's layers
 
 **Verified:** Both e2e demos (GPT-2 hook pattern + Qwen3-0.6B KnowledgePackStore pipeline) pass end-to-end.
 
+### [P2+P3: Production Story & Differentiators](p2-p3-production-and-differentiators.md)
+
+**Date:** April 28, 2026
+**Status:** Complete — 263 Rust tests, 216 Python tests
+
+P2 closed production credibility gaps; P3 turned Rust-only features into Python-accessible capabilities:
+
+**P2 key changes:**
+- Honest docs: `spec.md` and `tdd.md` rewritten, unimplemented claims moved to "Future Work"
+- `Engine::status()` for monitoring; `Engine(path, segment_size=, vamana_threshold=)` for config
+- 3 retrieval key strategies (LastToken, MeanPool, Projected) with named constants
+
+**P3 key changes:**
+- Semantic edge types: `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries
+- SynapticBank exposed to Python: `store_synapsis`/`load_synapsis` with f32↔f16 at boundary
+- Multi-agent acceptance: 3 agents × 5 packs, 12 tests all pass immediately (owner isolation validated)
+
 ## Planned Experiments
 
 | Experiment | Goal | Status |

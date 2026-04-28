@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All implementation phases complete + P1/P2 architectural unification. 450+ tests (249 Rust + 201+ Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×) and `evict_draft_packs()`. WAL checkpointing. Text storage unified in Rust `TextStore`. `Engine::status()` for monitoring. Configurable engine from Python. Pluggable retrieval key strategies (3). KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). `KnowledgePackStore` is the canonical injection path. Docs rewritten to match implementation — unimplemented claims moved to "Future Work."
+**Status:** All phases complete through P3. 479 tests (263 Rust + 216 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies. WAL checkpointing. Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
 
 ## Build & Test
 
@@ -70,15 +70,15 @@ Captures KV cache from GPT-2 inference on *"The capital of France is"*, then ret
 
 | Layer | Crate | Tests | What's covered |
 |-------|-------|-------|----------------|
-| Core | tdb-core | 6 | Builder, SynapticBank, KVPack types, tier defaults |
+| Core | tdb-core | 6 | Builder, SynapticBank, KVPack types, tier defaults, retrieval boost |
 | Storage | tdb-storage | 33 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore (single + batch), DeletionLog |
-| Retrieval | tdb-retrieval | 51 | Per-token Top5Avg, SLB eviction, pipeline (+ clear_stages), SIMD dot product, owner filter, PerTokenConfig |
+| Retrieval | tdb-retrieval | 51 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig |
 | Organization | tdb-index | 23 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
 | Governance | tdb-governance | 26 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | tdb-engine | 109 | Write/read, pack API, text storage (single + batch), delete, state rebuild, SLB chain, Vamana activation, list_packs, refresh pipeline rebuild, WAL checkpointing, active governance (tier boost + eviction) |
-| Python | pytest | 194 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, diagnostics, RAG baseline, vLLM connector format/load-path/integration (with `-m gpu`), synthetic-fact KV injection (7), prefix builder (11), vLLM prefix client (13), vLLM prefix e2e (4 GPU), retrieval key strategy (7), docstring contract (1) |
+| Engine | tdb-engine | 124 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation, refresh + WAL checkpoint, active governance (tier boost + eviction), semantic edges (Supports/Contradicts), multi-agent isolation (3 agents × 5 packs), status API |
+| Python | pytest | 216 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, diagnostics, RAG baseline, vLLM connector/prefix client, synthetic-fact KV injection, prefix builder, retrieval key strategies (14), semantic edges (4), SynapticBank (6), multi-agent (5) |
 
-Per-crate counts include unit + acceptance + doctest tests. Sum: 6+33+51+23+26+109+194 = 442.
+Per-crate counts include unit + acceptance + doctest tests. Sum: 6+33+51+23+26+124+216 = 479.
 
 ## Crate Structure
 
