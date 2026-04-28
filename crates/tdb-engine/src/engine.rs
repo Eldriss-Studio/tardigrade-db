@@ -628,12 +628,10 @@ impl Engine {
             }
         }
 
-        // Score adjustment: recency decay × tier boost, then governance update.
-        candidates
-            .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-
-        let mut results = Vec::with_capacity(k);
-        for rr in candidates {
+        // Materialize all candidates with governance-adjusted scores.
+        // Cannot early-exit before the final sort: tier boost may reorder results.
+        let mut results = Vec::with_capacity(candidates.len());
+        for rr in &candidates {
             let (decay_factor, tier) =
                 self.governance.get(&rr.cell_id).map_or((1.0, Tier::Draft), |g| {
                     (recency_decay(g.days_since_update), g.tier_sm.current())
@@ -643,33 +641,31 @@ impl Engine {
 
             match self.pool.get(rr.cell_id) {
                 Ok(cell) => {
-                    // Owner filter (pipeline may not filter internally for all stages).
                     if let Some(filter_owner) = owner_filter
                         && cell.owner != filter_owner
                     {
                         continue;
                     }
 
-                    if let Some(gov) = self.governance.get_mut(&rr.cell_id) {
-                        gov.scorer.on_access();
-                        gov.tier_sm.evaluate(gov.scorer.importance());
-                    }
-                    // Warm the SLB with accessed cells for future hot-path hits.
-                    let slb_key = mean_pool_key(&cell.key);
-                    self.slb.insert(rr.cell_id, cell.owner, &slb_key);
-
                     results.push(ReadResult { cell, score: adjusted_score, tier });
                 }
-                Err(TardigradeError::CellNotFound(_)) => continue,
+                Err(TardigradeError::CellNotFound(_)) => {}
                 Err(e) => return Err(e),
-            }
-
-            if results.len() >= k {
-                break;
             }
         }
 
+        // Sort by adjusted score, truncate, then apply governance side effects.
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(k);
+
+        for result in &results {
+            if let Some(gov) = self.governance.get_mut(&result.cell.id) {
+                gov.scorer.on_access();
+                gov.tier_sm.evaluate(gov.scorer.importance());
+            }
+            let slb_key = mean_pool_key(&result.cell.key);
+            self.slb.insert(result.cell.id, result.cell.owner, &slb_key);
+        }
 
         Ok(results)
     }

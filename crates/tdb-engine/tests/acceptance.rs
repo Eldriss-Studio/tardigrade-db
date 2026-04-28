@@ -2816,3 +2816,36 @@ fn test_evict_draft_packs_removes_low_importance_drafts() {
     assert!(engine.pack_exists(pack_b), "Validated pack should survive eviction");
     assert!(engine.pack_exists(pack_c), "Core pack should survive eviction");
 }
+
+/// ATDD: `mem_read` tier boost applies to ALL candidates before truncation.
+///
+/// GIVEN k=1 and multiple cells where the raw-top cell is Draft but a
+/// lower-raw-score cell is Core,
+/// WHEN `mem_read` is called,
+/// THEN the Core cell's 1.25× boost can promote it above the Draft cell.
+///
+/// Regression: the early-exit `if results.len() >= k { break }` previously
+/// truncated before the final re-sort, so a Core cell ranked 2nd by raw
+/// score would never be seen when k=1.
+#[test]
+fn test_mem_read_tier_boost_not_truncated_by_early_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    // Cell A (Draft): best raw match for the query
+    let key_a: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0];
+    engine.mem_write(1, 0, &key_a, vec![0.0; 4], 50.0, None).unwrap(); // ι=55 → Draft
+
+    // Cell B (Core): slightly worse raw match, but 1.25× tier boost
+    let key_b: Vec<f32> = vec![0.95, 0.05, 0.0, 0.0];
+    engine.mem_write(1, 0, &key_b, vec![0.0; 4], 90.0, None).unwrap(); // ι=95 → Core
+
+    // Query matches A better by raw score, but B's Core boost should win.
+    let results = engine.mem_read(&[1.0, 0.0, 0.0, 0.0], 1, None).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].tier,
+        Tier::Core,
+        "Core cell with 1.25× boost should outrank Draft cell at k=1"
+    );
+}
