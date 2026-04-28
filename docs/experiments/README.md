@@ -201,6 +201,15 @@ P2 closed production credibility gaps; P3 turned Rust-only features into Python-
 - SynapticBank exposed to Python: `store_synapsis`/`load_synapsis` with f32↔f16 at boundary
 - Multi-agent acceptance: 3 agents × 5 packs, 12 tests all pass immediately (owner isolation validated)
 
+### [SGLang KV Connector Investigation](sglang-investigation.md)
+
+**Date:** April 28, 2026
+**Status:** Complete — NOT VIABLE
+
+SGLang's RadixAttention architecture is strictly prefix-based (same as vLLM v1). `match_prefix()` operates on token sequence identity only. No mechanism for cross-prompt KV injection. Both major production LLM serving frameworks are confirmed prefix-only.
+
+**Implication:** Path 1 (HuggingFace direct injection) remains the only working approach for zero-token KV injection. Path 2 (memory prefix) works for production serving. Path 3 (SGLang) is closed. Path 4 (custom attention plugin) is the only remaining theoretical option.
+
 ## Planned Experiments
 
 | Experiment | Goal | Status |

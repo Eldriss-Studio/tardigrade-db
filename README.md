@@ -573,9 +573,9 @@ We discovered that vLLM's KV Connector v1 API only supports **prefix-cache accel
 
 **Complete (April 27, 2026).** `VLLMMemoryClient` (in `python/tardigrade_vllm/prefix_client.py`) prepends governed memory prefixes to prompts before they reach vLLM. `prepare_prompt(query)` for raw text, `prepare_messages(messages)` for OpenAI-style chat. Backed by `MemoryPrefixBuilder` which selects Core/Validated memories ordered by importance, applies optional token budgets, and tracks staleness via content-hash versioning. Because the same owner's prefix is token-identical across requests, vLLM's stock prefix-cache serves the stored KV at zero prefill cost. Per-owner isolation, pluggable format strategies (`BulletListFormat`, `TierAnnotatedFormat`), and draft exclusion all built in. The HuggingFace direct-injection path (Path 1) and the vLLM prefix path coexist as two output adapters on the same engine.
 
-**Path 3 — Research SGLang's connector contract**
+**Path 3 — SGLang connector** ❌ **Ruled out (April 28, 2026)**
 
-SGLang is another production LLM serving framework. Its KV transfer/caching API may have a more flexible contract than vLLM's prefix-only model. If SGLang allows injecting KV that doesn't correspond to the literal prompt prefix — i.e., "here's extra context the model should attend to" — then it's the natural serving backend for TardigradeDB's memory injection. This is a research task: read SGLang's source, check the contract, and either build a connector or rule it out. A day of focused work to answer a binary question.
+SGLang's RadixAttention architecture is strictly prefix-based — same limitation as vLLM v1. `match_prefix()` operates on `RadixKey(token_ids)` (token identity only). No mechanism for cross-prompt KV injection. See `docs/experiments/sglang-investigation.md`.
 
 **Path 4 — Custom attention plugin for vLLM (hardest, most flexible)**
 
