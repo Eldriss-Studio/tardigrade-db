@@ -103,6 +103,18 @@ impl Retriever for VamanaAdapter {
     }
 }
 
+/// Score multiplier applied during retrieval based on maturity tier.
+///
+/// Core memories have proven their value through repeated access;
+/// they deserve a retrieval advantage over untested Draft memories.
+fn tier_boost(tier: Tier) -> f32 {
+    match tier {
+        Tier::Draft => 1.0,
+        Tier::Validated => 1.1,
+        Tier::Core => 1.25,
+    }
+}
+
 /// Per-cell governance state tracked by the engine.
 #[derive(Debug)]
 struct CellGovernance {
@@ -363,6 +375,13 @@ impl Engine {
             self.activate_vamana()?;
         }
 
+        // 8. Checkpoint WAL — all entries have been replayed into the in-memory
+        //    TraceGraph. Truncating is safe: a crash during truncation means the
+        //    next refresh re-applies edges that are deduplicated by add_edge.
+        if !entries.is_empty() {
+            self.wal.checkpoint().map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
+        }
+
         Ok(())
     }
 
@@ -609,21 +628,18 @@ impl Engine {
             }
         }
 
-        // Score adjustment + governance boost + cell retrieval.
+        // Score adjustment: recency decay × tier boost, then governance update.
         candidates
             .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut results = Vec::with_capacity(k);
         for rr in candidates {
-            let decay_factor = self
-                .governance
-                .get(&rr.cell_id)
-                .map_or(1.0, |g| recency_decay(g.days_since_update));
+            let (decay_factor, tier) =
+                self.governance.get(&rr.cell_id).map_or((1.0, Tier::Draft), |g| {
+                    (recency_decay(g.days_since_update), g.tier_sm.current())
+                });
 
-            let adjusted_score = rr.score * decay_factor;
-
-            let tier =
-                self.governance.get(&rr.cell_id).map_or(Tier::Draft, |g| g.tier_sm.current());
+            let adjusted_score = rr.score * decay_factor * tier_boost(tier);
 
             match self.pool.get(rr.cell_id) {
                 Ok(cell) => {
@@ -705,6 +721,28 @@ impl Engine {
                 gov.tier_sm.evaluate(gov.scorer.importance());
             }
         }
+    }
+
+    /// Evict Draft-tier packs whose importance falls below the threshold.
+    ///
+    /// Only Draft-tier packs are eligible for eviction. Validated and Core
+    /// packs are never evicted regardless of importance. Returns the number
+    /// of packs evicted.
+    pub fn evict_draft_packs(&mut self, importance_threshold: f32) -> Result<usize> {
+        let to_evict: Vec<PackId> = self
+            .list_packs(None)
+            .into_iter()
+            .filter(|&(_, _, tier, importance)| {
+                tier == Tier::Draft && importance < importance_threshold
+            })
+            .map(|(pack_id, _, _, _)| pack_id)
+            .collect();
+
+        let count = to_evict.len();
+        for pack_id in to_evict {
+            self.delete_pack(pack_id)?;
+        }
+        Ok(count)
     }
 
     /// Store a `SynapticBankEntry` (`LoRA` adapter) for an agent/user.
@@ -838,6 +876,7 @@ impl Engine {
             results.push(result);
         }
 
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         Ok(results)
     }
 
@@ -968,15 +1007,17 @@ impl Engine {
 
     fn apply_pack_access_governance(&mut self, retrieval_cell_id: CellId) -> PackAccessSnapshot {
         let Some(gov) = self.governance.get_mut(&retrieval_cell_id) else {
-            return PackAccessSnapshot { tier: Tier::Draft, decay_factor: 1.0 };
+            return PackAccessSnapshot { tier: Tier::Draft, decay_factor: 1.0, tier_boost: 1.0 };
         };
 
         gov.scorer.on_access();
         gov.tier_sm.evaluate(gov.scorer.importance());
 
+        let tier = gov.tier_sm.current();
         PackAccessSnapshot {
-            tier: gov.tier_sm.current(),
+            tier,
             decay_factor: recency_decay(gov.days_since_update),
+            tier_boost: tier_boost(tier),
         }
     }
 

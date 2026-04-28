@@ -134,21 +134,26 @@ class SequentialRecomputeComposer(CompositionStrategy):
     where each fact is contextualized by all preceding facts —
     correct RoPE positions and cross-fact attention.
 
-    Requires model, tokenizer, and a text_registry mapping pack_id
-    to the original fact text.
+    Requires model, tokenizer, and an engine (for pack_text lookup).
+    Also accepts a plain dict for backwards compatibility.
     """
 
-    def __init__(self, model, tokenizer, text_registry):
+    def __init__(self, model, tokenizer, engine_or_registry):
         self.model = model
         self.tokenizer = tokenizer
-        self.text_registry = text_registry
+        self._engine_or_registry = engine_or_registry
+
+    def _get_text(self, pack_id):
+        if isinstance(self._engine_or_registry, dict):
+            return self._engine_or_registry.get(pack_id)
+        return self._engine_or_registry.pack_text(pack_id)
 
     def compose(self, packs, num_kv_heads, head_dim, kv_dim, n_layers):
         accumulated_cache = None
 
         for pack in packs:
             pack_id = pack["pack_id"]
-            fact_text = self.text_registry.get(pack_id)
+            fact_text = pack.get("text") or self._get_text(pack_id)
             if fact_text is None:
                 continue
 

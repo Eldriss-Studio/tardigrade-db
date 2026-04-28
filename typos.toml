@@ -1,6 +1,8 @@
 [default.extend-words]
 # LoRA formula: W' = W + αBA (B×A is a matrix product, not a typo)
 BA = "BA"
+# Qwen3 /no_think feature uses "nothink" as variable name prefix
+nothink = "nothink"
 
 [files]
 extend-exclude = ["Cargo.lock", "*.bin", "*.ptx", "*.cubin"]

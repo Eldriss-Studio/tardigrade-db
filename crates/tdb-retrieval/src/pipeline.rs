@@ -89,32 +89,6 @@ impl RetrieverPipeline {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::attention::BruteForceRetriever;
-
-    #[test]
-    fn test_pipeline_clear_stages_empties_pipeline() {
-        // GIVEN a pipeline with 2 stages containing data
-        let mut pipeline = RetrieverPipeline::new();
-        pipeline.add_stage(Box::new(BruteForceRetriever::new()));
-        pipeline.add_stage(Box::new(BruteForceRetriever::new()));
-        pipeline.insert(0, 1, &[1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(pipeline.stage_count(), 2);
-        assert!(!pipeline.is_empty());
-
-        // WHEN clear_stages()
-        pipeline.clear_stages();
-
-        // THEN stage_count() == 0 AND query returns empty
-        assert_eq!(pipeline.stage_count(), 0);
-        assert!(pipeline.is_empty());
-        let results = pipeline.query(&[1.0, 0.0, 0.0, 0.0], 5, None);
-        assert!(results.is_empty());
-    }
-}
-
 impl std::fmt::Debug for RetrieverPipeline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RetrieverPipeline")
@@ -151,7 +125,29 @@ impl Retriever for RetrieverPipeline {
     }
 
     fn len(&self) -> usize {
-        // Report max across stages (pipeline has data if any stage does).
         self.stages.iter().map(|s| s.len()).max().unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attention::BruteForceRetriever;
+
+    #[test]
+    fn test_pipeline_clear_stages_empties_pipeline() {
+        let mut pipeline = RetrieverPipeline::new();
+        pipeline.add_stage(Box::new(BruteForceRetriever::new()));
+        pipeline.add_stage(Box::new(BruteForceRetriever::new()));
+        pipeline.insert(0, 1, &[1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(pipeline.stage_count(), 2);
+        assert!(!pipeline.is_empty());
+
+        pipeline.clear_stages();
+
+        assert_eq!(pipeline.stage_count(), 0);
+        assert!(pipeline.is_empty());
+        let results = pipeline.query(&[1.0, 0.0, 0.0, 0.0], 5, None);
+        assert!(results.is_empty());
     }
 }

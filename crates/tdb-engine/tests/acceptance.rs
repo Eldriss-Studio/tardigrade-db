@@ -325,7 +325,7 @@ fn test_wal_replay_recovers_trace() {
     );
 }
 
-/// ATDD Test 14: Query when SLB is empty — falls through to `BruteForce`.
+/// ATDD Test 14: Query when SLB is empty — falls through to [`BruteForce`].
 /// Engine should still return correct results.
 #[test]
 fn test_retrieval_chain_fallback() {
@@ -2392,7 +2392,7 @@ fn test_delete_pack_preserves_other_packs() {
 // Each test here MUST fail until Step 5b lands (no method named `refresh`).
 // ─────────────────────────────────────────────────────────────────────────
 
-fn _refresh_test_pack(seed: f32) -> KVPack {
+fn refresh_test_pack(seed: f32) -> KVPack {
     let retrieval_key = encode_per_token_keys(&[&[seed, 0.0, 0.0, 0.0]]);
     KVPack {
         id: 0,
@@ -2408,8 +2408,8 @@ fn _refresh_test_pack(seed: f32) -> KVPack {
 
 /// Step 5a-L1.1: cross-handle write visibility after refresh.
 /// GIVEN two Engine handles open at the same dir,
-/// WHEN handle A writes a pack and handle B calls refresh(),
-/// THEN B.pack_count() reflects A's write.
+/// WHEN handle A writes a pack and handle B calls `refresh()`,
+/// THEN B.`pack_count()` reflects A's write.
 #[test]
 fn test_refresh_picks_up_writes_from_other_handle() {
     let dir = tempfile::tempdir().unwrap();
@@ -2419,7 +2419,7 @@ fn test_refresh_picks_up_writes_from_other_handle() {
     assert_eq!(a.pack_count(), 0);
     assert_eq!(b.pack_count(), 0);
 
-    let pack_id = a.mem_write_pack(&_refresh_test_pack(1.0)).unwrap();
+    let pack_id = a.mem_write_pack(&refresh_test_pack(1.0)).unwrap();
 
     // Without refresh, B is stale.
     assert_eq!(b.pack_count(), 0, "stale view expected before refresh");
@@ -2435,7 +2435,7 @@ fn test_refresh_picks_up_writes_from_other_handle() {
 fn test_refresh_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let mut a = Engine::open(dir.path()).unwrap();
-    a.mem_write_pack(&_refresh_test_pack(2.0)).unwrap();
+    a.mem_write_pack(&refresh_test_pack(2.0)).unwrap();
 
     let mut b = Engine::open(dir.path()).unwrap();
     b.refresh().unwrap();
@@ -2444,18 +2444,18 @@ fn test_refresh_is_idempotent() {
     assert_eq!(b.pack_count(), count_after_first, "second refresh must be a no-op");
 }
 
-/// Step 5a-L1.3: WAL-derived state (TraceGraph) must also re-apply.
+/// Step 5a-L1.3: WAL-derived state (`TraceGraph`) must also re-apply.
 /// GIVEN handle A links two packs in the trace graph,
-/// WHEN handle B calls refresh(),
-/// THEN B can traverse the link via pack_links().
+/// WHEN handle B calls `refresh()`,
+/// THEN B can traverse the link via `pack_links()`.
 #[test]
 fn test_refresh_picks_up_trace_edges() {
     let dir = tempfile::tempdir().unwrap();
     let mut a = Engine::open(dir.path()).unwrap();
     let mut b = Engine::open(dir.path()).unwrap();
 
-    let p1 = a.mem_write_pack(&_refresh_test_pack(3.0)).unwrap();
-    let p2 = a.mem_write_pack(&_refresh_test_pack(4.0)).unwrap();
+    let p1 = a.mem_write_pack(&refresh_test_pack(3.0)).unwrap();
+    let p2 = a.mem_write_pack(&refresh_test_pack(4.0)).unwrap();
     a.add_pack_link(p1, p2).unwrap();
 
     b.refresh().unwrap();
@@ -2471,9 +2471,9 @@ fn test_refresh_picks_up_trace_edges() {
 /// Step 5a-L1.5: SLB dimension must adapt when another handle writes cells
 /// with a different key dimension than the empty engine's SLB default (128).
 ///
-/// Regression for: pyo3_runtime.PanicException
+/// Regression for: `pyo3_runtime.PanicException`
 ///   "query dimension 1024 does not match SLB dimension 128"
-/// observed when the connector (Qwen3-0.6B, kv_dim=1024) queried via a
+/// observed when the connector (Qwen3-0.6B, `kv_dim=1024`) queried via a
 /// scheduler-side handle that had been opened against an empty path.
 #[test]
 fn test_refresh_rebuilds_slb_when_key_dim_changes() {
@@ -2502,7 +2502,7 @@ fn test_refresh_rebuilds_slb_when_key_dim_changes() {
     let _results = reader.mem_read_pack(&query, 1, None).unwrap();
 }
 
-/// Step 5a-L1.4: DeletionLog mutations from another handle must propagate.
+/// Step 5a-L1.4: `DeletionLog` mutations from another handle must propagate.
 /// GIVEN A writes then deletes a pack,
 /// WHEN B refreshes (after each step),
 /// THEN B sees the pack first, then sees it gone.
@@ -2512,7 +2512,7 @@ fn test_refresh_handles_deletions_from_other_handle() {
     let mut a = Engine::open(dir.path()).unwrap();
     let mut b = Engine::open(dir.path()).unwrap();
 
-    let pid = a.mem_write_pack(&_refresh_test_pack(5.0)).unwrap();
+    let pid = a.mem_write_pack(&refresh_test_pack(5.0)).unwrap();
     b.refresh().unwrap();
     assert!(b.pack_exists(pid), "B should see pack after first refresh");
 
@@ -2578,10 +2578,10 @@ fn test_list_packs_empty_engine() {
     assert!(engine.list_packs(None).is_empty());
 }
 
-/// ATDD: After refresh(), pipeline is rebuilt clean and ALL cells are retrievable.
+/// ATDD: After `refresh()`, pipeline is rebuilt clean and ALL cells are retrievable.
 ///
 /// Verifies the Memento rebuild: Vamana is reset, pipeline has the default
-/// 2 stages (PerToken + BruteForce), and both old and new cells are queryable.
+/// 2 stages (`PerToken` + `BruteForce`), and both old and new cells are queryable.
 #[test]
 fn test_refresh_rebuilds_pipeline_all_cells_retrievable() {
     let dir = tempfile::tempdir().unwrap();
@@ -2619,4 +2619,200 @@ fn test_refresh_rebuilds_pipeline_all_cells_retrievable() {
     // AND: ALL cells (old + new) are retrievable
     let results = engine_a.mem_read(&key, 8, None).unwrap();
     assert!(results.len() >= 5, "expected at least 5 results, got {}", results.len());
+}
+
+// ── WAL Checkpointing acceptance tests ────────────────────────────────────
+
+/// ATDD: `refresh()` checkpoints the WAL after successful replay.
+///
+/// GIVEN an engine with trace edges logged to the WAL,
+/// WHEN `refresh()` completes,
+/// THEN the WAL file is truncated (checkpointed),
+/// AND further writes + trace edges still work.
+#[test]
+fn test_refresh_checkpoints_wal() {
+    let dir = tempfile::tempdir().unwrap();
+    let wal_path = dir.path().join("trace.wal");
+
+    let (pack_a, pack_b) = {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let key_a = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+        let key_b = encode_per_token_keys(&[&[0.0f32, 1.0, 0.0, 0.0]]);
+
+        let a = engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key_a,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+                salience: 80.0,
+                text: None,
+            })
+            .unwrap();
+
+        let b = engine
+            .mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key_b,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+                salience: 80.0,
+                text: None,
+            })
+            .unwrap();
+
+        engine.add_pack_link(a, b).unwrap();
+        (a, b)
+    };
+
+    // WAL should be non-empty (2 Follows edges = 52 bytes).
+    let wal_size_before = std::fs::metadata(&wal_path).unwrap().len();
+    assert!(wal_size_before > 0, "WAL should have entries before refresh");
+
+    // Reopen (which calls refresh internally) should checkpoint the WAL.
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let wal_size_after = std::fs::metadata(&wal_path).unwrap().len();
+    assert_eq!(wal_size_after, 0, "WAL should be truncated after refresh checkpoint");
+
+    // Trace edges should still be in memory (replayed before checkpoint).
+    let links = engine.pack_links(pack_a);
+    assert!(links.contains(&pack_b), "trace edges should survive checkpoint");
+
+    // Further writes + trace edges should still work.
+    let key_c = encode_per_token_keys(&[&[0.0f32, 0.0, 1.0, 0.0]]);
+    let pack_c = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_c,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![3.0; 16] }],
+            salience: 80.0,
+            text: None,
+        })
+        .unwrap();
+    engine.add_pack_link(pack_a, pack_c).unwrap();
+
+    let links_after = engine.pack_links(pack_a);
+    assert!(links_after.contains(&pack_c), "new links should work after checkpoint");
+
+    // WAL should be non-empty again.
+    let wal_final = std::fs::metadata(&wal_path).unwrap().len();
+    assert!(wal_final > 0, "new trace edges should be written to WAL after checkpoint");
+}
+
+// ── Active Governance acceptance tests ────────────────────────────────────
+
+/// ATDD: Core-tier packs receive a score boost over Draft-tier packs.
+///
+/// GIVEN two packs with similar retrieval keys,
+/// WHEN one pack has Core tier (high salience) and the other has Draft,
+/// THEN the Core pack's tier boost (1.25×) overcomes a small base-score gap.
+#[test]
+fn test_core_tier_pack_outranks_draft_tier_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    // Pack A (Draft): slightly better match for the query key
+    let key_a = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack_a = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_a,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 50.0, // importance 55 → Draft
+            text: None,
+        })
+        .unwrap();
+
+    // Pack B (Core): slightly worse match but tier boost should overcome
+    let key_b = encode_per_token_keys(&[&[0.95f32, 0.05, 0.0, 0.0]]);
+    let pack_b = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_b,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+            salience: 90.0, // importance 95 → Core (1.25× boost)
+            text: None,
+        })
+        .unwrap();
+
+    // Verify tiers
+    let packs = engine.list_packs(None);
+    let tier_a = packs.iter().find(|p| p.0 == pack_a).unwrap().2;
+    let tier_b = packs.iter().find(|p| p.0 == pack_b).unwrap().2;
+    assert_eq!(tier_a, Tier::Draft, "pack A should be Draft tier (ι=55)");
+    assert_eq!(tier_b, Tier::Core, "pack B should be Core tier (ι=95)");
+
+    // Query matches pack A slightly better, but pack B's 1.25× tier boost
+    // should push it ahead.
+    let query = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let results = engine.mem_read_pack(&query, 2, None).unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        results[0].pack.id, pack_b,
+        "Core-tier pack (1.25× boost) should outrank Draft-tier pack despite slightly lower base score"
+    );
+}
+
+/// ATDD: `evict_draft_packs` removes Draft packs below importance threshold.
+///
+/// GIVEN an engine with packs at various importance levels,
+/// WHEN `evict_draft_packs(threshold)` is called,
+/// THEN only Draft packs below the threshold are deleted.
+/// Core and Validated packs are never evicted regardless of importance.
+#[test]
+fn test_evict_draft_packs_removes_low_importance_drafts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+
+    // Pack A: Draft, importance=15 (10 + 5 write) — below threshold
+    let _pack_a = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 10.0,
+            text: None,
+        })
+        .unwrap();
+
+    // Pack B: Draft, importance=75 (70 + 5 write) → Validated — above threshold
+    let pack_b = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+            salience: 70.0,
+            text: None,
+        })
+        .unwrap();
+
+    // Pack C: Core, importance=95 (90 + 5 write) — safe from eviction
+    let pack_c = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![3.0; 16] }],
+            salience: 90.0,
+            text: None,
+        })
+        .unwrap();
+
+    assert_eq!(engine.pack_count(), 3);
+
+    // Evict Draft packs below importance 30.
+    let evicted = engine.evict_draft_packs(30.0).unwrap();
+
+    assert_eq!(evicted, 1, "should evict one Draft pack below threshold");
+    assert_eq!(engine.pack_count(), 2);
+    assert!(engine.pack_exists(pack_b), "Validated pack should survive eviction");
+    assert!(engine.pack_exists(pack_c), "Core pack should survive eviction");
 }

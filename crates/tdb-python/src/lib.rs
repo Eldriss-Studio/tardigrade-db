@@ -66,29 +66,10 @@ impl Engine {
         Ok(Self { inner })
     }
 
-    /// Write key/value vectors to the engine.
+    /// Write key/value vectors to the engine (cell-level API).
     ///
-    /// Args:
-    ///     owner: Agent/user ID.
-    ///     layer: Transformer layer index.
-    ///     key: Key vector (numpy float32 array).
-    ///     value: Value vector (numpy float32 array).
-    ///     salience: Initial importance score hint (0-100).
-    ///
-    /// Returns:
-    ///     The assigned cell ID.
-    /// Write key/value vectors to the engine.
-    ///
-    /// Args:
-    ///     owner: Agent/user ID.
-    ///     layer: Transformer layer index.
-    ///     key: Key vector (numpy float32 array).
-    ///     value: Value vector (numpy float32 array).
-    ///     salience: Initial importance score hint (0-100).
-    ///     `parent_cell_id`: Optional causal parent cell ID for trace graph.
-    ///
-    /// Returns:
-    ///     The assigned cell ID.
+    /// **Deprecated:** Use `mem_write_pack` for new code. The Pack API is
+    /// the canonical interface for storing multi-layer KV caches.
     fn mem_write(
         &mut self,
         owner: u64,
@@ -148,15 +129,10 @@ impl Engine {
         self.inner.mem_write_batch(&reqs).map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Read the top-k most relevant cells for a query key.
+    /// Read the top-k most relevant cells for a query key (cell-level API).
     ///
-    /// Args:
-    ///     `query_key`: Query vector (numpy float32 array).
-    ///     k: Number of results to return.
-    ///     owner: Optional owner filter.
-    ///
-    /// Returns:
-    ///     List of `ReadResult` objects sorted by score descending.
+    /// **Deprecated:** Use `mem_read_pack` for new code. The Pack API returns
+    /// complete multi-layer KV caches ready for injection.
     fn mem_read(
         &mut self,
         query_key: PyReadonlyArray1<'_, f32>,
@@ -217,6 +193,20 @@ impl Engine {
     /// Simulate passage of time for governance decay (testing utility).
     fn advance_days(&mut self, days: f32) {
         self.inner.advance_days(days);
+    }
+
+    /// Evict Draft-tier packs below the importance threshold.
+    ///
+    /// Only Draft-tier packs are eligible. Returns the number evicted.
+    fn evict_draft_packs(&mut self, importance_threshold: f32) -> PyResult<usize> {
+        self.inner
+            .evict_draft_packs(importance_threshold)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Number of stages in the retrieval pipeline.
+    fn pipeline_stage_count(&self) -> usize {
+        self.inner.pipeline_stage_count()
     }
 
     /// Store a complete multi-layer KV cache as a single atomic pack.
@@ -306,7 +296,7 @@ impl Engine {
     /// Use when another process or `Engine` handle has written to the same
     /// directory and this handle needs to see those writes. Re-applies the
     /// Memento pattern from `open()`: rescans segments, replays the WAL,
-    /// refreshes governance / pack_directory / text_store / deletion_log.
+    /// refreshes governance / `pack_directory` / `text_store` / `deletion_log`.
     /// Idempotent and cheap when nothing changed on disk.
     fn refresh(&mut self) -> PyResult<()> {
         self.inner.refresh().map_err(|e| PyRuntimeError::new_err(e.to_string()))
@@ -319,7 +309,7 @@ impl Engine {
 
     /// Enumerate all packs, optionally filtered by owner.
     ///
-    /// Returns a list of dicts with keys: pack_id, owner, tier, importance, text.
+    /// Returns a list of dicts with keys: `pack_id`, owner, tier, importance, text.
     /// Sorted by importance descending. Draft packs included (caller filters).
     #[pyo3(signature = (owner=None))]
     fn list_packs(&self, py: Python<'_>, owner: Option<u64>) -> PyResult<pyo3::Py<pyo3::PyAny>> {

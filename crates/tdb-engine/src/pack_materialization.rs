@@ -35,6 +35,7 @@ impl PackCandidate {
 pub(crate) struct PackAccessSnapshot {
     pub(crate) tier: Tier,
     pub(crate) decay_factor: f32,
+    pub(crate) tier_boost: f32,
 }
 
 #[cfg(test)]
@@ -113,7 +114,7 @@ pub(crate) fn build_pack_read_result(
             salience: 0.0,
             text: None,
         },
-        score: candidate.score * access.decay_factor,
+        score: candidate.score * access.decay_factor * access.tier_boost,
         tier: access.tier,
     }
 }

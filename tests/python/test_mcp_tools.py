@@ -78,10 +78,10 @@ def test_store_and_link_creates_connection(mcp_env):
 
 def test_store_persists_text(mcp_env):
     """GIVEN a stored fact,
-    THEN the text appears in the text registry."""
+    THEN the text is retrievable from the Rust engine's text_store."""
     text = "Nyx brews rosemary tea every morning"
     result = mcp_env.tardigrade_store(text)
-    assert mcp_env._kps._text_registry.get(result["pack_id"]) == text
+    assert mcp_env._engine.pack_text(result["pack_id"]) == text
 
 
 # -- Recall tests --------------------------------------------------------------
@@ -209,68 +209,16 @@ def test_tardigrade_forget_removes_from_list_all(mcp_env):
     assert results[0]["pack_id"] == b["pack_id"]
 
 
-# -- Migration tests -----------------------------------------------------------
-
-
-def test_legacy_text_registry_migrates_to_rust(tmp_path, gpt2, tokenizer):
-    """GIVEN a database with text only in the JSON sidecar (legacy state),
-    WHEN a new KnowledgePackStore opens it,
-    THEN the text appears in the durable Rust text_store."""
-    import os
-
-    # Step 1: create a pack the normal way (writes to both JSON and Rust).
+def test_text_survives_reopen(tmp_path, gpt2, tokenizer):
+    """GIVEN a stored fact,
+    WHEN the engine is reopened,
+    THEN the text is still retrievable from the Rust text_store."""
     engine = tardigrade_db.Engine(str(tmp_path))
     kps = KnowledgePackStore(engine, gpt2, tokenizer, owner=1)
-    kps.store("Legacy memory")
-    pack_id = next(iter(kps._text_registry.keys()))
+    pack_id = kps.store("Persists across restarts")
 
-    # Step 2: simulate a pre-Item-3 database — wipe the Rust text store.
-    text_store_path = tmp_path / "text_store.bin"
-    if text_store_path.exists():
-        os.remove(text_store_path)
-
-    # Confirm the pre-migration state: Rust text_store is empty.
     engine2 = tardigrade_db.Engine(str(tmp_path))
-    assert engine2.pack_text(pack_id) is None
-
-    # Step 3: opening a KnowledgePackStore migrates legacy entries.
-    kps2 = KnowledgePackStore(engine2, gpt2, tokenizer, owner=1)
-    assert kps2.engine.pack_text(pack_id) == "Legacy memory"
-
-
-def test_migration_skips_stale_sidecar_entries(tmp_path, gpt2, tokenizer):
-    """GIVEN a JSON sidecar entry for a pack that has been deleted,
-    WHEN migration runs,
-    THEN the stale entry is silently skipped (no exception)."""
-    engine = tardigrade_db.Engine(str(tmp_path))
-    kps = KnowledgePackStore(engine, gpt2, tokenizer, owner=1)
-    pack_id = kps.store("Will be deleted")
-    kps.forget(pack_id)
-
-    # Manually re-add a stale entry to the sidecar (simulates a crash between
-    # forget and _save_text_registry).
-    kps._text_registry[pack_id] = "Stale text"
-    kps._save_text_registry()
-
-    # Re-opening should not raise — migration silently skips deleted packs.
-    engine2 = tardigrade_db.Engine(str(tmp_path))
-    kps2 = KnowledgePackStore(engine2, gpt2, tokenizer, owner=1)
-    assert kps2.engine.pack_text(pack_id) is None
-
-
-def test_migration_is_idempotent(tmp_path, gpt2, tokenizer):
-    """GIVEN an already-migrated database,
-    WHEN KnowledgePackStore is re-opened,
-    THEN migration runs without errors and leaves data unchanged."""
-    engine = tardigrade_db.Engine(str(tmp_path))
-    kps = KnowledgePackStore(engine, gpt2, tokenizer, owner=1)
-    pack_id = kps.store("Already migrated")
-
-    # Re-open multiple times — should be a no-op.
-    for _ in range(3):
-        engine_n = tardigrade_db.Engine(str(tmp_path))
-        kps_n = KnowledgePackStore(engine_n, gpt2, tokenizer, owner=1)
-        assert kps_n.engine.pack_text(pack_id) == "Already migrated"
+    assert engine2.pack_text(pack_id) == "Persists across restarts"
 
 
 # -- Direct engine.set_pack_text tests (Gap #2) --------------------------------
@@ -316,10 +264,7 @@ def test_forgotten_pack_text_gone_after_reopen(tmp_path, gpt2, tokenizer):
     assert engine2.pack_text(pack_id) is None
 
 
-# -- Corrupted sidecar handling (Gap #6) ---------------------------------------
-
-
-# -- Batch text + pack_exists bindings (Gap #5) --------------------------------
+# -- Batch text + pack_exists bindings ─────────────────────────────────────────
 
 
 def test_engine_pack_exists_direct(tmp_path, gpt2, tokenizer):
@@ -367,22 +312,3 @@ def test_engine_set_pack_texts_fails_fast_on_missing_pack(tmp_path, gpt2, tokeni
     assert engine.pack_text(real_id) == "Original"
 
 
-def test_corrupted_text_registry_does_not_crash_init(tmp_path, gpt2, tokenizer, capsys):
-    """GIVEN a corrupted text_registry.json on disk,
-    WHEN KnowledgePackStore opens the database,
-    THEN init succeeds, falls back to engine text_store, and logs a warning."""
-    engine = tardigrade_db.Engine(str(tmp_path))
-    kps = KnowledgePackStore(engine, gpt2, tokenizer, owner=1)
-    pack_id = kps.store("Survives via Rust")
-
-    sidecar = tmp_path / "text_registry.json"
-    sidecar.write_text("{not valid json")
-
-    engine2 = tardigrade_db.Engine(str(tmp_path))
-    kps2 = KnowledgePackStore(engine2, gpt2, tokenizer, owner=1)
-
-    assert kps2._text_registry == {}
-    assert kps2.engine.pack_text(pack_id) == "Survives via Rust"
-
-    captured = capsys.readouterr()
-    assert "corrupted text_registry.json" in captured.err

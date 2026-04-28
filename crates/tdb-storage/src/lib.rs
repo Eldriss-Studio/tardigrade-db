@@ -94,7 +94,6 @@
 
 #![deny(unsafe_code)]
 
-pub mod arena;
 pub mod block_pool;
 pub mod deletion_log;
 pub mod quantization;

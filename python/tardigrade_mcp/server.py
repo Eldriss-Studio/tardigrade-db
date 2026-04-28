@@ -137,7 +137,7 @@ def tardigrade_recall(query: str, k: int = 1) -> list:
     return [
         {
             "pack_id": p["pack_id"],
-            "text": p.get("text") or kps._text_registry.get(p["pack_id"], ""),
+            "text": p.get("text") or kps.engine.pack_text(p["pack_id"]) or "",
             "score": round(float(p["score"]), 2),
         }
         for p in packs
@@ -174,7 +174,7 @@ def tardigrade_recall_with_trace(query: str, k: int = 1) -> list:
     return [
         {
             "pack_id": p["pack_id"],
-            "text": p.get("text") or kps._text_registry.get(p["pack_id"], ""),
+            "text": p.get("text") or kps.engine.pack_text(p["pack_id"]) or "",
             "score": round(float(p.get("score", 0.0)), 2),
             "linked_packs": kps.engine.pack_links(p["pack_id"]),
         }
@@ -197,7 +197,7 @@ def tardigrade_list_links(pack_id: int) -> list:
     return [
         {
             "pack_id": lid,
-            "text": kps.engine.pack_text(lid) or kps._text_registry.get(lid, ""),
+            "text": kps.engine.pack_text(lid) or "",
         }
         for lid in kps.engine.pack_links(pack_id)
     ]
@@ -215,11 +215,12 @@ def tardigrade_list_all() -> list:
     """
     kps = _get_kps()
     results = []
-    for pack_id, text in sorted(kps._text_registry.items()):
+    for entry in kps.engine.list_packs(kps.owner):
+        pack_id = entry["pack_id"]
         links = kps.engine.pack_links(pack_id)
         results.append({
             "pack_id": pack_id,
-            "text": kps.engine.pack_text(pack_id) or text,
+            "text": entry.get("text") or kps.engine.pack_text(pack_id) or "",
             "links": len(links),
         })
     return results

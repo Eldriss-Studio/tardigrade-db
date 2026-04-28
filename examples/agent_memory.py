@@ -91,7 +91,7 @@ def main():
     print("Memory graph:")
     for pid in range(1, engine.pack_count() + 1):
         links = engine.pack_links(pid)
-        fact_text = kps._text_registry.get(pid, "?")
+        fact_text = engine.pack_text(pid) or "?"
         link_str = f" -> links to {links}" if links else ""
         print(f"  [{pid}] {fact_text[:50]}...{link_str}")
 
