@@ -2618,7 +2618,11 @@ fn test_refresh_rebuilds_pipeline_all_cells_retrievable() {
 
     // AND: ALL cells (old + new) are retrievable
     let results = engine_a.mem_read(&key, 8, None).unwrap();
-    assert!(results.len() >= 5, "expected at least 5 results, got {}", results.len());
+    assert_eq!(
+        results.len(),
+        8,
+        "all 8 cells (5 from engine_a + 3 from engine_b) must be retrievable after refresh"
+    );
 }
 
 // ── WAL Checkpointing acceptance tests ────────────────────────────────────

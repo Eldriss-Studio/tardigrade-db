@@ -174,3 +174,51 @@ def test_projected_strategy_deterministic_default_projection():
     r2 = s2.compute([10], embed)
 
     np.testing.assert_array_equal(r1, r2)
+
+
+# ── Phase 3: Unified save+load strategy ──────────────────────────────────
+
+
+def test_compute_for_save_defaults_to_compute():
+    """GIVEN any strategy (e.g., LastTokenEmbeddingStrategy),
+    WHEN compute_for_save is called,
+    THEN result equals compute() — the default delegates."""
+    embed = np.random.randn(100, 16).astype(np.float32)
+    strategy = LastTokenEmbeddingStrategy()
+    token_ids = [10, 20, 30]
+
+    load_key = strategy.compute(token_ids, embed)
+    save_key = strategy.compute_for_save(token_ids, embed)
+
+    np.testing.assert_array_equal(load_key, save_key)
+
+
+def test_save_and_load_identical_for_all_strategies():
+    """GIVEN each registered strategy,
+    WHEN computing save and load keys for the same input,
+    THEN they are identical — the strategy governs both sides."""
+    embed = np.random.randn(100, 8).astype(np.float32)
+    token_ids = [5, 15, 25]
+
+    for name in [LAST_TOKEN_EMBEDDING, MEAN_POOL_EMBEDDING]:
+        strategy = get_strategy(name)
+        load_key = strategy.compute(token_ids, embed)
+        save_key = strategy.compute_for_save(token_ids, embed)
+        np.testing.assert_array_equal(
+            load_key, save_key,
+            err_msg=f"Strategy {name}: save and load keys diverge"
+        )
+
+
+def test_projected_strategy_compute_for_save_matches():
+    """GIVEN ProjectedEmbeddingStrategy with hidden_size != kv_dim,
+    WHEN computing save and load keys,
+    THEN they are identical despite dimension mismatch."""
+    embed = np.random.randn(100, 8).astype(np.float32)
+    strategy = ProjectedEmbeddingStrategy(kv_dim=4, hidden_size=8)
+    token_ids = [10, 20]
+
+    load_key = strategy.compute(token_ids, embed)
+    save_key = strategy.compute_for_save(token_ids, embed)
+
+    np.testing.assert_array_equal(load_key, save_key)

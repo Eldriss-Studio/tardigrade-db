@@ -25,6 +25,8 @@ Configuration via engine_args:
 import logging
 import os
 import sys
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -84,15 +86,24 @@ if HAS_VLLM:
         # Enums (Role) won't have these attributes
         return any(hasattr(obj, attr) for attr in ("num_blocks", "block_size", "kv_cache_groups"))
 
-    class _TardigradeConnectorMetadata(KVConnectorMetadata):
-        """Per-step metadata passed scheduler → worker.
+    @dataclass
+    class _LoadRequestMeta:
+        """Per-request load data transported via the metadata DTO."""
+        request_id: str
+        pack: dict
+        seq_len: int
+        block_ids: list
+        num_tokens: int
 
-        Currently empty: in single-process mode the worker reads load state
-        directly from the connector instance's _load_packs / _load_meta dicts.
-        Reserved for future distributed serving where scheduler and worker
-        live in separate processes.
+    @dataclass
+    class _TardigradeConnectorMetadata(KVConnectorMetadata):
+        """DTO: carries matched pack data from scheduler to worker.
+
+        Serializable across process boundaries (all fields are plain Python
+        types). The scheduler populates this in build_connector_meta; the
+        worker reads it in start_load_kv via _get_connector_metadata().
         """
-        pass
+        load_requests: list = field(default_factory=list)
 
     class TardigradeConnector(KVConnectorBase_V1):
         """Injects stored KV cache blocks into vLLM's prefix-cache slots
@@ -178,13 +189,15 @@ if HAS_VLLM:
             # latest snapshot.
             self._save_buffers: dict = {}  # batch_index → {layer_idx: (kv_layer, BatchSlice)}
 
-            # Per-request pack tracking for coalescing (Step 2). Maps a stable
-            # request fingerprint (block_indices[0]) to the pack_id we last
-            # wrote for it. On each step we delete the old pack before writing
-            # the new one — net effect: one pack per request, contents = the
-            # latest snapshot. Worker- and scheduler-side connectors are
-            # separate instances, so we can't use request_finished here.
-            self._pack_id_by_fingerprint: dict[int, int] = {}
+            # Bounded Cache: maps live request fingerprints (block_indices[0])
+            # to the pack_id last written. LRU eviction at max_num_seqs
+            # capacity prevents unbounded growth and stale-fingerprint
+            # collisions after block reuse.
+            self._pack_id_by_fingerprint: OrderedDict[int, int] = OrderedDict()
+            self._max_fingerprints = getattr(
+                getattr(vllm_config, "scheduler_config", None),
+                "max_num_seqs", 256
+            )
 
             self._load_packs = {}  # request_id → {pack_data, seq_len}
             self._load_meta = {}  # request_id → {block_ids, num_tokens}
@@ -196,28 +209,69 @@ if HAS_VLLM:
             self._match_threshold = float(config.get("match_threshold", 150.0))
 
         def _get_embed_weights(self):
-            """Lazy-load the model's token embedding weights for retrieval keys."""
+            """Lazy-load the model's token embedding weights for retrieval keys.
+
+            Factory Method with Fallback Chain:
+              1. safetensors direct load (no model instantiation)
+              2. AutoModel.from_pretrained (last resort)
+            """
             if self._embed_weights is not None:
                 return self._embed_weights
 
+            model_name = self.vllm_config.model_config.model
+            self._embed_weights = self._load_embed_via_safetensors(model_name)
+            if self._embed_weights is not None:
+                return self._embed_weights
+
+            self._embed_weights = self._load_embed_via_automodel(model_name)
+            return self._embed_weights
+
+        @staticmethod
+        def _load_embed_via_safetensors(model_name: str):
+            """Load embedding weights directly from safetensors without full model."""
             try:
                 import torch
-                # Try to load just the embedding weights from the model
-                from transformers import AutoModel
-                model_name = self.vllm_config.model_config.model
-                model = AutoModel.from_pretrained(model_name, torch_dtype=torch.float32)
-                self._embed_weights = model.get_input_embeddings().weight.detach().cpu().numpy()
-                del model
-                logger.info(f"Loaded embedding table: {self._embed_weights.shape}")
+                from huggingface_hub import hf_hub_download
+                from safetensors.torch import load_file
+
+                EMBED_WEIGHT_NAMES = (
+                    "model.embed_tokens.weight",
+                    "transformer.wte.weight",
+                    "embeddings.word_embeddings.weight",
+                    "word_embeddings.weight",
+                )
+
+                for shard in ("model.safetensors", "model-00001-of-00002.safetensors"):
+                    try:
+                        path = hf_hub_download(model_name, shard)
+                    except Exception:
+                        continue
+                    tensors = load_file(path)
+                    for name in EMBED_WEIGHT_NAMES:
+                        if name in tensors:
+                            weights = tensors[name].float().numpy()
+                            del tensors
+                            logger.info(f"Loaded embedding table via safetensors: {weights.shape}")
+                            return weights
+                    del tensors
             except (ImportError, OSError, ValueError, RuntimeError) as e:
-                # Narrow catch: only legitimate failures (transformers missing,
-                # model not on disk, HF auth error, OOM). Programming errors
-                # like AttributeError MUST propagate so they fail loudly in
-                # tests instead of being silently masked. (See feedback memory:
-                # ATDD must test each method directly.)
+                logger.debug(f"safetensors path unavailable: {e}")
+            return None
+
+        @staticmethod
+        def _load_embed_via_automodel(model_name: str):
+            """Fallback: load full model to extract embedding weights."""
+            try:
+                import torch
+                from transformers import AutoModel
+                model = AutoModel.from_pretrained(model_name, torch_dtype=torch.float32)
+                weights = model.get_input_embeddings().weight.detach().cpu().numpy()
+                del model
+                logger.info(f"Loaded embedding table via AutoModel: {weights.shape}")
+                return weights
+            except (ImportError, OSError, ValueError, RuntimeError) as e:
                 logger.warning(f"Could not load embedding weights: {e}")
-                self._embed_weights = np.array([])  # empty = disable matching
-            return self._embed_weights
+                return np.array([])
 
         def _compute_retrieval_key(self, token_ids):
             """Delegate to the configured RetrievalKeyStrategy."""
@@ -317,45 +371,46 @@ if HAS_VLLM:
                 }
 
         def build_connector_meta(self, scheduler_output) -> "KVConnectorMetadata":
-            """Build metadata for worker-side load.
+            """Build metadata DTO for worker-side load.
 
-            vLLM 0.19+ requires a non-None KVConnectorMetadata instance per
-            scheduler step (asserted in gpu_model_runner). Even when there is
-            nothing scheduler-side to communicate, return an empty instance.
-
-            In a full distributed implementation, this would package the
-            matched pack IDs and block mappings for the worker to load during
-            forward. For single-process testing the worker reads directly from
-            self._load_packs / self._load_meta.
+            Packages all matched pack data from scheduler-side dicts into a
+            serializable DTO. Clears scheduler state after packaging — the
+            worker receives everything it needs via the metadata object.
             """
-            return _TardigradeConnectorMetadata()
+            requests = []
+            for req_id, load_info in self._load_packs.items():
+                meta = self._load_meta.get(req_id)
+                if meta is None:
+                    continue
+                requests.append(_LoadRequestMeta(
+                    request_id=str(req_id),
+                    pack=load_info["pack"],
+                    seq_len=load_info["seq_len"],
+                    block_ids=list(meta["block_ids"]),
+                    num_tokens=meta["num_tokens"],
+                ))
+            self._load_packs.clear()
+            self._load_meta.clear()
+            return _TardigradeConnectorMetadata(load_requests=requests)
 
         # -- Worker-side methods ---------------------------------------------------
 
         def start_load_kv(self, forward_context, **kwargs) -> None:
             """Load stored KV cache from TardigradeDB into vLLM's paged buffer.
 
-            Adapter step: converts TardigradeDB flat [K|V] arrays to vLLM's
-            paged block format, then copies into pre-allocated GPU block slots.
-
-            For each matched request:
-              1. Retrieve the stashed pack data (from scheduler-side matching)
-              2. Per layer: flat_to_blocks → torch tensor → GPU copy into slots
-              3. Clean up per-request state
-
-            Synchronous per-block copy for correctness. Batch GPU transfer
-            (scatter via advanced indexing) is a future optimization.
+            Reads from bound metadata DTO (set by bind_connector_metadata),
+            NOT from scheduler-side instance state. This ensures correct
+            behavior in both single-process and distributed vLLM deployments.
             """
             import torch
 
-            for req_id, load_info in list(self._load_packs.items()):
-                meta = self._load_meta.get(req_id)
-                if meta is None:
-                    continue
+            meta = getattr(self, "_connector_metadata", None)
+            if meta is None or not hasattr(meta, "load_requests"):
+                return
 
-                pack = load_info["pack"]
-                seq_len = load_info["seq_len"]
-                block_ids = meta["block_ids"]
+            for req in meta.load_requests:
+                pack = req.pack
+                block_ids = req.block_ids
 
                 for layer_entry in pack["layers"]:
                     layer_idx = layer_entry["layer_idx"]
@@ -366,15 +421,12 @@ if HAS_VLLM:
                         self.block_size,
                     )
 
-                    # forward_context.kv_caches[layer] = (k_cache, v_cache)
-                    # each shaped (num_total_blocks, block_size, num_kv_heads, head_dim)
                     kv_cache = forward_context.kv_caches[layer_idx]
                     k_cache, v_cache = kv_cache[0], kv_cache[1]
 
                     k_tensor = torch.from_numpy(k_blocks)
                     v_tensor = torch.from_numpy(v_blocks)
 
-                    # Copy each block into its allocated GPU slot
                     num_blocks = k_tensor.shape[0]
                     for i in range(min(num_blocks, len(block_ids))):
                         k_cache[block_ids[i]].copy_(k_tensor[i])
@@ -383,12 +435,8 @@ if HAS_VLLM:
                 logger.debug(
                     f"Loaded pack {pack.get('pack_id', '?')} "
                     f"({len(pack.get('layers', []))} layers, "
-                    f"{len(block_ids)} blocks) for request {req_id}"
+                    f"{len(block_ids)} blocks) for request {req.request_id}"
                 )
-
-                # Clean up this request's load state
-                del self._load_packs[req_id]
-                self._load_meta.pop(req_id, None)
 
         def wait_for_layer_load(self, layer_name: str) -> None:
             """Block until layer KV is loaded. Synchronous for now."""
@@ -472,6 +520,9 @@ if HAS_VLLM:
                 pack_id = self._write_pack_for_batch(layer_buf)
                 if pack_id is not None:
                     self._pack_id_by_fingerprint[fingerprint] = pack_id
+                    self._pack_id_by_fingerprint.move_to_end(fingerprint)
+                    while len(self._pack_id_by_fingerprint) > self._max_fingerprints:
+                        self._pack_id_by_fingerprint.popitem(last=False)
 
             self._save_buffers.clear()
 
@@ -500,19 +551,14 @@ if HAS_VLLM:
                 logger.debug("wait_for_save: no layer payloads built")
                 return None
 
-            # Step 6 retrieval key: LAST-TOKEN K from the LAST LAYER.
-            #
-            # Engine evidence (docs/experiments/kv-cache-validation.md):
-            #   - mean-pool of layer-0 K → 31% recall ("gravity well" — the
-            #     averaged vector lands in a dense region near every other
-            #     averaged vector, so dot products don't discriminate).
-            #   - last-token K from a deep layer → carries the model's
-            #     "current focus" after attending over the full prompt;
-            #     much better signal for paraphrased queries.
-            #
-            # Constraint: mem_write_pack accepts one key per pack. The richer
-            # per-token Top5Avg path would require a different storage
-            # primitive (per-cell write); deferred as a separate plan.
+            # KNOWN ASYMMETRY: save uses last-token K from last layer,
+            # load uses embedding table lookup. These live in different
+            # vector spaces unless hidden_size == kv_dim. The strategy ABC
+            # now has compute_for_save() to unify both sides, but wiring
+            # it here requires token ID plumbing from scheduler → worker
+            # (attn_metadata doesn't carry token IDs). Needs vLLM env to
+            # validate. See plan: connector-hardening.md
+            # Phase 3 for the full design.
             last_layer_data = layer_payloads[-1][1]
             half = len(last_layer_data) // 2
             k_last_layer = last_layer_data[:half].reshape(-1, self.kv_dim)

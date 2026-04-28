@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All phases complete through P4. 489 tests (265 Rust + 224 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies. WAL checkpointing. Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
+**Status:** All phases complete through P4. 500 tests (265 Rust + 235 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies with unified save/load via `compute_for_save` (Template Method). **vLLM connector hardened:** metadata DTO bridge (scheduler→worker), bounded fingerprint cache (LRU eviction at `max_num_seqs`), safetensors-first embedding weight loading. WAL checkpointing. Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
 
 ## Build & Test
 
@@ -73,12 +73,12 @@ Captures KV cache from GPT-2 inference on *"The capital of France is"*, then ret
 | Core | tdb-core | 6 | Builder, SynapticBank, KVPack types, tier defaults, retrieval boost |
 | Storage | tdb-storage | 33 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore (single + batch), DeletionLog |
 | Retrieval | tdb-retrieval | 51 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig |
-| Organization | tdb-index | 23 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
+| Organization | tdb-index | 25 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
 | Governance | tdb-governance | 26 | Importance scoring, tier hysteresis, recency decay, sweep |
 | Engine | tdb-engine | 124 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation, refresh + WAL checkpoint, active governance (tier boost + eviction), semantic edges (Supports/Contradicts), multi-agent isolation (3 agents × 5 packs), status API |
-| Python | pytest | 216 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, diagnostics, RAG baseline, vLLM connector/prefix client, synthetic-fact KV injection, prefix builder, retrieval key strategies (14), semantic edges (4), SynapticBank (6), multi-agent (5) |
+| Python | pytest | 235 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, diagnostics, RAG baseline, vLLM connector/prefix client, synthetic-fact KV injection, prefix builder, retrieval key strategies (17), semantic edges (4), SynapticBank (6), multi-agent (5), connector hardening: metadata bridge (5), fingerprint bounds (3) |
 
-Per-crate counts include unit + acceptance + doctest tests. Sum: 6+33+51+23+26+124+216 = 479.
+Per-crate counts include unit + acceptance + doctest tests. Sum: 6+33+51+25+26+124+235 = 500.
 
 ## Crate Structure
 

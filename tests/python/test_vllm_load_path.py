@@ -398,6 +398,20 @@ def _mock_torch_forward_context(num_layers, num_total_blocks, block_size, num_kv
     return ctx
 
 
+def _bind_metadata_for_load(connector, requests):
+    """Bind a _TardigradeConnectorMetadata DTO onto a bare connector.
+
+    Simulates the IPC path: scheduler populates metadata, worker reads it.
+    ``requests`` is a list of dicts with keys: request_id, pack, seq_len,
+    block_ids, num_tokens.
+    """
+    from tardigrade_vllm.connector import _TardigradeConnectorMetadata, _LoadRequestMeta
+    meta = _TardigradeConnectorMetadata(load_requests=[
+        _LoadRequestMeta(**r) for r in requests
+    ])
+    connector._connector_metadata = meta
+
+
 def test_real_start_load_kv_writes_block_slot():
     """GIVEN a manually-staged pack with all-ones K and known V data,
     WHEN TardigradeConnector.start_load_kv runs,
@@ -411,27 +425,27 @@ def test_real_start_load_kv_writes_block_slot():
     ctx = _mock_torch_forward_context(num_layers, num_total_blocks, block_size,
                                        num_kv_heads, head_dim)
 
-    # Stage a known pack: K = +1.0 everywhere, V = -1.0 everywhere
     kv_dim = num_kv_heads * head_dim
     k_flat = np.ones(seq_len * kv_dim, dtype=np.float32)
     v_flat = -np.ones(seq_len * kv_dim, dtype=np.float32)
     payload = np.concatenate([k_flat, v_flat])
     pack_layers = [{"layer_idx": li, "data": payload.tolist()}
                    for li in range(num_layers)]
-    c._load_packs["req_spy"] = {
+
+    _bind_metadata_for_load(c, [{
+        "request_id": "req_spy",
         "pack": {"pack_id": 99, "layers": pack_layers},
         "seq_len": seq_len,
-    }
-    c._load_meta["req_spy"] = {"block_ids": [3], "num_tokens": seq_len}
+        "block_ids": [3],
+        "num_tokens": seq_len,
+    }])
 
-    # Sanity check: pre-state is zero
     for k_cache, v_cache in ctx.kv_caches:
         assert torch.all(k_cache == 0)
         assert torch.all(v_cache == 0)
 
     c.start_load_kv(ctx)
 
-    # Block 3 of every layer should now contain the staged data
     for layer_idx in range(num_layers):
         k_cache, v_cache = ctx.kv_caches[layer_idx]
         assert torch.all(k_cache[3] == 1.0), (
@@ -441,13 +455,13 @@ def test_real_start_load_kv_writes_block_slot():
         assert torch.all(v_cache[3] == -1.0), (
             f"Layer {layer_idx}: V cache block 3 not written to -1.0"
         )
-        # Untouched block stays zero
         assert torch.all(k_cache[0] == 0)
 
 
-def test_real_start_load_kv_clears_state_after_load():
-    """GIVEN a staged pack, WHEN start_load_kv runs,
-    THEN _load_packs and _load_meta no longer contain the request."""
+def test_real_start_load_kv_ignores_empty_metadata():
+    """GIVEN metadata with no load_requests,
+    WHEN start_load_kv runs,
+    THEN no blocks are touched and no error is raised."""
     torch = pytest.importorskip("torch")
     num_kv_heads, head_dim, block_size = 2, 4, 4
     num_layers, num_total_blocks = 1, 4
@@ -456,17 +470,12 @@ def test_real_start_load_kv_clears_state_after_load():
     ctx = _mock_torch_forward_context(num_layers, num_total_blocks, block_size,
                                        num_kv_heads, head_dim)
 
-    payload = np.zeros(2 * 4 * (num_kv_heads * head_dim), dtype=np.float32)
-    pack_layers = [{"layer_idx": 0, "data": payload.tolist()}]
-    c._load_packs["req_cleanup"] = {
-        "pack": {"pack_id": 1, "layers": pack_layers}, "seq_len": 4,
-    }
-    c._load_meta["req_cleanup"] = {"block_ids": [1], "num_tokens": 4}
+    _bind_metadata_for_load(c, [])
 
     c.start_load_kv(ctx)
 
-    assert "req_cleanup" not in c._load_packs
-    assert "req_cleanup" not in c._load_meta
+    k_cache, v_cache = ctx.kv_caches[0]
+    assert torch.all(k_cache == 0), "No blocks should be touched"
 
 
 # -- Per-method ATDD for scheduler-side hooks (catches silent-early-return bugs)
@@ -633,3 +642,289 @@ def test_connector_init_back_compat_with_two_arg_call():
         "kv_cache_config must have a default to preserve back-compat with "
         "callers using the old (vllm_config, role) signature"
     )
+
+
+# -- Phase 1: Bounded Fingerprint Lifecycle (Bounded Cache pattern) -----------
+
+def _build_connector_for_save_path(tmp_path, max_fingerprints=4):
+    """Connector with engine + save-path attributes for fingerprint tests.
+
+    Does NOT require vLLM: uses __new__ to bypass __init__ and manually sets
+    only the attributes wait_for_save touches.
+    """
+    import tardigrade_db
+    from collections import OrderedDict
+
+    pytest.importorskip("vllm", reason="vLLM not installed")
+    from tardigrade_vllm.connector import TardigradeConnector
+
+    c = TardigradeConnector.__new__(TardigradeConnector)
+    c.engine = tardigrade_db.Engine(str(tmp_path))
+    c.owner = 1
+    c.kv_dim = 8
+    c.num_kv_heads = 2
+    c.head_dim = 4
+    c.num_layers = 1
+    c.block_size = 4
+    c.hidden_size = 8
+    c._load_packs = {}
+    c._load_meta = {}
+    c._save_buffers = {}
+    c._pack_id_by_fingerprint = OrderedDict()
+    c._max_fingerprints = max_fingerprints
+    c._embed_weights = np.random.RandomState(42).randn(1000, 8).astype(np.float32)
+    c._match_threshold = 1.0
+
+    from tardigrade_vllm.slot_resolver import RequestSlotResolver
+    c._slot_resolver = RequestSlotResolver()
+    from tardigrade_vllm.retrieval_key import LastTokenEmbeddingStrategy
+    c._retrieval_key_strategy = LastTokenEmbeddingStrategy()
+
+    cfg = MagicMock()
+    cfg.model_config.model = "Qwen/Qwen3-0.6B"
+    c.vllm_config = cfg
+    return c
+
+
+def _simulate_save_cycle(connector, batch_idx, block_index, layer_data=None):
+    """Simulate one complete save_kv_layer + wait_for_save cycle for a request.
+
+    Manually populates _save_buffers with one layer's data keyed by batch_idx,
+    using the given block_index as the fingerprint (block_indices[0]).
+    """
+    from tardigrade_vllm.slot_resolver import BatchSlice
+
+    if layer_data is None:
+        layer_data = np.arange(2 * 4 * connector.kv_dim, dtype=np.float32) * 0.01
+
+    sl = BatchSlice(
+        batch_index=batch_idx,
+        block_indices=(block_index,),
+        slot_count=4,
+        first_slot=block_index * connector.block_size,
+    )
+    connector._save_buffers[batch_idx] = {0: (layer_data, sl)}
+    connector.wait_for_save()
+
+
+def test_fingerprint_map_bounded_after_many_requests(tmp_path):
+    """GIVEN a connector with max_num_seqs=4
+    AND 20 sequential requests each completing save_kv_layer + wait_for_save
+    WHEN all 20 have completed
+    THEN len(_pack_id_by_fingerprint) <= 4"""
+    c = _build_connector_for_save_path(tmp_path, max_fingerprints=4)
+
+    for i in range(20):
+        _simulate_save_cycle(c, batch_idx=0, block_index=100 + i)
+
+    assert len(c._pack_id_by_fingerprint) <= 4, (
+        f"Fingerprint map should be bounded to max_num_seqs=4, "
+        f"got {len(c._pack_id_by_fingerprint)}"
+    )
+
+
+def test_stale_fingerprint_eviction_prevents_wrong_pack_deletion(tmp_path):
+    """GIVEN request A used block_indices[0]=5, wrote pack_id=P_A
+    AND request A is evicted from the fingerprint map (capacity exceeded)
+    AND request B is allocated the same block_indices[0]=5
+    WHEN request B calls wait_for_save
+    THEN P_A is NOT deleted (stale entry was evicted before B arrived)
+    AND request B's new pack exists in the engine"""
+    c = _build_connector_for_save_path(tmp_path, max_fingerprints=2)
+
+    # Request A writes with fingerprint=5
+    _simulate_save_cycle(c, batch_idx=0, block_index=5)
+    pack_a = c._pack_id_by_fingerprint.get(5)
+    assert pack_a is not None, "Request A should have written a pack"
+
+    # Evict A by filling the map past capacity
+    _simulate_save_cycle(c, batch_idx=0, block_index=100)
+    _simulate_save_cycle(c, batch_idx=0, block_index=101)
+    assert 5 not in c._pack_id_by_fingerprint, (
+        "Fingerprint 5 should have been evicted"
+    )
+
+    # Verify pack A still exists in the engine (not deleted by eviction)
+    pack_a_data = c.engine.load_pack_by_id(pack_a)
+    assert pack_a_data is not None, (
+        "Pack A should still exist — eviction removes map entry, not pack"
+    )
+
+    # Request B gets the same block_index=5 (block reuse after A finished)
+    _simulate_save_cycle(c, batch_idx=0, block_index=5)
+    pack_b = c._pack_id_by_fingerprint.get(5)
+    assert pack_b is not None, "Request B should have written a pack"
+    assert pack_b != pack_a, "B should have a different pack_id than A"
+
+    # Pack A should still exist — B didn't delete it because the stale
+    # fingerprint was already evicted
+    pack_a_still = c.engine.load_pack_by_id(pack_a)
+    assert pack_a_still is not None, (
+        "Pack A must survive: stale fingerprint was evicted before B arrived, "
+        "so B never saw it and never called delete_pack on it"
+    )
+
+
+def test_live_request_fingerprint_survives_eviction_of_others(tmp_path):
+    """GIVEN requests A, B, C, D all active (max_num_seqs=4)
+    AND request E arrives (would exceed capacity)
+    WHEN wait_for_save processes E
+    THEN request A's fingerprint is evicted (oldest)
+    AND requests B, C, D fingerprints remain"""
+    c = _build_connector_for_save_path(tmp_path, max_fingerprints=4)
+
+    # Write A, B, C, D
+    for i, fp in enumerate([10, 20, 30, 40]):
+        _simulate_save_cycle(c, batch_idx=0, block_index=fp)
+
+    assert len(c._pack_id_by_fingerprint) == 4
+    assert 10 in c._pack_id_by_fingerprint  # A is oldest
+
+    # Request E arrives — should evict A (oldest)
+    _simulate_save_cycle(c, batch_idx=0, block_index=50)
+
+    assert 10 not in c._pack_id_by_fingerprint, "A (oldest) should be evicted"
+    assert 20 in c._pack_id_by_fingerprint, "B should survive"
+    assert 30 in c._pack_id_by_fingerprint, "C should survive"
+    assert 40 in c._pack_id_by_fingerprint, "D should survive"
+    assert 50 in c._pack_id_by_fingerprint, "E should be present"
+
+
+# -- Phase 2: Metadata Bridge (DTO pattern) -----------------------------------
+
+def _build_connector_with_load_state(tmp_path):
+    """Connector pre-populated with matched packs for metadata bridge tests."""
+    pytest.importorskip("vllm", reason="vLLM not installed")
+    from tardigrade_vllm.connector import TardigradeConnector
+
+    c = _build_connector_for_save_path(tmp_path)
+
+    kv_dim = c.kv_dim
+    key = np.ones(kv_dim, dtype=np.float32)
+
+    # Write two packs to the engine
+    payload1 = np.arange(2 * 4 * kv_dim, dtype=np.float32) * 0.01
+    payload2 = np.arange(2 * 4 * kv_dim, dtype=np.float32) * 0.02
+    pack_id_1 = c.engine.mem_write_pack(c.owner, key, [(0, payload1)], 80.0)
+    pack_id_2 = c.engine.mem_write_pack(c.owner, key * 2, [(0, payload2)], 80.0)
+
+    pack1 = c.engine.load_pack_by_id(pack_id_1)
+    pack2 = c.engine.load_pack_by_id(pack_id_2)
+
+    # Simulate scheduler-side matching: populate _load_packs and _load_meta
+    c._load_packs = {
+        "req_a": {"pack": pack1, "seq_len": 4},
+        "req_b": {"pack": pack2, "seq_len": 4},
+    }
+    c._load_meta = {
+        "req_a": {"block_ids": [1, 2], "num_tokens": 4},
+        "req_b": {"block_ids": [3], "num_tokens": 4},
+    }
+    return c
+
+
+def test_build_connector_meta_packages_matched_packs(tmp_path):
+    """GIVEN a connector with 2 matched packs in _load_packs/_load_meta
+    WHEN build_connector_meta is called
+    THEN returned metadata has 2 load_requests
+    AND each contains correct request_id, pack data, seq_len, block_ids, num_tokens"""
+    c = _build_connector_with_load_state(tmp_path)
+
+    meta = c.build_connector_meta(MagicMock())
+
+    assert hasattr(meta, "load_requests"), (
+        "Metadata must have load_requests field (DTO pattern)"
+    )
+    assert len(meta.load_requests) == 2, (
+        f"Expected 2 load_requests, got {len(meta.load_requests)}"
+    )
+
+    req_ids = {r.request_id for r in meta.load_requests}
+    assert req_ids == {"req_a", "req_b"}
+
+    for req_meta in meta.load_requests:
+        assert req_meta.pack is not None
+        assert req_meta.seq_len == 4
+        assert isinstance(req_meta.block_ids, list)
+        assert req_meta.num_tokens == 4
+
+
+def test_build_connector_meta_clears_scheduler_state(tmp_path):
+    """GIVEN a connector with matched packs
+    WHEN build_connector_meta is called
+    THEN _load_packs and _load_meta are empty dicts"""
+    c = _build_connector_with_load_state(tmp_path)
+    assert len(c._load_packs) == 2  # precondition
+
+    c.build_connector_meta(MagicMock())
+
+    assert len(c._load_packs) == 0, "_load_packs must be cleared after build"
+    assert len(c._load_meta) == 0, "_load_meta must be cleared after build"
+
+
+def test_start_load_kv_reads_from_bound_metadata_not_instance_state(tmp_path):
+    """GIVEN metadata bound via _connector_metadata (simulating IPC)
+    AND _load_packs is empty (proving scheduler state isn't used)
+    WHEN start_load_kv is called with valid forward_context
+    THEN blocks are written to the correct GPU slots from metadata"""
+    torch = pytest.importorskip("torch")
+    c = _build_connector_with_load_state(tmp_path)
+
+    # Build metadata via the proper path
+    meta = c.build_connector_meta(MagicMock())
+    assert len(c._load_packs) == 0  # scheduler state cleared
+
+    # Simulate IPC: bind the metadata on the worker side
+    c._connector_metadata = meta
+
+    # Build mock forward context with torch caches
+    ctx = _mock_torch_forward_context(
+        c.num_layers, 8, c.block_size, c.num_kv_heads, c.head_dim
+    )
+
+    c.start_load_kv(ctx)
+
+    # Verify at least one block was written (non-zero)
+    wrote_something = False
+    for layer_idx in range(c.num_layers):
+        k_cache, v_cache = ctx.kv_caches[layer_idx]
+        for bid in [1, 2, 3]:  # block_ids from the two requests
+            if not torch.allclose(k_cache[bid], torch.zeros_like(k_cache[bid])):
+                wrote_something = True
+                break
+    assert wrote_something, (
+        "start_load_kv must read from bound metadata, not from _load_packs"
+    )
+
+
+def test_metadata_survives_serialization_round_trip(tmp_path):
+    """GIVEN _TardigradeConnectorMetadata with load request data
+    WHEN serialized and deserialized (simulating IPC transport)
+    THEN all fields are preserved and usable"""
+    import copy
+    c = _build_connector_with_load_state(tmp_path)
+    meta = c.build_connector_meta(MagicMock())
+
+    # deepcopy simulates serialization round-trip (same contract as IPC)
+    meta_copy = copy.deepcopy(meta)
+
+    assert len(meta_copy.load_requests) == len(meta.load_requests)
+    for orig, copied in zip(meta.load_requests, meta_copy.load_requests):
+        assert orig.request_id == copied.request_id
+        assert orig.seq_len == copied.seq_len
+        assert orig.block_ids == copied.block_ids
+        assert orig.num_tokens == copied.num_tokens
+
+
+def test_build_connector_meta_with_no_matches_returns_empty(tmp_path):
+    """GIVEN a connector with no matched packs
+    WHEN build_connector_meta is called
+    THEN returned metadata has empty load_requests list
+    AND is still a valid KVConnectorMetadata instance"""
+    c = _build_connector_for_save_path(tmp_path)
+    assert len(c._load_packs) == 0  # no matches
+
+    meta = c.build_connector_meta(MagicMock())
+
+    assert hasattr(meta, "load_requests")
+    assert len(meta.load_requests) == 0

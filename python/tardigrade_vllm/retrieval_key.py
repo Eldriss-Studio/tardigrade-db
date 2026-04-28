@@ -3,9 +3,10 @@
 Strategy pattern: pluggable retrieval key computation.
 The retrieval key determines which stored KV pack matches a new request.
 
-Architecture constraint: the save side stores last-token K from the last
-transformer layer. The load side uses the embedding table (no GPU forward
-pass). These produce vectors in different spaces unless hidden_size == kv_dim.
+Both save and load sides use the same strategy (via compute/compute_for_save).
+This guarantees keys live in the same vector space regardless of model
+architecture. The embedding table is the shared ground truth — no GPU
+forward pass required on either side.
 """
 
 import logging
@@ -27,6 +28,14 @@ class RetrievalKeyStrategy(ABC):
     @abstractmethod
     def compute(self, token_ids: list[int], embed_weights: np.ndarray) -> np.ndarray | None:
         """Return a retrieval key vector, or None if computation is not possible."""
+
+    def compute_for_save(self, token_ids: list[int], embed_weights: np.ndarray) -> np.ndarray | None:
+        """Compute retrieval key for the save side (Template Method).
+
+        Default delegates to compute() — both sides produce identical keys.
+        Override only if a strategy intentionally requires asymmetric keys.
+        """
+        return self.compute(token_ids, embed_weights)
 
 
 class LastTokenEmbeddingStrategy(RetrievalKeyStrategy):
