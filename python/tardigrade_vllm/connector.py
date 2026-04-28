@@ -1,10 +1,19 @@
-"""TardigradeDB KV Connector for vLLM — persistent memory injection.
+"""TardigradeDB KV Connector for vLLM — prefix-cache injection from persistent KV storage.
 
-Adapter pattern: bridges TardigradeDB's flat KV arrays to vLLM's
-paged attention block format via the KV Connector v1 API.
+Adapter pattern: bridges TardigradeDB's persistent KV store to vLLM's
+paged attention via the KV Connector v1 API. KV tensors persist across
+sessions in TardigradeDB; injection into vLLM is per-request prefix-cache
+scope — the loaded KV participates in attention only for that request's
+generation.
+
+This is NOT cross-prompt memory within a single vLLM process. Each request
+independently queries TardigradeDB and loads matching KV into its allocated
+prefix-cache slots. Cross-prompt persistence lives in TardigradeDB's engine,
+not in vLLM's runtime.
 
 On save: captures KV blocks from vLLM generation → flattens → stores in engine.
-On load: queries engine for matching memory → reshapes to blocks → injects.
+On load: queries engine for matching memory → reshapes to blocks → injects
+         into prefix-cache slots allocated by the scheduler.
 
 Requires vLLM >= 0.9.0. Install with: pip install vllm tardigrade-db
 
@@ -86,10 +95,13 @@ if HAS_VLLM:
         pass
 
     class TardigradeConnector(KVConnectorBase_V1):
-        """vLLM KV Connector that persists KV cache in TardigradeDB.
+        """Injects stored KV cache blocks into vLLM's prefix-cache slots
+        for individual requests. Persistence is in TardigradeDB; injection
+        scope is per-request.
 
-        Scheduler side: queries engine for matching memories.
-        Worker side: loads/saves KV blocks to/from engine.
+        Scheduler side: queries engine for matching memories, reports
+        loadable token count to vLLM's prefix-cache allocator.
+        Worker side: loads/saves KV blocks to/from engine via paged slots.
 
         Config keys (passed via --kv-connector-config JSON):
             db_path: str — engine storage directory
@@ -145,6 +157,13 @@ if HAS_VLLM:
 
             self.hidden_size = model_config.hf_config.hidden_size
 
+            # Retrieval key strategy (Strategy pattern).
+            from tardigrade_vllm.retrieval_key import check_key_alignment, get_strategy
+
+            strategy_name = config.get("retrieval_key_strategy", "last_token_embedding")
+            self._retrieval_key_strategy = get_strategy(strategy_name)
+            check_key_alignment(self.hidden_size, self.kv_dim)
+
             # Load embedding table for lightweight retrieval key computation.
             # The scheduler doesn't have hidden states — only token IDs.
             # We use the embedding table to convert tokens → vectors cheaply.
@@ -198,30 +217,9 @@ if HAS_VLLM:
             return self._embed_weights
 
         def _compute_retrieval_key(self, token_ids):
-            """Compute a retrieval key from token IDs using the embedding table.
-
-            Step 6: uses the LAST token's embedding (matches the save-side
-            choice of last-token K from the last layer). Mean-pooling lost
-            too much signal for paraphrased queries (engine evidence: 31%
-            recall via mean vs much higher with positional concentration).
-
-            Lightweight: runs on CPU, no GPU/forward pass — just a vocab
-            table lookup.
-
-            Note: this requires hidden_size == kv_dim, which holds for
-            Qwen3-0.6B (1024 == 8*128) but not for every model. A future
-            improvement would project the embedding into kv_dim space.
-            """
+            """Delegate to the configured RetrievalKeyStrategy."""
             embed = self._get_embed_weights()
-            if embed.size == 0 or len(token_ids) == 0:
-                return None
-
-            # Look up the last valid token's embedding only
-            valid_ids = [tid for tid in token_ids if 0 <= tid < embed.shape[0]]
-            if not valid_ids:
-                return None
-
-            return embed[valid_ids[-1]].astype(np.float32)
+            return self._retrieval_key_strategy.compute(token_ids, embed)
 
         # -- Scheduler-side methods ------------------------------------------------
 

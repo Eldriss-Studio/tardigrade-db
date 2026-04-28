@@ -29,6 +29,7 @@ use tdb_index::vamana::VamanaIndex;
 use tdb_index::wal::{Wal, WalEntry};
 use tdb_retrieval::attention::RetrievalResult;
 use tdb_retrieval::key_view::{fixed_dim_key, is_encoded_per_token_key};
+use tdb_retrieval::per_token::{PerTokenConfig, ScoringMode};
 use tdb_retrieval::pipeline::RetrieverPipeline;
 use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::slb::SemanticLookasideBuffer;
@@ -168,6 +169,8 @@ pub struct Engine {
     next_pack_id: PackId,
     /// Key dimension (detected from first write, used for SLB/Vamana init).
     key_dim: Option<usize>,
+    /// Per-token retrieval config (stored for pipeline rebuild on refresh).
+    per_token_config: PerTokenConfig,
     /// Durable text store for KV pack fact text.
     text_store: TextStore,
     /// Durable deletion log for pack deletions.
@@ -206,15 +209,8 @@ impl Engine {
         let text_store = TextStore::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
         let deletion_log = DeletionLog::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
 
-        // Retrieval pipeline: PerTokenRetriever (Top5Avg) → BruteForce (fallback).
-        // Stages must exist before refresh() inserts cells.
-        let mut pipeline = RetrieverPipeline::new();
-        pipeline.add_stage(Box::new(
-            tdb_retrieval::per_token::PerTokenRetriever::with_scoring_mode(
-                tdb_retrieval::per_token::ScoringMode::Top5Avg,
-            ),
-        ));
-        pipeline.add_stage(Box::new(tdb_retrieval::attention::BruteForceRetriever::new()));
+        let per_token_config = PerTokenConfig::default();
+        let pipeline = Self::build_default_pipeline(&per_token_config);
 
         // Construct with empty derived state, then rebuild via refresh().
         // DRY: open and refresh share the same Memento rebuild path
@@ -234,6 +230,7 @@ impl Engine {
             pack_directory: PackDirectory::new(),
             next_pack_id: 0,
             key_dim: None,
+            per_token_config,
             text_store,
             deletion_log,
         };
@@ -245,18 +242,14 @@ impl Engine {
 
     /// Re-sync in-memory state from disk without dropping the instance.
     ///
-    /// Re-applies the **Memento** pattern from [`open_with_options`]:
-    /// rescans segments, replays the WAL, refreshes governance from cell
-    /// metadata, rebuilds `pack_directory`, and re-syncs `text_store` +
-    /// `deletion_log`. After this returns, the engine reflects writes
-    /// performed by other [`Engine`] handles at the same path.
-    ///
-    /// **MVP scope:** cell-derived state, trace, persistent stores. Vamana
-    /// (the optional ANN graph) is NOT rebuilt — if it was active before
-    /// refresh, it remains active with stale graph state until the next
-    /// reactivation threshold trip. The brute-force + per-token retrievers
-    /// in the pipeline DO see new cells, so retrieval is correct (just not
-    /// Vamana-accelerated for the new cells).
+    /// Full **Memento** rebuild: rescans segments, rebuilds the retrieval
+    /// pipeline from scratch (`PerToken` + `BruteForce`), re-populates all
+    /// cells into both pipeline and SLB, replays the WAL, refreshes
+    /// governance, rebuilds `pack_directory`, and re-syncs backing stores.
+    /// Vamana is reset and re-activated lazily if cell count exceeds
+    /// threshold. After this returns, the engine reflects writes performed
+    /// by other [`Engine`] handles at the same path — same guarantee as
+    /// a fresh [`open`](Self::open).
     ///
     /// **Idempotency:** `refresh().refresh()` is identical to a single
     /// `refresh()`.
@@ -292,15 +285,16 @@ impl Engine {
         {
             let cap = self.slb.capacity();
             self.slb = SemanticLookasideBuffer::new(cap, new_dim);
-            // Re-populate from cells already in governance — they were
-            // valid for the OLD dim, but we just changed dims, so they're
-            // now stale. (This branch only fires when the engine was
-            // opened empty, so governance is empty and this loop is
-            // basically a no-op. Defensive code for future safety.)
             self.key_dim = Some(new_dim);
         }
 
-        // 3. Re-derive cell-keyed state for any cells we hadn't seen yet.
+        // 3. Rebuild retrieval pipeline from scratch (Memento pattern).
+        //    PerToken/BruteForce have no duplicate-insert protection, so we
+        //    must start with empty stages and re-populate all cells below.
+        self.pipeline = Self::build_default_pipeline(&self.per_token_config);
+        self.vamana = None;
+
+        // 4. Re-derive governance for new cells; re-populate pipeline for ALL cells.
         for cell_id in &all_cells {
             if known.contains(cell_id) {
                 continue;
@@ -309,6 +303,18 @@ impl Engine {
             self.reindex_cell(&cell);
             if cell.id >= self.next_id {
                 self.next_id = cell.id + 1;
+            }
+        }
+
+        // Re-populate rebuilt pipeline + SLB with previously-known cells.
+        // Governance stays intact (accumulated importance scores preserved).
+        for &cell_id in &known {
+            if let Ok(cell) = self.pool.get(cell_id)
+                && should_index_for_retrieval(&cell)
+            {
+                self.pipeline.insert(cell.id, cell.owner, &cell.key);
+                let slb_key = mean_pool_key(&cell.key);
+                self.slb.insert(cell.id, cell.owner, &slb_key);
             }
         }
 
@@ -351,6 +357,11 @@ impl Engine {
         // Commit the rebuilt pack directory + counter.
         self.pack_directory = pack_directory;
         self.next_pack_id = self.next_pack_id.max(next_pack_id);
+
+        // 7. Re-check Vamana activation after full reindex.
+        if self.vamana.is_none() && self.pool.cell_count() >= self.vamana_threshold {
+            self.activate_vamana()?;
+        }
 
         Ok(())
     }
@@ -655,6 +666,11 @@ impl Engine {
     /// Whether the Vamana index is currently active.
     pub fn has_vamana(&self) -> bool {
         self.vamana.is_some()
+    }
+
+    /// Number of stages in the retrieval pipeline.
+    pub fn pipeline_stage_count(&self) -> usize {
+        self.pipeline.stage_count()
     }
 
     /// Get the current tier of a cell.
@@ -1199,6 +1215,19 @@ impl Engine {
         }
 
         linked_packs.into_iter().collect()
+    }
+
+    /// Build the default retrieval pipeline: `PerTokenRetriever` (`Top5Avg`) → `BruteForce`.
+    ///
+    /// DRY helper shared by `open_with_options` and `refresh()` (Memento rebuild).
+    fn build_default_pipeline(config: &PerTokenConfig) -> RetrieverPipeline {
+        let mut pipeline = RetrieverPipeline::new();
+        pipeline.add_stage(Box::new(tdb_retrieval::per_token::PerTokenRetriever::with_config(
+            ScoringMode::Top5Avg,
+            config.clone(),
+        )));
+        pipeline.add_stage(Box::new(tdb_retrieval::attention::BruteForceRetriever::new()));
+        pipeline
     }
 
     /// Build and activate the Vamana index, adding it as a pipeline stage.

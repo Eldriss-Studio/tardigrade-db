@@ -33,10 +33,33 @@ use crate::key_view::{RetrievalKeyView, fixed_dim_key};
 use crate::retriever::Retriever;
 use crate::simd_distance::DotProduct;
 
-const CANDIDATE_REDUCTION_THRESHOLD: usize = 512;
-const MIN_CANDIDATES: usize = 256;
-const CANDIDATE_MULTIPLIER: usize = 64;
-const TOP5_AVG_MATCH_COUNT: usize = 5;
+/// Parameter Object: tuneable thresholds for per-token retrieval.
+///
+/// Controls the recall-vs-latency tradeoff in candidate reduction.
+/// Defaults match the values validated in experiments (100% recall at 100 memories
+/// with `Top5Avg` scoring on Qwen3-0.6B).
+#[derive(Debug, Clone)]
+pub struct PerTokenConfig {
+    /// Cell count above which candidate reduction activates.
+    pub candidate_reduction_threshold: usize,
+    /// Floor on candidate count after reduction.
+    pub min_candidates: usize,
+    /// Multiplier applied to k when computing candidate limit.
+    pub candidate_multiplier: usize,
+    /// Number of top dot products averaged in `Top5Avg` scoring.
+    pub top_n_avg_match_count: usize,
+}
+
+impl Default for PerTokenConfig {
+    fn default() -> Self {
+        Self {
+            candidate_reduction_threshold: 512,
+            min_candidates: 256,
+            candidate_multiplier: 64,
+            top_n_avg_match_count: 5,
+        }
+    }
+}
 
 /// Scoring aggregation strategy for per-token retrieval.
 #[derive(Debug, Clone, Copy)]
@@ -79,31 +102,32 @@ pub struct PerTokenRetriever {
     dim: Option<usize>,
     /// How to aggregate per-token scores into a cell score.
     scoring_mode: ScoringMode,
+    /// Tuneable retrieval thresholds (Parameter Object pattern).
+    config: PerTokenConfig,
     /// Number of distinct cells fully reranked during the previous query.
     last_scored_cell_count: usize,
 }
 
 impl PerTokenRetriever {
-    /// Create a new empty per-token retriever with `MaxSim` scoring.
+    /// Create a new empty per-token retriever with `MaxSim` scoring and default config.
     pub fn new() -> Self {
-        Self {
-            tokens: Vec::new(),
-            cell_token_count: HashMap::new(),
-            cell_summaries: HashMap::new(),
-            dim: None,
-            scoring_mode: ScoringMode::MaxSim,
-            last_scored_cell_count: 0,
-        }
+        Self::with_config(ScoringMode::MaxSim, PerTokenConfig::default())
     }
 
-    /// Create a retriever with a specific scoring mode.
+    /// Create a retriever with a specific scoring mode and default config.
     pub fn with_scoring_mode(mode: ScoringMode) -> Self {
+        Self::with_config(mode, PerTokenConfig::default())
+    }
+
+    /// Create a retriever with explicit scoring mode and config (Parameter Object).
+    pub fn with_config(mode: ScoringMode, config: PerTokenConfig) -> Self {
         Self {
             tokens: Vec::new(),
             cell_token_count: HashMap::new(),
             cell_summaries: HashMap::new(),
             dim: None,
             scoring_mode: mode,
+            config,
             last_scored_cell_count: 0,
         }
     }
@@ -119,7 +143,7 @@ impl PerTokenRetriever {
     }
 
     fn candidate_limit(&self, k: usize) -> usize {
-        self.cell_count().min(MIN_CANDIDATES.max(k * CANDIDATE_MULTIPLIER))
+        self.cell_count().min(self.config.min_candidates.max(k * self.config.candidate_multiplier))
     }
 
     fn candidate_cells(
@@ -128,7 +152,7 @@ impl PerTokenRetriever {
         k: usize,
         owner_filter: Option<OwnerId>,
     ) -> Option<HashSet<CellId>> {
-        if self.cell_count() <= CANDIDATE_REDUCTION_THRESHOLD {
+        if self.cell_count() <= self.config.candidate_reduction_threshold {
             return None;
         }
 
@@ -225,7 +249,7 @@ impl PerTokenRetriever {
                     ScoringMode::MaxSim => dots.iter().copied().fold(f32::NEG_INFINITY, f32::max),
                     ScoringMode::Top5Avg => {
                         dots.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-                        let take = dots.len().min(TOP5_AVG_MATCH_COUNT);
+                        let take = dots.len().min(self.config.top_n_avg_match_count);
                         if take == 0 {
                             f32::NEG_INFINITY
                         } else {
@@ -500,9 +524,10 @@ mod tests {
 
         let _ = retriever.query_inner(&query, QUERY_K, Some(OWNER_ONE), true);
 
+        let defaults = PerTokenConfig::default();
         assert_eq!(
             retriever.last_scored_cell_count,
-            MIN_CANDIDATES.max(QUERY_K * CANDIDATE_MULTIPLIER)
+            defaults.min_candidates.max(QUERY_K * defaults.candidate_multiplier)
         );
         assert!(retriever.last_scored_cell_count < retriever.cell_count());
     }
@@ -565,5 +590,63 @@ mod tests {
         assert!(results.iter().all(|result| result.owner == 1));
         assert_eq!(results[0].cell_id, OWNER_FILTER_TARGET_CELL_ID as CellId);
         assert!(retriever.last_scored_cell_count <= retriever.candidate_limit(QUERY_K));
+    }
+
+    #[test]
+    fn test_custom_config_activates_candidate_reduction_at_lower_threshold() {
+        // GIVEN a PerTokenRetriever with candidate_reduction_threshold = 2
+        let config = PerTokenConfig {
+            candidate_reduction_threshold: 2,
+            min_candidates: 3,
+            candidate_multiplier: 1,
+            ..PerTokenConfig::default()
+        };
+        let mut retriever = PerTokenRetriever::with_config(ScoringMode::Top5Avg, config);
+
+        // AND 5 inserted cells (above threshold=2, well below default=512)
+        for cell_id in 0..5u64 {
+            let encoded = encoded_cell(SMALL_FIXTURE_DIM, cell_id as usize, BROAD_MATCH_TOKENS);
+            retriever.insert(cell_id, OWNER_ONE, &encoded);
+        }
+
+        let query = encoded_cell(SMALL_FIXTURE_DIM, 2, BROAD_MATCH_TOKENS);
+        let _ = retriever.query_inner(&query, 1, Some(OWNER_ONE), true);
+
+        // THEN candidate reduction activates (scored fewer than total cells)
+        assert!(
+            retriever.last_scored_cell_count < retriever.cell_count(),
+            "candidate reduction should activate: scored {} of {} cells",
+            retriever.last_scored_cell_count,
+            retriever.cell_count(),
+        );
+    }
+
+    #[test]
+    fn test_custom_top_n_changes_scoring_aggregation() {
+        // GIVEN two retrievers: one with top_n=1, one with top_n=5
+        let config_top1 = PerTokenConfig { top_n_avg_match_count: 1, ..PerTokenConfig::default() };
+        let mut retriever_top1 = PerTokenRetriever::with_config(ScoringMode::Top5Avg, config_top1);
+        let mut retriever_top5 = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
+
+        // AND identical cells inserted into both
+        for cell_id in 0..3u64 {
+            let encoded = encoded_cell(SMALL_FIXTURE_DIM, cell_id as usize, BROAD_MATCH_TOKENS);
+            retriever_top1.insert(cell_id, OWNER_ONE, &encoded);
+            retriever_top5.insert(cell_id, OWNER_ONE, &encoded);
+        }
+
+        let query = encoded_cell(SMALL_FIXTURE_DIM, 0, BROAD_MATCH_TOKENS);
+        let results_top1 = retriever_top1.query_inner(&query, 1, None, false);
+        let results_top5 = retriever_top5.query_inner(&query, 1, None, false);
+
+        // THEN the top-1 score should differ from top-5 score (different aggregation)
+        assert!(!results_top1.is_empty());
+        assert!(!results_top5.is_empty());
+        let score_top1 = results_top1[0].score;
+        let score_top5 = results_top5[0].score;
+        assert!(
+            (score_top1 - score_top5).abs() > f32::EPSILON,
+            "top_n=1 score ({score_top1}) should differ from top_n=5 score ({score_top5})"
+        );
     }
 }

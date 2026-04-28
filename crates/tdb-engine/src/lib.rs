@@ -27,10 +27,10 @@
 //!   ├─ Storage:     BlockPool::append → Q4-compress key+value, fsync to segment
 //!   │               (on-disk metadata includes importance + tier for crash recovery)
 //!   │
-//!   ├─ Retrieval:   BruteForceRetriever::insert → index key for latent-space queries
-//!   │               SLB::insert → cache key in INT8 for sub-5μs hot-path lookups
+//!   ├─ Retrieval:   Pipeline::insert → PerTokenRetriever + BruteForce
+//!   │               SLB::insert → cache mean-pooled key for hot-path lookups
 //!   │
-//!   ├─ Index:       if Vamana active → insert_online (graph ANN)
+//!   ├─ Index:       if Vamana active → insert (graph ANN)
 //!   │               if cell_count ≥ threshold → lazy-activate Vamana
 //!   │
 //!   └─ Trace:       if parent_cell_id provided →
@@ -50,19 +50,23 @@
 //! ```text
 //! mem_read(query_key, k, owner_filter)
 //!   │
-//!   ├─ Stage 1: SLB (hot path)
-//!   │  INT8 quantized keys, NEON SDOT / AVX2
+//!   ├─ SLB (hot cache, separate from pipeline)
+//!   │  INT8 quantized mean-pooled keys, NEON SDOT / AVX2
 //!   │  Sub-5μs per query at 4096 entries
 //!   │  Exploits conversational locality — recent cells are cached
 //!   │
-//!   ├─ Stage 2: Vamana (warm path, if active)
-//!   │  DiskANN-style graph with robust pruning
-//!   │  Multi-seed greedy beam search
-//!   │  Activated when cell count crosses threshold
+//!   ├─ Pipeline Stage 1: PerTokenRetriever (primary)
+//!   │  Inverted Multi-Key Index with Top5Avg scoring
+//!   │  INT8 per-token dot products, tuneable via PerTokenConfig
+//!   │  100% recall at 100 memories (validated on Qwen3-0.6B)
 //!   │
-//!   └─ Stage 3: BruteForce (cold path)
-//!      Exhaustive scaled dot-product: score = (q · k) / √d_k
-//!      Exact results, owner-filtered per-agent partitions
+//!   ├─ Pipeline Stage 2: BruteForce (fallback)
+//!   │  Exhaustive scaled dot-product: score = (q · k) / √d_k
+//!   │  Exact results, owner-filtered per-agent partitions
+//!   │
+//!   └─ Pipeline Stage 3: Vamana (optional, lazy-activated)
+//!      DiskANN-style graph with robust pruning
+//!      Activated when cell count crosses threshold
 //!
 //!   Then for each result:
 //!     → recency_decay(Δt) multiplier (21-day half-life)
@@ -74,25 +78,33 @@
 //! Results are deduplicated by `CellId`, sorted by decay-adjusted score, and
 //! truncated to k.
 //!
-//! # Crash recovery (Memento pattern)
+//! # Crash recovery and cross-process sync (Memento pattern)
 //!
-//! On [`Engine::open`], the engine rebuilds all in-memory derived state from
-//! durable sources:
+//! On [`Engine::open`] and [`refresh`], the engine rebuilds all in-memory
+//! derived state from durable sources:
 //!
 //! ```text
-//! Engine::open(dir)
-//!   ├─ BlockPool::open → scan segments, rebuild CellId → offset index
+//! Engine::open(dir) / Engine::refresh()
+//!   ├─ BlockPool::open/refresh_index → scan segments
+//!   ├─ Pipeline rebuild → fresh PerTokenRetriever + BruteForce
+//!   │  (Vamana reset; re-activated lazily if cell count ≥ threshold)
 //!   ├─ For each persisted cell:
-//!   │    BruteForceRetriever::insert(key)
+//!   │    Pipeline::insert(key) + SLB::insert(mean_pooled_key)
 //!   │    ImportanceScorer::new(persisted_importance)
 //!   │    TierStateMachine::with_tier(persisted_tier)
 //!   ├─ WAL::replay → rebuild TraceGraph from logged edges
+//!   ├─ PackDirectory::from_cells → rebuild pack membership
+//!   ├─ DeletionLog::refresh → filter deleted packs
 //!   └─ next_id = max(persisted_ids) + 1
 //! ```
 //!
-//! This means the engine can crash at any point and recover all state that was
-//! durably committed (fsync'd). In-flight writes that didn't complete fsync
-//! are discarded — the partial record detection in segment scanning handles this.
+//! `refresh()` provides the same guarantee as a fresh `open()`: two Engine
+//! handles sharing a path stay synchronized. The vLLM connector relies on
+//! this for scheduler ↔ worker coordination.
+//!
+//! The engine can crash at any point and recover all state that was durably
+//! committed (fsync'd). In-flight writes that didn't complete fsync are
+//! discarded — partial record detection in segment scanning handles this.
 //!
 //! # Causal memory (Trace graph)
 //!
@@ -163,6 +175,7 @@
 //! [`Engine::open`]: engine::Engine::open
 //! [`mem_write`]: engine::Engine::mem_write
 //! [`mem_read`]: engine::Engine::mem_read
+//! [`refresh`]: engine::Engine::refresh
 //! [`store_synapsis`]: engine::Engine::store_synapsis
 //! [`load_synapsis`]: engine::Engine::load_synapsis
 

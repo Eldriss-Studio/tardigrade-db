@@ -82,6 +82,37 @@ impl RetrieverPipeline {
     pub fn stage_count(&self) -> usize {
         self.stages.len()
     }
+
+    /// Remove all stages (Memento: discard derived state for rebuild).
+    pub fn clear_stages(&mut self) {
+        self.stages.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attention::BruteForceRetriever;
+
+    #[test]
+    fn test_pipeline_clear_stages_empties_pipeline() {
+        // GIVEN a pipeline with 2 stages containing data
+        let mut pipeline = RetrieverPipeline::new();
+        pipeline.add_stage(Box::new(BruteForceRetriever::new()));
+        pipeline.add_stage(Box::new(BruteForceRetriever::new()));
+        pipeline.insert(0, 1, &[1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(pipeline.stage_count(), 2);
+        assert!(!pipeline.is_empty());
+
+        // WHEN clear_stages()
+        pipeline.clear_stages();
+
+        // THEN stage_count() == 0 AND query returns empty
+        assert_eq!(pipeline.stage_count(), 0);
+        assert!(pipeline.is_empty());
+        let results = pipeline.query(&[1.0, 0.0, 0.0, 0.0], 5, None);
+        assert!(results.is_empty());
+    }
 }
 
 impl std::fmt::Debug for RetrieverPipeline {

@@ -11,25 +11,34 @@
 //! with a key vector from a live inference pass means the retrieval metric is identical
 //! to how the model itself relates tokens — no separate embedding model required.
 //!
-//! # Two-Level Retrieval
+//! # Three-Stage Retrieval Pipeline
 //!
 //! ```text
 //! query key vector
 //!       │
 //!       ▼
 //! ┌─────────────────────────────────────────┐
-//! │  SemanticLookasideBuffer (hot path)     │
-//! │  • Fixed-capacity LRU, INT8 keys        │
-//! │  • Target: < 5 μs via SIMD dot product  │
-//! │  • HIT → return immediately             │
+//! │  PerTokenRetriever (primary)            │
+//! │  • Inverted Multi-Key Index             │
+//! │  • INT8 per-token scoring (Top5Avg)     │
+//! │  • 100% recall at 100 memories          │
+//! │  • Tuneable via PerTokenConfig           │
 //! └─────────────┬───────────────────────────┘
-//!               │ MISS
+//!               │ insufficient results
 //!               ▼
 //! ┌─────────────────────────────────────────┐
-//! │  BruteForceRetriever (cold path)        │
+//! │  BruteForceRetriever (fallback)         │
 //! │  • Full f32 exhaustive scan             │
 //! │  • Owner-filtered per-agent partitions  │
 //! │  • Valid up to ~10K cells per agent     │
+//! └─────────────────────────────────────────┘
+//!
+//! Parallel hot cache (separate from pipeline):
+//! ┌─────────────────────────────────────────┐
+//! │  SemanticLookasideBuffer (hot path)     │
+//! │  • Fixed-capacity LRU, INT8 keys        │
+//! │  • Target: < 5 μs via SIMD dot product  │
+//! │  • Warmed on every read/write           │
 //! └─────────────────────────────────────────┘
 //! ```
 //!

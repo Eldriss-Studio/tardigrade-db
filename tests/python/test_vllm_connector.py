@@ -98,3 +98,14 @@ def test_trace_boosted_retrieval_returns_results():
     assert len(results) >= 1
     result_ids = {r["pack_id"] for r in results}
     assert pack_ids[0] in result_ids  # linked pack found
+
+
+def test_module_docstring_describes_prefix_cache_mechanism():
+    """GIVEN the connector module,
+    WHEN inspecting its docstring,
+    THEN it describes the mechanism as prefix-cache injection
+    AND states the per-request scope boundary."""
+    from tardigrade_vllm import connector
+
+    assert "prefix-cache" in connector.__doc__
+    assert "per-request" in connector.__doc__

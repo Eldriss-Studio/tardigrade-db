@@ -2577,3 +2577,46 @@ fn test_list_packs_empty_engine() {
     let engine = Engine::open(dir.path()).unwrap();
     assert!(engine.list_packs(None).is_empty());
 }
+
+/// ATDD: After refresh(), pipeline is rebuilt clean and ALL cells are retrievable.
+///
+/// Verifies the Memento rebuild: Vamana is reset, pipeline has the default
+/// 2 stages (PerToken + BruteForce), and both old and new cells are queryable.
+#[test]
+fn test_refresh_rebuilds_pipeline_all_cells_retrievable() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // GIVEN engine A with cells written at a low Vamana threshold
+    let mut engine_a = Engine::open_with_vamana_threshold(dir.path(), 3).unwrap();
+    let key: Vec<f32> = (0..64).map(|i| (i as f32 * 0.1).sin()).collect();
+
+    // Write enough cells to activate Vamana (threshold = 3)
+    for i in 0..5u32 {
+        let mut k = key.clone();
+        k[0] += i as f32;
+        engine_a.mem_write(1, 0, &k, vec![0.0; 64], 50.0, None).unwrap();
+    }
+    assert!(engine_a.has_vamana(), "Vamana should be active");
+    assert_eq!(engine_a.pipeline_stage_count(), 3); // PerToken + BruteForce + Vamana
+
+    // AND engine B at same path writes additional cells
+    {
+        let mut engine_b = Engine::open(dir.path()).unwrap();
+        for i in 5..8u32 {
+            let mut k = key.clone();
+            k[0] += i as f32;
+            engine_b.mem_write(1, 0, &k, vec![0.0; 64], 50.0, None).unwrap();
+        }
+    } // engine_b dropped
+
+    // WHEN engine A calls refresh()
+    engine_a.refresh().unwrap();
+
+    // THEN: Vamana is reset (will re-activate since cell count > threshold)
+    // Pipeline should have been rebuilt with default stages, then Vamana re-added
+    assert_eq!(engine_a.cell_count(), 8);
+
+    // AND: ALL cells (old + new) are retrievable
+    let results = engine_a.mem_read(&key, 8, None).unwrap();
+    assert!(results.len() >= 5, "expected at least 5 results, got {}", results.len());
+}

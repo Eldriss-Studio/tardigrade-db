@@ -512,6 +512,10 @@ def _build_bare_connector_for_scheduler(tmp_path, embed_dim=8):
     from tardigrade_vllm.slot_resolver import RequestSlotResolver
     c._slot_resolver = RequestSlotResolver()
 
+    # Retrieval key strategy (normally set in __init__)
+    from tardigrade_vllm.retrieval_key import LastTokenEmbeddingStrategy
+    c._retrieval_key_strategy = LastTokenEmbeddingStrategy()
+
     return c
 
 
