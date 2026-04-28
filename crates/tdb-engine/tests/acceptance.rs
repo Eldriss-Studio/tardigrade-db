@@ -2809,7 +2809,7 @@ fn test_evict_draft_packs_removes_low_importance_drafts() {
     assert_eq!(engine.pack_count(), 3);
 
     // Evict Draft packs below importance 30.
-    let evicted = engine.evict_draft_packs(30.0).unwrap();
+    let evicted = engine.evict_draft_packs(30.0, None).unwrap();
 
     assert_eq!(evicted, 1, "should evict one Draft pack below threshold");
     assert_eq!(engine.pack_count(), 2);

@@ -26,3 +26,17 @@ pub enum Tier {
     Validated = 1,
     Core = 2,
 }
+
+impl Tier {
+    /// Score multiplier applied during retrieval based on maturity.
+    ///
+    /// Core memories have proven their value through repeated access;
+    /// they rank higher than untested Draft memories.
+    pub fn retrieval_boost(self) -> f32 {
+        match self {
+            Self::Draft => 1.0,
+            Self::Validated => 1.1,
+            Self::Core => 1.25,
+        }
+    }
+}

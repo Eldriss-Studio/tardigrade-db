@@ -103,18 +103,6 @@ impl Retriever for VamanaAdapter {
     }
 }
 
-/// Score multiplier applied during retrieval based on maturity tier.
-///
-/// Core memories have proven their value through repeated access;
-/// they deserve a retrieval advantage over untested Draft memories.
-fn tier_boost(tier: Tier) -> f32 {
-    match tier {
-        Tier::Draft => 1.0,
-        Tier::Validated => 1.1,
-        Tier::Core => 1.25,
-    }
-}
-
 /// Per-cell governance state tracked by the engine.
 #[derive(Debug)]
 struct CellGovernance {
@@ -637,7 +625,7 @@ impl Engine {
                     (recency_decay(g.days_since_update), g.tier_sm.current())
                 });
 
-            let adjusted_score = rr.score * decay_factor * tier_boost(tier);
+            let adjusted_score = rr.score * decay_factor * tier.retrieval_boost();
 
             match self.pool.get(rr.cell_id) {
                 Ok(cell) => {
@@ -722,11 +710,16 @@ impl Engine {
     /// Evict Draft-tier packs whose importance falls below the threshold.
     ///
     /// Only Draft-tier packs are eligible for eviction. Validated and Core
-    /// packs are never evicted regardless of importance. Returns the number
+    /// packs are never evicted regardless of importance. When `owner_filter`
+    /// is `Some`, only that owner's packs are considered. Returns the number
     /// of packs evicted.
-    pub fn evict_draft_packs(&mut self, importance_threshold: f32) -> Result<usize> {
+    pub fn evict_draft_packs(
+        &mut self,
+        importance_threshold: f32,
+        owner_filter: Option<OwnerId>,
+    ) -> Result<usize> {
         let to_evict: Vec<PackId> = self
-            .list_packs(None)
+            .list_packs(owner_filter)
             .into_iter()
             .filter(|&(_, _, tier, importance)| {
                 tier == Tier::Draft && importance < importance_threshold
@@ -891,22 +884,13 @@ impl Engine {
         let candidates = self.collect_pack_candidates(query_key, k_expanded, owner_filter);
         let candidates = self.deduplicate_pack_candidates(candidates, k_expanded, owner_filter);
 
-        // Score and boost by trace link count
-        let mut scored: Vec<(PackCandidate, f32)> = candidates
-            .into_iter()
-            .map(|c| {
-                let link_count = self.pack_links(c.pack_id).len() as f32;
-                let boosted_score = c.score * (1.0 + link_count * boost_factor);
-                (c, boosted_score)
-            })
-            .collect();
+        // Materialize all expanded candidates with trace boost + tier boost.
+        // Cannot truncate before governance: tier boost may reorder results.
+        let mut results = Vec::with_capacity(candidates.len());
+        for mut candidate in candidates {
+            let link_count = self.pack_links(candidate.pack_id).len() as f32;
+            candidate.score *= 1.0 + link_count * boost_factor;
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(k);
-
-        let mut results = Vec::with_capacity(k);
-        for (mut candidate, boosted_score) in scored {
-            candidate.score = boosted_score;
             let layers = self.hydrate_pack_layers(&candidate.cell_ids)?;
             let access = self.apply_pack_access_governance(candidate.retrieval_cell_id);
             let mut result = build_pack_read_result(&candidate, layers, access);
@@ -914,6 +898,8 @@ impl Engine {
             results.push(result);
         }
 
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(k);
         Ok(results)
     }
 
@@ -1013,7 +999,7 @@ impl Engine {
         PackAccessSnapshot {
             tier,
             decay_factor: recency_decay(gov.days_since_update),
-            tier_boost: tier_boost(tier),
+            tier_boost: tier.retrieval_boost(),
         }
     }
 

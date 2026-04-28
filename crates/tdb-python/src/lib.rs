@@ -197,10 +197,16 @@ impl Engine {
 
     /// Evict Draft-tier packs below the importance threshold.
     ///
-    /// Only Draft-tier packs are eligible. Returns the number evicted.
-    fn evict_draft_packs(&mut self, importance_threshold: f32) -> PyResult<usize> {
+    /// Only Draft-tier packs are eligible. When `owner` is provided, only
+    /// that owner's packs are considered. Returns the number evicted.
+    #[pyo3(signature = (importance_threshold, owner=None))]
+    fn evict_draft_packs(
+        &mut self,
+        importance_threshold: f32,
+        owner: Option<u64>,
+    ) -> PyResult<usize> {
         self.inner
-            .evict_draft_packs(importance_threshold)
+            .evict_draft_packs(importance_threshold, owner)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
