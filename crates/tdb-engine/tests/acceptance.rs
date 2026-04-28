@@ -2850,6 +2850,136 @@ fn test_mem_read_tier_boost_not_truncated_by_early_exit() {
     );
 }
 
+// ── Semantic Edge Types acceptance tests (P3.1) ───────────────────────────
+
+use tdb_index::trace::EdgeType;
+
+fn make_edge_test_pack(engine: &mut Engine, seed: f32) -> u64 {
+    let key = encode_per_token_keys(&[&[seed, 0.0, 0.0, 0.0]]);
+    engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![seed; 16] }],
+            salience: 80.0,
+            text: None,
+        })
+        .unwrap()
+}
+
+/// ATDD: `add_pack_edge` with Supports creates a queryable Supports link.
+#[test]
+fn test_add_pack_edge_supports() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let pack_a = make_edge_test_pack(&mut engine, 1.0);
+    let pack_b = make_edge_test_pack(&mut engine, 2.0);
+
+    engine.add_pack_edge(pack_a, pack_b, EdgeType::Supports).unwrap();
+
+    assert!(engine.pack_supports(pack_a).contains(&pack_b));
+    assert!(engine.pack_supports(pack_b).contains(&pack_a));
+    assert!(engine.pack_links(pack_a).contains(&pack_b));
+}
+
+/// ATDD: `add_pack_edge` with Contradicts creates a queryable Contradicts link.
+#[test]
+fn test_add_pack_edge_contradicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let pack_a = make_edge_test_pack(&mut engine, 1.0);
+    let pack_b = make_edge_test_pack(&mut engine, 2.0);
+
+    engine.add_pack_edge(pack_a, pack_b, EdgeType::Contradicts).unwrap();
+
+    assert!(engine.pack_contradicts(pack_a).contains(&pack_b));
+    assert!(engine.pack_contradicts(pack_b).contains(&pack_a));
+    assert!(engine.pack_links(pack_a).contains(&pack_b));
+}
+
+/// ATDD: `pack_links_by_type` filters edges by type.
+#[test]
+fn test_pack_links_by_type_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let pack_a = make_edge_test_pack(&mut engine, 1.0);
+    let pack_b = make_edge_test_pack(&mut engine, 2.0);
+    let pack_c = make_edge_test_pack(&mut engine, 3.0);
+    let pack_d = make_edge_test_pack(&mut engine, 4.0);
+
+    engine.add_pack_link(pack_a, pack_b).unwrap(); // Follows
+    engine.add_pack_edge(pack_a, pack_c, EdgeType::Supports).unwrap();
+    engine.add_pack_edge(pack_a, pack_d, EdgeType::Contradicts).unwrap();
+
+    let follows = engine.pack_links_by_type(pack_a, EdgeType::Follows);
+    let supports = engine.pack_links_by_type(pack_a, EdgeType::Supports);
+    let contradicts = engine.pack_links_by_type(pack_a, EdgeType::Contradicts);
+
+    assert_eq!(follows, vec![pack_b]);
+    assert_eq!(supports, vec![pack_c]);
+    assert_eq!(contradicts, vec![pack_d]);
+
+    // pack_links returns ALL types
+    let all = engine.pack_links(pack_a);
+    assert_eq!(all.len(), 3);
+}
+
+/// ATDD: Semantic edges survive engine reopen via WAL replay.
+#[test]
+fn test_semantic_edges_survive_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (pack_a, pack_b, pack_c) = {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let a = make_edge_test_pack(&mut engine, 1.0);
+        let b = make_edge_test_pack(&mut engine, 2.0);
+        let c = make_edge_test_pack(&mut engine, 3.0);
+        engine.add_pack_edge(a, b, EdgeType::Supports).unwrap();
+        engine.add_pack_edge(a, c, EdgeType::Contradicts).unwrap();
+        (a, b, c)
+    };
+
+    let engine = Engine::open(dir.path()).unwrap();
+    assert!(engine.pack_supports(pack_a).contains(&pack_b));
+    assert!(engine.pack_contradicts(pack_a).contains(&pack_c));
+}
+
+/// ATDD: `add_pack_link` still creates Follows edges (backward compat).
+#[test]
+fn test_add_pack_link_still_creates_follows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let pack_a = make_edge_test_pack(&mut engine, 1.0);
+    let pack_b = make_edge_test_pack(&mut engine, 2.0);
+
+    engine.add_pack_link(pack_a, pack_b).unwrap();
+
+    let follows = engine.pack_links_by_type(pack_a, EdgeType::Follows);
+    assert!(follows.contains(&pack_b));
+}
+
+/// ATDD: Mixed edge types all contribute to trace boost link count.
+#[test]
+fn test_mixed_edge_types_in_trace_boost() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let pack_a = make_edge_test_pack(&mut engine, 1.0);
+    let pack_b = make_edge_test_pack(&mut engine, 2.0);
+    let pack_c = make_edge_test_pack(&mut engine, 3.0);
+
+    engine.add_pack_link(pack_a, pack_b).unwrap(); // Follows
+    engine.add_pack_edge(pack_a, pack_c, EdgeType::Supports).unwrap();
+
+    // pack_a has 2 links; both types should contribute to trace boost
+    assert_eq!(engine.pack_links(pack_a).len(), 2);
+}
+
 // ── Engine Status API acceptance tests ────────────────────────────────────
 
 /// ATDD: `Engine::status()` returns a consistent snapshot of engine state.
@@ -2883,4 +3013,178 @@ fn test_engine_status_reflects_current_state() {
     assert!(status.cell_count > 0);
     assert_eq!(status.pack_count, 1);
     assert!(status.slb_occupancy > 0);
+}
+
+// ── Multi-Agent acceptance tests (P3.3) ───────────────────────────────────
+
+const AGENT_ALPHA: u64 = 100;
+const AGENT_BETA: u64 = 200;
+const AGENT_GAMMA: u64 = 300;
+const MULTI_AGENT_PACKS_PER_AGENT: usize = 5;
+const MULTI_AGENT_SALIENCE: f32 = 80.0;
+const MULTI_AGENT_LOW_SALIENCE: f32 = 10.0;
+const MULTI_AGENT_EVICTION_THRESHOLD: f32 = 30.0;
+
+fn multi_agent_pack(owner: u64, seed: f32) -> KVPack {
+    KVPack {
+        id: 0,
+        owner,
+        retrieval_key: encode_per_token_keys(&[&[seed, 0.0, 0.0, 0.0]]),
+        layers: vec![KVLayerPayload { layer_idx: 0, data: vec![seed; 16] }],
+        salience: MULTI_AGENT_SALIENCE,
+        text: Some(format!("owner={owner} seed={seed}")),
+    }
+}
+
+fn multi_agent_fixture(dir: &std::path::Path) -> (Engine, Vec<u64>, Vec<u64>, Vec<u64>) {
+    let mut engine = Engine::open(dir).unwrap();
+    let mut alpha_ids = Vec::new();
+    let mut beta_ids = Vec::new();
+    let mut gamma_ids = Vec::new();
+
+    for i in 0..MULTI_AGENT_PACKS_PER_AGENT {
+        alpha_ids
+            .push(engine.mem_write_pack(&multi_agent_pack(AGENT_ALPHA, i as f32 + 1.0)).unwrap());
+        beta_ids
+            .push(engine.mem_write_pack(&multi_agent_pack(AGENT_BETA, i as f32 + 10.0)).unwrap());
+        gamma_ids
+            .push(engine.mem_write_pack(&multi_agent_pack(AGENT_GAMMA, i as f32 + 20.0)).unwrap());
+    }
+
+    (engine, alpha_ids, beta_ids, gamma_ids)
+}
+
+/// ATDD: 3 agents × 5 packs; `list_packs(owner)` returns only that agent's packs.
+#[test]
+fn test_multi_agent_pack_isolation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, _, _, _) = multi_agent_fixture(dir.path());
+
+    let alpha_packs = engine.list_packs(Some(AGENT_ALPHA));
+    let beta_packs = engine.list_packs(Some(AGENT_BETA));
+    let all_packs = engine.list_packs(None);
+
+    assert_eq!(alpha_packs.len(), MULTI_AGENT_PACKS_PER_AGENT);
+    assert_eq!(beta_packs.len(), MULTI_AGENT_PACKS_PER_AGENT);
+    assert_eq!(all_packs.len(), MULTI_AGENT_PACKS_PER_AGENT * 3);
+    assert!(alpha_packs.iter().all(|p| p.1 == AGENT_ALPHA));
+    assert!(beta_packs.iter().all(|p| p.1 == AGENT_BETA));
+}
+
+/// ATDD: Each agent's trace links are invisible to other agents.
+#[test]
+fn test_multi_agent_trace_link_isolation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, alpha_ids, beta_ids, _) = multi_agent_fixture(dir.path());
+
+    engine.add_pack_link(alpha_ids[0], alpha_ids[1]).unwrap();
+    engine.add_pack_link(beta_ids[0], beta_ids[1]).unwrap();
+
+    let alpha_links = engine.pack_links(alpha_ids[0]);
+    assert!(alpha_links.contains(&alpha_ids[1]));
+    assert!(!alpha_links.iter().any(|id| beta_ids.contains(id)));
+
+    let beta_links = engine.pack_links(beta_ids[0]);
+    assert!(beta_links.contains(&beta_ids[1]));
+    assert!(!beta_links.iter().any(|id| alpha_ids.contains(id)));
+}
+
+/// ATDD: Evicting ALPHA's Drafts doesn't touch BETA's Drafts.
+#[test]
+fn test_multi_agent_owner_scoped_eviction() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let alpha_low = engine
+        .mem_write_pack(&KVPack {
+            salience: MULTI_AGENT_LOW_SALIENCE,
+            ..multi_agent_pack(AGENT_ALPHA, 1.0)
+        })
+        .unwrap();
+    let alpha_high = engine.mem_write_pack(&multi_agent_pack(AGENT_ALPHA, 2.0)).unwrap();
+    let beta_low = engine
+        .mem_write_pack(&KVPack {
+            salience: MULTI_AGENT_LOW_SALIENCE,
+            ..multi_agent_pack(AGENT_BETA, 10.0)
+        })
+        .unwrap();
+
+    let evicted =
+        engine.evict_draft_packs(MULTI_AGENT_EVICTION_THRESHOLD, Some(AGENT_ALPHA)).unwrap();
+
+    assert_eq!(evicted, 1);
+    assert!(!engine.pack_exists(alpha_low));
+    assert!(engine.pack_exists(alpha_high));
+    assert!(engine.pack_exists(beta_low), "BETA's low-salience Draft should be untouched");
+}
+
+/// ATDD: Deleting ALPHA's pack doesn't affect BETA's count or retrieval.
+#[test]
+fn test_multi_agent_delete_isolation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, alpha_ids, _, _) = multi_agent_fixture(dir.path());
+
+    engine.delete_pack(alpha_ids[0]).unwrap();
+
+    assert_eq!(engine.list_packs(Some(AGENT_ALPHA)).len(), MULTI_AGENT_PACKS_PER_AGENT - 1);
+    assert_eq!(engine.list_packs(Some(AGENT_BETA)).len(), MULTI_AGENT_PACKS_PER_AGENT);
+}
+
+/// ATDD: `mem_read_pack` with k > total packs returns only the queried owner's packs.
+#[test]
+fn test_multi_agent_retrieval_returns_only_owner_packs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, _, _, _) = multi_agent_fixture(dir.path());
+
+    let query = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let results = engine.mem_read_pack(&query, 10, Some(AGENT_ALPHA)).unwrap();
+
+    assert!(results.len() <= MULTI_AGENT_PACKS_PER_AGENT);
+    assert!(results.iter().all(|r| r.pack.owner == AGENT_ALPHA));
+}
+
+/// ATDD: `mem_read_pack_with_trace_boost` respects owner filter.
+#[test]
+fn test_multi_agent_trace_boost_respects_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut engine, alpha_ids, beta_ids, _) = multi_agent_fixture(dir.path());
+
+    engine.add_pack_link(alpha_ids[0], alpha_ids[1]).unwrap();
+    engine.add_pack_link(beta_ids[0], beta_ids[1]).unwrap();
+
+    let query = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let results = engine.mem_read_pack_with_trace_boost(&query, 5, Some(AGENT_ALPHA), 0.3).unwrap();
+
+    assert!(results.iter().all(|r| r.pack.owner == AGENT_ALPHA));
+}
+
+/// ATDD: Each agent's governance tiers evolve independently.
+#[test]
+fn test_multi_agent_mixed_tiers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let alpha_draft = engine
+        .mem_write_pack(&KVPack {
+            salience: MULTI_AGENT_LOW_SALIENCE,
+            ..multi_agent_pack(AGENT_ALPHA, 1.0)
+        })
+        .unwrap();
+    let alpha_core = engine
+        .mem_write_pack(&KVPack { salience: 90.0, ..multi_agent_pack(AGENT_ALPHA, 2.0) })
+        .unwrap();
+    let beta_core = engine
+        .mem_write_pack(&KVPack { salience: 90.0, ..multi_agent_pack(AGENT_BETA, 10.0) })
+        .unwrap();
+
+    let alpha_packs = engine.list_packs(Some(AGENT_ALPHA));
+    let beta_packs = engine.list_packs(Some(AGENT_BETA));
+
+    let draft_a = alpha_packs.iter().find(|p| p.0 == alpha_draft).unwrap().2;
+    let core_a = alpha_packs.iter().find(|p| p.0 == alpha_core).unwrap().2;
+    let core_b = beta_packs.iter().find(|p| p.0 == beta_core).unwrap().2;
+
+    assert_eq!(draft_a, Tier::Draft);
+    assert_eq!(core_a, Tier::Core);
+    assert_eq!(core_b, Tier::Core);
 }

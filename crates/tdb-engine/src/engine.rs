@@ -1190,12 +1190,17 @@ impl Engine {
         Ok(result)
     }
 
-    /// Create a durable trace link between two packs.
+    /// Create a durable typed trace edge between two packs (Generalized Command).
     ///
-    /// Links the retrieval cells of both packs via the Trace graph and
-    /// logs the edge to WAL for crash recovery. Bidirectional: creates
-    /// edges in both directions using `Follows` edge type.
-    pub fn add_pack_link(&mut self, pack_id_1: PackId, pack_id_2: PackId) -> Result<()> {
+    /// Bidirectional: creates edges in both directions. WAL-logged for
+    /// crash recovery. This is the generalized form — `add_pack_link`
+    /// delegates here with `EdgeType::Follows`.
+    pub fn add_pack_edge(
+        &mut self,
+        pack_id_1: PackId,
+        pack_id_2: PackId,
+        edge_type: EdgeType,
+    ) -> Result<()> {
         let cell_1 = self
             .pack_directory
             .cell_ids(pack_id_1)
@@ -1212,33 +1217,59 @@ impl Engine {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos() as u64);
 
-        // Forward edge: pack_1 → pack_2
         let wal_fwd = WalEntry::AddEdge {
             src: cell_1,
             dst: cell_2,
-            edge_type: EdgeType::Follows as u8,
+            edge_type: edge_type as u8,
             timestamp: now_nanos,
         };
         self.wal.append(&wal_fwd).map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
-        self.trace.add_edge(cell_1, cell_2, EdgeType::Follows, now_nanos);
+        self.trace.add_edge(cell_1, cell_2, edge_type, now_nanos);
 
-        // Reverse edge: pack_2 → pack_1
         let wal_rev = WalEntry::AddEdge {
             src: cell_2,
             dst: cell_1,
-            edge_type: EdgeType::Follows as u8,
+            edge_type: edge_type as u8,
             timestamp: now_nanos,
         };
         self.wal.append(&wal_rev).map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
-        self.trace.add_edge(cell_2, cell_1, EdgeType::Follows, now_nanos);
+        self.trace.add_edge(cell_2, cell_1, edge_type, now_nanos);
 
         Ok(())
     }
 
-    /// Get all packs linked to a given pack via trace edges.
+    /// Create a durable `Follows` link between two packs.
     ///
-    /// Returns pack IDs of all directly connected packs (both directions).
+    /// Convenience alias for `add_pack_edge(..., EdgeType::Follows)`.
+    pub fn add_pack_link(&mut self, pack_id_1: PackId, pack_id_2: PackId) -> Result<()> {
+        self.add_pack_edge(pack_id_1, pack_id_2, EdgeType::Follows)
+    }
+
+    /// Get all packs linked to a given pack via trace edges (any type).
     pub fn pack_links(&self, pack_id: PackId) -> Vec<PackId> {
+        self.pack_links_by_type_filter(pack_id, None)
+    }
+
+    /// Get packs linked via a specific edge type.
+    pub fn pack_links_by_type(&self, pack_id: PackId, edge_type: EdgeType) -> Vec<PackId> {
+        self.pack_links_by_type_filter(pack_id, Some(edge_type))
+    }
+
+    /// Get packs that support a given pack.
+    pub fn pack_supports(&self, pack_id: PackId) -> Vec<PackId> {
+        self.pack_links_by_type(pack_id, EdgeType::Supports)
+    }
+
+    /// Get packs that contradict a given pack.
+    pub fn pack_contradicts(&self, pack_id: PackId) -> Vec<PackId> {
+        self.pack_links_by_type(pack_id, EdgeType::Contradicts)
+    }
+
+    fn pack_links_by_type_filter(
+        &self,
+        pack_id: PackId,
+        edge_type_filter: Option<EdgeType>,
+    ) -> Vec<PackId> {
         let Some(cell_ids) = self.pack_directory.cell_ids(pack_id) else {
             return Vec::new();
         };
@@ -1248,8 +1279,7 @@ impl Engine {
 
         let mut linked_packs = std::collections::HashSet::new();
 
-        // Outgoing edges
-        for edge in self.trace.outgoing(retrieval_cell, None) {
+        for edge in self.trace.outgoing(retrieval_cell, edge_type_filter) {
             if let Some(linked_pack) = self.pack_directory.pack_for_cell(edge.dst)
                 && linked_pack != pack_id
             {
@@ -1257,8 +1287,7 @@ impl Engine {
             }
         }
 
-        // Incoming edges
-        for edge in self.trace.incoming(retrieval_cell, None) {
+        for edge in self.trace.incoming(retrieval_cell, edge_type_filter) {
             if let Some(linked_pack) = self.pack_directory.pack_for_cell(edge.src)
                 && linked_pack != pack_id
             {

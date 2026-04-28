@@ -229,6 +229,92 @@ impl Engine {
         self.inner.pipeline_stage_count()
     }
 
+    // ── SynapticBank (`LoRA` adapter persistence) ─────────────────────────
+
+    /// Store a `LoRA` adapter entry. Arrays are f32 in Python, converted to f16 internally.
+    #[pyo3(signature = (id, owner, lora_a, lora_b, scale, rank, d_model, last_used=None, quality=None))]
+    #[expect(clippy::too_many_arguments)]
+    fn store_synapsis(
+        &mut self,
+        id: u64,
+        owner: u64,
+        lora_a: PyReadonlyArray1<'_, f32>,
+        lora_b: PyReadonlyArray1<'_, f32>,
+        scale: f32,
+        rank: u32,
+        d_model: u32,
+        last_used: Option<u64>,
+        quality: Option<f32>,
+    ) -> PyResult<()> {
+        use half::f16;
+        use pyo3::exceptions::PyValueError;
+        use tdb_core::synaptic_bank::SynapticBankEntry;
+
+        let expected_len = (rank * d_model) as usize;
+        let a_slice = lora_a.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let b_slice = lora_b.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        if a_slice.len() != expected_len {
+            return Err(PyValueError::new_err(format!(
+                "lora_a length {} != rank({}) * d_model({}) = {}",
+                a_slice.len(),
+                rank,
+                d_model,
+                expected_len
+            )));
+        }
+        if b_slice.len() != expected_len {
+            return Err(PyValueError::new_err(format!(
+                "lora_b length {} != rank({}) * d_model({}) = {}",
+                b_slice.len(),
+                rank,
+                d_model,
+                expected_len
+            )));
+        }
+
+        let mut entry = SynapticBankEntry::new(
+            id,
+            owner,
+            a_slice.iter().map(|v| f16::from_f32(*v)).collect(),
+            b_slice.iter().map(|v| f16::from_f32(*v)).collect(),
+            f16::from_f32(scale),
+            rank,
+            d_model,
+        );
+        entry.last_used = last_used.unwrap_or(0);
+        entry.quality = quality.unwrap_or(0.0);
+        self.inner.store_synapsis(&entry).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Load all `LoRA` adapter entries for an owner.
+    ///
+    /// Returns list of dicts with f32 numpy arrays (f16 converted to f32 on return).
+    fn load_synapsis(&self, py: Python<'_>, owner: u64) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
+        let entries =
+            self.inner.load_synapsis(owner).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let mut results = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("id", entry.id)?;
+            dict.set_item("owner", entry.owner)?;
+            dict.set_item("rank", entry.rank)?;
+            dict.set_item("d_model", entry.d_model)?;
+            dict.set_item("scale", entry.scale.to_f32())?;
+            dict.set_item("last_used", entry.last_used)?;
+            dict.set_item("quality", entry.quality)?;
+
+            let a_f32: Vec<f32> = entry.lora_a.iter().map(|v| v.to_f32()).collect();
+            let b_f32: Vec<f32> = entry.lora_b.iter().map(|v| v.to_f32()).collect();
+            dict.set_item("lora_a", numpy::PyArray1::from_vec(py, a_f32))?;
+            dict.set_item("lora_b", numpy::PyArray1::from_vec(py, b_f32))?;
+
+            results.push(dict.into_any().unbind());
+        }
+        Ok(results)
+    }
+
     /// Snapshot of engine state for monitoring and diagnostics.
     ///
     /// Returns a dict with keys: `cell_count`, `pack_count`, `segment_count`,
@@ -393,16 +479,49 @@ impl Engine {
         Ok(dict.into_any().unbind())
     }
 
-    /// Create a durable trace link between two packs.
+    /// Create a durable typed trace edge between two packs.
+    ///
+    /// `edge_type`: 0=CausedBy, 1=Follows, 2=Contradicts, 3=Supports.
+    fn add_pack_edge(&mut self, pack_id_1: u64, pack_id_2: u64, edge_type: u8) -> PyResult<()> {
+        use tdb_engine::EdgeType;
+        let et = EdgeType::from_u8(edge_type).ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "Invalid edge_type {edge_type}. Valid: 0=CausedBy, 1=Follows, 2=Contradicts, 3=Supports"
+            ))
+        })?;
+        self.inner
+            .add_pack_edge(pack_id_1, pack_id_2, et)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Create a durable Follows link between two packs.
     fn add_pack_link(&mut self, pack_id_1: u64, pack_id_2: u64) -> PyResult<()> {
         self.inner
             .add_pack_link(pack_id_1, pack_id_2)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Get all packs linked to a given pack via trace edges.
+    /// Get all packs linked to a given pack via trace edges (any type).
     fn pack_links(&self, pack_id: u64) -> Vec<u64> {
         self.inner.pack_links(pack_id)
+    }
+
+    /// Get packs linked via a specific edge type.
+    fn pack_links_by_type(&self, pack_id: u64, edge_type: u8) -> PyResult<Vec<u64>> {
+        use tdb_engine::EdgeType;
+        let et = EdgeType::from_u8(edge_type)
+            .ok_or_else(|| PyRuntimeError::new_err(format!("Invalid edge_type {edge_type}")))?;
+        Ok(self.inner.pack_links_by_type(pack_id, et))
+    }
+
+    /// Get packs that support a given pack.
+    fn pack_supports(&self, pack_id: u64) -> Vec<u64> {
+        self.inner.pack_supports(pack_id)
+    }
+
+    /// Get packs that contradict a given pack.
+    fn pack_contradicts(&self, pack_id: u64) -> Vec<u64> {
+        self.inner.pack_contradicts(pack_id)
     }
 
     /// Retrieve packs with trace-boosted scoring.

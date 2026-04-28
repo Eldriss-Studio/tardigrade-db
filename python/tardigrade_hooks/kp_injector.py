@@ -235,16 +235,39 @@ class KnowledgePackStore:
 
     # -- Trace-linked storage and retrieval ------------------------------------
 
-    def store_and_link(self, fact_text, related_pack_id, salience=80.0):
-        """Store a fact and link it to an existing memory.
+    EDGE_FOLLOWS: int = 1
+    EDGE_CONTRADICTS: int = 2
+    EDGE_SUPPORTS: int = 3
 
-        Use when the agent learns a new detail about something it already
-        remembers. The engine records the link; the agent decides what to link.
+    def store_and_link(self, fact_text, related_pack_id, salience=80.0):
+        """Store a fact and link it to an existing memory (Follows edge).
 
         Returns the new pack_id.
         """
         pack_id = self.store(fact_text, salience=salience, auto_link=False)
         self.engine.add_pack_link(pack_id, related_pack_id)
+        return pack_id
+
+    def store_supporting(self, fact_text, related_pack_id, salience=80.0):
+        """Store a fact that supports an existing memory (Supports edge).
+
+        Use when the new fact reinforces or elaborates on an existing one.
+
+        Returns the new pack_id.
+        """
+        pack_id = self.store(fact_text, salience=salience, auto_link=False)
+        self.engine.add_pack_edge(pack_id, related_pack_id, self.EDGE_SUPPORTS)
+        return pack_id
+
+    def store_contradicting(self, fact_text, related_pack_id, salience=80.0):
+        """Store a fact that contradicts an existing memory (Contradicts edge).
+
+        Use when the new fact invalidates or corrects an existing one.
+
+        Returns the new pack_id.
+        """
+        pack_id = self.store(fact_text, salience=salience, auto_link=False)
+        self.engine.add_pack_edge(pack_id, related_pack_id, self.EDGE_CONTRADICTS)
         return pack_id
 
     def store_linked(self, facts, salience=80.0):

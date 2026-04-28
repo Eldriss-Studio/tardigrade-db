@@ -187,3 +187,5 @@ pub(crate) mod pack_materialization;
 #[cfg(test)]
 pub(crate) mod pack_read_profile;
 pub mod scheduler;
+
+pub use tdb_index::trace::EdgeType;
