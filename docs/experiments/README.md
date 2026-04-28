@@ -218,7 +218,7 @@ SGLang's RadixAttention architecture is strictly prefix-based (same as vLLM v1).
 | **[Memory prefix adapter](memory-prefix-adapter.md)** | Governed memory → deterministic text prefix for vLLM prefix-cache | **Complete — 4/4 GPU tests passing on vLLM 0.19.1** |
 | **100-memory scale test** | Does Q*K retrieval hold at realistic memory counts? | **Complete — 40% recall, needs scoring improvements** |
 | **Traditional RAG baseline** | Compare current Q*K retrieval against standard embedding retrieval | **Complete — RAG got 100% recall on this corpus** |
-| **Hidden states + top5_pair_avg validation** | Validate 100% recall path through engine pipeline | **Next up** |
+| **Hidden states + top5_pair_avg validation** | Validate 100% recall path through engine pipeline | **Complete — 30/30 recall, all rank #1, 97ms latency** |
 | **False positive calibration** | Reduce 10% negFP rate via score thresholding | Planned |
 | GQA K-expansion | Expand K heads to match Q dims for Q*K retrieval | Complete |
 | Per-head scoring | Score per attention head instead of concatenating all heads | Planned |
@@ -227,8 +227,8 @@ SGLang's RadixAttention architecture is strictly prefix-based (same as vLLM v1).
 | Confidence thresholding | Calibrate "I don't remember" cutoff using SNR | Planned |
 | [Cross-model retrieval](cross-model-memory-test.md) | Store with one model, retrieve with another | Designed |
 | RoPE injection | Test KV injection with rotary position encoding | Planned |
-| **vLLM connector — semantic save** | Thread per-request `slot_mapping` from `attn_metadata` so save captures the request's actual blocks (not placeholder block 0). Validate that re-querying the same prompt returns the stored KV with non-zero overlap. | Planned (next vLLM work) |
-| **vLLM cross-session retrieval** | Save with vLLM run #1, restart, query with vLLM run #2. Confirm load path injects the prior session's KV and `start_load_kv` writes non-zero data into the allocated GPU block slots. | Planned |
+| **vLLM connector — semantic save** | Thread per-request `slot_mapping` from `attn_metadata` so save captures the request's actual blocks (not placeholder block 0). Validate that re-querying the same prompt returns the stored KV with non-zero overlap. | **Complete — `RequestSlotResolver` extracts per-request blocks; retrieval key asymmetry resolved (save/load both use `compute_for_save` in same retrieval-key space)** |
+| **vLLM cross-session retrieval** | Save with vLLM run #1, restart, query with vLLM run #2. Confirm load path injects the prior session's KV and `start_load_kv` writes non-zero data into the allocated GPU block slots. | **Complete — validated with `Engine.refresh()` + `test_vllm_cross_session.py` (1 GPU test)** |
 
 ## Running Experiments
 

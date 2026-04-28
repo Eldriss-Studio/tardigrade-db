@@ -286,3 +286,25 @@ pytest tests/python/ -v -m "not gpu"
 # Python GPU (key alignment validation — if GPU available)
 pytest tests/python/ -v -m gpu
 ```
+
+---
+
+## Architectural Findings (Post-Review, April 2026)
+
+External review challenged the fingerprint-based identity and AutoModel fallback. After verifying against vLLM 0.19's actual source:
+
+### Fingerprint identity is correct per vLLM's framework constraints
+
+- `save_kv_layer` is called with exactly 3 positional args by vLLM's attention decorator (`kv_transfer_utils.py:56`). No `request_id` is available on the worker side during forward pass.
+- vLLM's own `ExampleConnector` uses `block_ids[0]` as the correlation key (`example_connector.py:332`), not `request_id`.
+- `request_finished()` fires BEFORE `_free_blocks()` in vLLM's scheduler (`scheduler.py:1823` vs `:1831-1832`). A block cannot be reassigned to a new request while the finishing request's cleanup hook still holds it.
+- Combined with per-step clearing in `build_connector_meta` and bounded LRU eviction at `max_num_seqs`, the window for stale-fingerprint cross-contamination does not exist under vLLM's lifecycle guarantees.
+
+Using `request_id` as the save-side identity would require modifying vLLM's framework — upstream code, not ours.
+
+### AutoModel fallback is one-time lazy init, not per-request
+
+- `_get_embed_weights()` is guarded by `if self._embed_weights is not None: return` — called once per connector lifetime.
+- Safetensors-first path avoids full model instantiation for all modern HuggingFace models.
+- In production, the model is already local (vLLM loaded it), so the AutoModel fallback path has no network/auth risk.
+- Pattern matches HuggingFace's own tokenizer loading: try cheap path, fall back to expensive path, cache the result.

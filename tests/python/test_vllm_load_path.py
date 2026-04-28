@@ -1102,3 +1102,53 @@ def test_save_token_ids_survive_metadata_bridge(tmp_path):
     assert 999 not in meta.save_token_map[5], (
         "Deepcopy should produce independent copies"
     )
+
+
+# -- Lifecycle: fingerprint cleanup follows vLLM lifecycle guarantees ----------
+
+def test_request_finished_clears_token_stash_before_block_reuse(tmp_path):
+    """GIVEN request A with prompt_token_ids=[10,20,30] and blocks=([5,6],)
+    AND update_state_after_alloc stashes token IDs at fingerprint 5
+    WHEN request_finished is called for request A with block_ids=([5,6],)
+    THEN _save_token_ids_by_fingerprint no longer contains fingerprint 5
+    AND a new request B reusing block 5 gets no stale token IDs
+
+    Validates that vLLM's lifecycle guarantee (request_finished fires before
+    blocks are freed) is sufficient to prevent stale token ID cross-contamination
+    when physical blocks are reused by a subsequent request."""
+    from tardigrade_vllm.connector import _TardigradeConnectorMetadata
+
+    c = _build_connector_for_save_path(tmp_path)
+
+    # Request A arrives, scheduler stashes token IDs
+    req_a = MagicMock()
+    req_a.request_id = "req_a"
+    req_a.prompt_token_ids = [10, 20, 30]
+    c.update_state_after_alloc(req_a, ([5, 6],), 0)
+
+    assert 5 in c._save_token_ids_by_fingerprint, "Precondition: A's tokens stashed"
+    assert c._save_token_ids_by_fingerprint[5] == [10, 20, 30]
+
+    # vLLM lifecycle: request_finished fires BEFORE _free_blocks
+    c.request_finished(req_a, ([5, 6],))
+
+    assert 5 not in c._save_token_ids_by_fingerprint, (
+        "request_finished must clear token stash for the request's fingerprint"
+    )
+
+    # Block 5 is now freed by vLLM and reallocated to request B
+    req_b = MagicMock()
+    req_b.request_id = "req_b"
+    req_b.prompt_token_ids = [77, 88, 99]
+    c.update_state_after_alloc(req_b, ([5, 9],), 0)
+
+    # B should see its own token IDs, not A's stale ones
+    assert c._save_token_ids_by_fingerprint[5] == [77, 88, 99], (
+        "Request B must see its own token IDs after block reuse, not A's"
+    )
+
+    # Verify via the DTO path: build_connector_meta should carry B's tokens
+    meta = c.build_connector_meta(MagicMock())
+    assert meta.save_token_map.get(5) == [77, 88, 99], (
+        "DTO must carry B's token IDs for fingerprint 5, not stale A data"
+    )
