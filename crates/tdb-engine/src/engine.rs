@@ -372,9 +372,13 @@ impl Engine {
         self.pack_directory = pack_directory;
         self.next_pack_id = self.next_pack_id.max(next_pack_id);
 
-        // 7. Re-check Vamana activation after full reindex.
+        // 7. Re-check Vamana activation: try loading persisted index first,
+        //    fall back to O(n²) rebuild only if no valid snapshot exists.
         if self.vamana.is_none() && self.pool.cell_count() >= self.vamana_threshold {
-            self.activate_vamana()?;
+            let loaded = self.try_load_vamana()?;
+            if !loaded {
+                self.activate_vamana()?;
+            }
         }
 
         // 8. Checkpoint WAL — all entries have been replayed into the in-memory
@@ -1323,11 +1327,36 @@ impl Engine {
             vamana.insert(cell.id, &key);
         }
         vamana.build();
+        vamana.save(&self.dir).map_err(|e| TardigradeError::Io { source: e })?;
 
-        // Add Vamana as a pipeline stage via the adapter.
         self.pipeline.add_stage(Box::new(VamanaAdapter { inner: vamana }));
-        self.vamana = Some(VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE)); // Marker only.
+        self.vamana = Some(VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE));
         Ok(())
+    }
+
+    fn try_load_vamana(&mut self) -> Result<bool> {
+        let dim = self.key_dim.unwrap_or(128);
+        let mut vectors = std::collections::HashMap::new();
+
+        for cell_id in self.pool.iter_cell_ids() {
+            if let Ok(cell) = self.pool.get(cell_id)
+                && should_index_for_retrieval(&cell)
+            {
+                vectors.insert(cell_id, mean_pool_key(&cell.key));
+            }
+        }
+
+        let loaded = VamanaIndex::load(&self.dir, &vectors)
+            .map_err(|e| TardigradeError::Io { source: e })?;
+
+        if let Some(vamana) = loaded
+            && vamana.len() == vectors.len()
+        {
+            self.pipeline.add_stage(Box::new(VamanaAdapter { inner: vamana }));
+            self.vamana = Some(VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE));
+            return Ok(true);
+        }
+        Ok(false)
     }
 }
 

@@ -11,8 +11,13 @@
 pub mod prune;
 
 use std::collections::{HashMap, HashSet};
+use std::io::{self, BufWriter, Read, Write};
+use std::path::Path;
 
 use tdb_core::CellId;
+
+const VAMANA_MAGIC: &[u8; 4] = b"VAMG";
+const VAMANA_VERSION: u32 = 1;
 
 use self::prune::robust_prune;
 
@@ -267,6 +272,107 @@ impl VamanaIndex {
 
         self.nodes[idx].neighbors = selected;
     }
+
+    /// Save the graph topology to disk. Only adjacency lists and medoid are
+    /// persisted — vectors live in `BlockPool` and are re-attached on load.
+    pub fn save(&self, dir: &Path) -> io::Result<()> {
+        let path = dir.join("vamana.idx");
+        let file = std::fs::File::create(&path)?;
+        let mut w = BufWriter::new(file);
+
+        w.write_all(VAMANA_MAGIC)?;
+        w.write_all(&VAMANA_VERSION.to_le_bytes())?;
+        w.write_all(&(self.dim as u32).to_le_bytes())?;
+        w.write_all(&(self.max_degree as u32).to_le_bytes())?;
+        w.write_all(&self.medoid_idx.map_or(u64::MAX, |i| self.nodes[i].id).to_le_bytes())?;
+        w.write_all(&(self.nodes.len() as u64).to_le_bytes())?;
+
+        for node in &self.nodes {
+            w.write_all(&node.id.to_le_bytes())?;
+            w.write_all(&(node.neighbors.len() as u32).to_le_bytes())?;
+            for &neighbor_idx in &node.neighbors {
+                w.write_all(&self.nodes[neighbor_idx].id.to_le_bytes())?;
+            }
+        }
+
+        w.into_inner().map_err(io::IntoInnerError::into_error)?.sync_data()?;
+        Ok(())
+    }
+
+    /// Load graph topology from disk, attaching vectors from the provided lookup.
+    ///
+    /// `vectors` maps `CellId → Vec<f32>` (mean-pooled keys from `BlockPool`).
+    /// Returns `None` if the index file doesn't exist (first open).
+    pub fn load(dir: &Path, vectors: &HashMap<CellId, Vec<f32>>) -> io::Result<Option<Self>> {
+        let path = dir.join("vamana.idx");
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let mut file = std::fs::File::open(&path)?;
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic)?;
+        if &magic != VAMANA_MAGIC {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "bad vamana magic"));
+        }
+
+        let mut buf4 = [0u8; 4];
+        let mut buf8 = [0u8; 8];
+
+        file.read_exact(&mut buf4)?;
+        let version = u32::from_le_bytes(buf4);
+        if version != VAMANA_VERSION {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported vamana version"));
+        }
+
+        file.read_exact(&mut buf4)?;
+        let dim = u32::from_le_bytes(buf4) as usize;
+        file.read_exact(&mut buf4)?;
+        let max_degree = u32::from_le_bytes(buf4) as usize;
+
+        file.read_exact(&mut buf8)?;
+        let medoid_cell_id = u64::from_le_bytes(buf8);
+
+        file.read_exact(&mut buf8)?;
+        let node_count = u64::from_le_bytes(buf8) as usize;
+
+        let mut nodes = Vec::with_capacity(node_count);
+        let mut id_to_idx = HashMap::with_capacity(node_count);
+        let mut neighbor_cell_ids: Vec<Vec<CellId>> = Vec::with_capacity(node_count);
+
+        for _ in 0..node_count {
+            file.read_exact(&mut buf8)?;
+            let cell_id = u64::from_le_bytes(buf8);
+
+            file.read_exact(&mut buf4)?;
+            let neighbor_count = u32::from_le_bytes(buf4) as usize;
+
+            let mut neighbors = Vec::with_capacity(neighbor_count);
+            for _ in 0..neighbor_count {
+                file.read_exact(&mut buf8)?;
+                neighbors.push(u64::from_le_bytes(buf8));
+            }
+
+            let vector = vectors.get(&cell_id).cloned().unwrap_or_else(|| vec![0.0; dim]);
+            let idx = nodes.len();
+            nodes.push(VamanaNode { id: cell_id, vector, neighbors: Vec::new() });
+            id_to_idx.insert(cell_id, idx);
+            neighbor_cell_ids.push(neighbors);
+        }
+
+        // Resolve CellId neighbors → index neighbors.
+        for (idx, cell_id_neighbors) in neighbor_cell_ids.into_iter().enumerate() {
+            nodes[idx].neighbors = cell_id_neighbors
+                .into_iter()
+                .filter_map(|cid| id_to_idx.get(&cid).copied())
+                .collect();
+        }
+
+        let medoid_idx =
+            if medoid_cell_id == u64::MAX { None } else { id_to_idx.get(&medoid_cell_id).copied() };
+
+        Ok(Some(Self { nodes, id_to_idx, dim, max_degree, medoid_idx, alpha: 1.2 }))
+    }
 }
 
 impl std::fmt::Debug for VamanaIndex {
@@ -344,5 +450,39 @@ mod tests {
 
         let results = index.query(&[1.0, 0.0, 0.0, 0.0], 1);
         assert_eq!(results[0].0, 0);
+    }
+
+    #[test]
+    fn test_save_and_load_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = VamanaIndex::new(4, 8);
+        index.insert(0, &[1.0, 0.0, 0.0, 0.0]);
+        index.insert(1, &[0.0, 1.0, 0.0, 0.0]);
+        index.insert(2, &[0.9, 0.1, 0.0, 0.0]);
+        index.build();
+
+        let original_result = index.query(&[1.0, 0.0, 0.0, 0.0], 1);
+        index.save(dir.path()).unwrap();
+
+        let vectors: HashMap<CellId, Vec<f32>> = vec![
+            (0, vec![1.0, 0.0, 0.0, 0.0]),
+            (1, vec![0.0, 1.0, 0.0, 0.0]),
+            (2, vec![0.9, 0.1, 0.0, 0.0]),
+        ]
+        .into_iter()
+        .collect();
+
+        let loaded = VamanaIndex::load(dir.path(), &vectors).unwrap().unwrap();
+        let loaded_result = loaded.query(&[1.0, 0.0, 0.0, 0.0], 1);
+
+        assert_eq!(original_result[0].0, loaded_result[0].0);
+        assert_eq!(loaded.len(), 3);
+    }
+
+    #[test]
+    fn test_load_returns_none_when_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let vectors = HashMap::new();
+        assert!(VamanaIndex::load(dir.path(), &vectors).unwrap().is_none());
     }
 }
