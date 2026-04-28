@@ -68,7 +68,7 @@ impl SemanticLookasideBuffer {
 
     /// The vector dimensionality this SLB was constructed with.
     ///
-    /// Used by [`Engine::refresh`] to detect when the SLB needs to be
+    /// Used by `Engine::refresh` (in `tdb-engine`) to detect when the SLB needs to be
     /// rebuilt at a different dimension (e.g., when the engine was opened
     /// empty with the default dim=128 and the first cells written by
     /// another handle have a different key dimension).

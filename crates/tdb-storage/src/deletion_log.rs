@@ -57,7 +57,7 @@ impl DeletionLog {
 
     /// Re-read the on-disk file and rebuild the deleted set.
     ///
-    /// Used by [`Engine::refresh`] to pick up deletions performed by another
+    /// Used by `Engine::refresh` (in `tdb-engine`) to pick up deletions performed by another
     /// `Engine` handle at the same path. Idempotent: repeated calls with no
     /// on-disk changes leave the set unchanged.
     pub fn refresh(&mut self) -> io::Result<()> {

@@ -60,7 +60,7 @@ impl TextStore {
 
     /// Re-read the on-disk file and rebuild the in-memory index.
     ///
-    /// Used by [`Engine::refresh`] to pick up writes from another `Engine`
+    /// Used by `Engine::refresh` (in `tdb-engine`) to pick up writes from another `Engine`
     /// handle at the same path. Idempotent: repeated calls with no on-disk
     /// changes leave the index unchanged.
     pub fn refresh(&mut self) -> io::Result<()> {
