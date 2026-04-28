@@ -168,6 +168,22 @@ Systematic exploration of what to store and how to retrieve, tested on Sonia (16
 
 **Scripts:** `experiments/scale_100_hidden_top5.py` (100% result), `experiments/scale_100_qk_diagnostics.py` (diagnostic suite), `experiments/scale_100_rag_baseline.py` (RAG baseline)
 
+### [P1: Architectural Unification](p1-architectural-unification.md)
+
+**Date:** April 28, 2026
+**Status:** Complete — 249 Rust tests, 194 Python tests
+
+Architectural gap analysis found 18 disconnections between TardigradeDB's layers. Priority 1 wired existing features together:
+
+**Key changes:**
+- **Active governance:** Tier-based retrieval boost (Core 1.25×, Validated 1.1×, Draft 1.0×). `evict_draft_packs()` for controlled cleanup. Two bugs found and fixed: `mem_read_pack` not re-sorting after tier boost; `mem_read` early-exit truncating before final sort.
+- **WAL checkpointing:** `refresh()` truncates WAL after successful replay — prevents unbounded growth.
+- **Text store consolidation:** Killed `text_registry.json` sidecar. Rust `TextStore` is sole source of truth.
+- **Dead code removal:** `batch_cache.rs` and `arena.rs` stubs deleted.
+- **CI fixes:** Broken cross-crate doc links and typos config fixed (CI had been red for 5+ commits).
+
+**Verified:** Both e2e demos (GPT-2 hook pattern + Qwen3-0.6B KnowledgePackStore pipeline) pass end-to-end.
+
 ## Planned Experiments
 
 | Experiment | Goal | Status |
