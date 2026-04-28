@@ -27,6 +27,13 @@ pub enum Tier {
     Core = 2,
 }
 
+/// Retrieval boost for Draft-tier memories (no advantage).
+const DRAFT_RETRIEVAL_BOOST: f32 = 1.0;
+/// Retrieval boost for Validated-tier memories (accessed enough to cross ι≥65).
+const VALIDATED_RETRIEVAL_BOOST: f32 = 1.1;
+/// Retrieval boost for Core-tier memories (stable, repeatedly accessed, ι≥85).
+const CORE_RETRIEVAL_BOOST: f32 = 1.25;
+
 impl Tier {
     /// Score multiplier applied during retrieval based on maturity.
     ///
@@ -34,9 +41,9 @@ impl Tier {
     /// they rank higher than untested Draft memories.
     pub fn retrieval_boost(self) -> f32 {
         match self {
-            Self::Draft => 1.0,
-            Self::Validated => 1.1,
-            Self::Core => 1.25,
+            Self::Draft => DRAFT_RETRIEVAL_BOOST,
+            Self::Validated => VALIDATED_RETRIEVAL_BOOST,
+            Self::Core => CORE_RETRIEVAL_BOOST,
         }
     }
 }

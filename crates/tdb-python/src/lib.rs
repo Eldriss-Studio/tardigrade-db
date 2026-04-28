@@ -59,10 +59,24 @@ struct Engine {
 #[pymethods]
 impl Engine {
     /// Open or create a `TardigradeDB` engine at the given directory path.
+    ///
+    /// Optional configuration:
+    ///   - `segment_size`: Segment file size threshold in bytes (default: 256MB).
+    ///   - `vamana_threshold`: Cell count before activating Vamana ANN index (default: 10000).
     #[new]
-    fn new(path: &str) -> PyResult<Self> {
-        let inner = RustEngine::open(std::path::Path::new(path))
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    #[pyo3(signature = (path, segment_size=None, vamana_threshold=None))]
+    fn new(
+        path: &str,
+        segment_size: Option<u64>,
+        vamana_threshold: Option<usize>,
+    ) -> PyResult<Self> {
+        let dir = std::path::Path::new(path);
+        let inner = match (segment_size, vamana_threshold) {
+            (Some(seg), _) => RustEngine::open_with_segment_size(dir, seg),
+            (None, Some(vt)) => RustEngine::open_with_vamana_threshold(dir, vt),
+            (None, None) => RustEngine::open(dir),
+        }
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -213,6 +227,26 @@ impl Engine {
     /// Number of stages in the retrieval pipeline.
     fn pipeline_stage_count(&self) -> usize {
         self.inner.pipeline_stage_count()
+    }
+
+    /// Snapshot of engine state for monitoring and diagnostics.
+    ///
+    /// Returns a dict with keys: `cell_count`, `pack_count`, `segment_count`,
+    /// `slb_occupancy`, `slb_capacity`, `vamana_active`, `pipeline_stages`,
+    /// `governance_entries`, `trace_edges`.
+    fn status(&self, py: Python<'_>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        let s = self.inner.status();
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("cell_count", s.cell_count)?;
+        dict.set_item("pack_count", s.pack_count)?;
+        dict.set_item("segment_count", s.segment_count)?;
+        dict.set_item("slb_occupancy", s.slb_occupancy)?;
+        dict.set_item("slb_capacity", s.slb_capacity)?;
+        dict.set_item("vamana_active", s.vamana_active)?;
+        dict.set_item("pipeline_stages", s.pipeline_stages)?;
+        dict.set_item("governance_entries", s.governance_entries)?;
+        dict.set_item("trace_edges", s.trace_edges)?;
+        Ok(dict.into_any().unbind())
     }
 
     /// Store a complete multi-layer KV cache as a single atomic pack.

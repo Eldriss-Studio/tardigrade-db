@@ -1,31 +1,47 @@
-### 1. Storage Layer: Persistent Quantized KV-Cache via GPU DMA
+### 1. Storage Layer: Persistent Quantized KV-Cache
 
-Instead of stringing text into a PostgreSQL or flat vector database, the storage engine acts as a specialized block pool that persists the LLM's Key-Value (KV) cache directly to disk.
+The storage engine persists the LLM's Key-Value (KV) cache directly to disk as quantized binary segments.
 
-- **Data Format & Quantization:** The agent's memory state is saved directly in a 4-bit quantized format (e.g., `safetensors`). This allows the system to fit $4\times$ more agent contexts into fixed device memory compared to standard FP16 precision.
-- **Hardware-Accelerated I/O:** The storage backend acts as an offloading connector that maps the filesystem directory as the index of KV blocks. To achieve extreme throughput, data is transferred using GPU Direct Memory Access (DMA), which short-circuits the traditional storage-to-CPU-to-GPU path. Data moves directly from the NVMe SSD to GPU memory, bypassing CPU bounce-buffer overhead and minimizing interference with compute kernels.
-- **Decoupled Position Encoding:** When memory is pulled from disk back into the LLM, the engine uses a decoupled position encoding mechanism. This ensures that historical KV blocks retrieved from past sessions are safely and coherently injected into the current reasoning phase without coordinate conflicts or redundant $O(n)$ prefill computations.
+- **Data Format & Quantization:** KV tensors are stored in 4-bit group-wise quantization (Q4_0, same scheme as llama.cpp). 4× compression vs FP32 with MSE < 0.01 on typical activation distributions. Position encodings are stored unquantized (f32) for exact reproduction.
+- **Append-Only Segments:** 256MB segment files with binary length-prefixed records. `sync_data()` on every write for crash durability. Partial record detection on recovery discards incomplete writes.
+- **Segment Scanning Recovery:** On open, segments are scanned to rebuild the `CellId → (segment, offset)` index. O(n) in cell count, not cell size. No external dependency — the segment files are the source of truth.
+- **Text Store:** Append-only binary sidecar for fact text associated with KV packs. Single source of truth (JSON sidecar removed in P1).
+- **Deletion Log:** Durable append-only log of deleted pack IDs. Applied during `refresh()` to filter deleted packs from in-memory state.
 
 ### 2. Retrieval Layer: Latent Space Attention & Semantic Lookaside Buffers
 
-Traditional databases require embedding models to perform a similarity search. This kernel performs retrieval directly inside the neural network's latent space.
+Retrieval computes relevance directly in the model's latent space using per-token attention scoring.
 
-- **Multi-Token Aggregation:** The system utilizes a multi-token aggregation retrieval strategy, relying on compressed keys for highly efficient KV selection. It calculates attention scores directly against the latent representations on disk, reducing prefill token consumption by $91\times$ to $135\times$ compared to standard plaintext injection.
-- **Semantic Lookaside Buffer (SLB):** To handle immediate working memory and episodic context, the system implements an SLB, a predictive caching mechanism that exploits conversational locality to achieve sub-5 microsecond retrieval latencies.
-- **Hardware Optimization:** The SLB utilizes Symmetric INT8 Scalar Quantization, which provides $3.1\times$ spatial compression and $5.6\times$ math acceleration via NEON SDOT intrinsics. These INT8 vectors are quickly dequantized to FP32 only upon cache insertion to preserve L1-resident lookup performance.
+- **Per-Token Top5Avg Scoring:** Stores per-token hidden state vectors (not mean-pooled). Scores by computing dot products between all query and memory token pairs, then averaging the top 5. Achieves 100% recall at 100 memories through the full engine pipeline (Q4 quantized, INT8 scoring). Validated on Qwen3-0.6B.
+- **Semantic Lookaside Buffer (SLB):** Fixed-capacity LRU cache storing mean-pooled keys in symmetric INT8 quantization. Sub-5μs retrieval at 4096 entries using NEON SDOT intrinsics (ARM) with auto-vectorized fallback (x86).
+- **Three-Stage Retrieval Pipeline:** SLB (hot, INT8) → PerTokenRetriever (primary, Top5Avg) → BruteForce (fallback, exact). Chain of Responsibility pattern with CellId deduplication.
+- **Active Governance Integration:** Retrieval scores are multiplied by recency decay and tier boost (Core 1.25×, Validated 1.1×, Draft 1.0×). Results are re-sorted by adjusted score after governance.
 
-### 3. Organization Layer: The Neuro-Symbolic Memory Palace
+### 3. Organization Layer: Vamana Graph Index + Causal Trace + WAL
 
-To organize the latent memory effectively so the LLM doesn't suffer from "Vector Haze" (disjointed facts), the engine maps the KV blocks into a dual-structure topology.
+KV blocks are organized via a dual topology: a navigable ANN graph for similarity and a causal graph for episodic relationships.
 
-- **Spatial Indexing:** The overarching structure is organized using a SIMD-accelerated Page-Clustered Vector Index. This combines small-world graph navigation with B+ Tree-style disk locality to minimize read amplification.
-- **Causal Graph Tracing:** The relationships between the latent blocks are maintained in a neuro-symbolic episodic graph. When the LLM generates a logical conclusion, the system maps the causal edges (e.g., establishing a directed link between a symptom and a diagnosis) as metadata attached to the specific KV blocks.
-- **Write-Ahead Logging (WAL):** To ensure safety and consistency across the graph without implementing heavy, traditional database locks, the kernel utilizes a decoupled Write-Ahead Log. This provides crash-recoverability with a statistically negligible overhead of under 1%.
+- **Vamana Graph Index:** DiskANN-style single-layer graph with robust pruning (angular diversity). Supports batch build and incremental `insert_online`. Lazily activated when cell count crosses a configurable threshold. Rebuilt from scratch on `refresh()` (no edge persistence yet).
+- **Trace Causal Graph:** Directed edges with four types: CausedBy (parent tracking), Follows (pack links), Supports, Contradicts (defined, not yet auto-populated by the engine). BFS transitive ancestor traversal.
+- **Write-Ahead Log (WAL):** Every trace edge is logged (with fsync) before in-memory application. Replayed on engine open for crash recovery. Checkpointed after successful `refresh()` to prevent unbounded growth. Lenient recovery: partial records are discarded.
 
 ### 4. Governance Layer: Adaptive Knowledge Lifecycle (AKL)
 
-Because the agent autonomously manages its own state, the database requires a strict lifecycle algorithm to prevent infinite cache accumulation and stale context.
+Autonomous memory management that prevents infinite accumulation and surfaces proven memories.
 
-- **Importance Scoring ($\iota_i$):** Every node in the graph carries lifecycle metadata with an importance score $\iota_i$ bounded between 0 and 100. A simple access event grants a +3 bonus to the score, while an active update event contributes a +5 bonus. A daily decay factor of 0.995 is mathematically applied to prevent unbounded accumulation of irrelevant memory.
-- **Recency Decay ($r_i$):** The system evaluates time-dependent relevance using the function $r_i = \exp(-\Delta t_i / \tau)$ where $\Delta t_i$ represents the number of days since the last update and $\tau = 30$ is the decay constant, creating a natural half-life for transient data.
-- **Maturity Tiers:** Based on the $\iota_i$ score, memories are algorithmically promoted or demoted through logical tiers (draft, validated, and core). To prevent rapid oscillation, the system uses hysteresis gaps; for example, a memory promotes from validated to core when $\iota_i \ge 85$, but only demotes back if it drops to $\iota_i < 60$.
+- **Importance Scoring (ι):** ι ∈ [0, 100]. Read access: +3. Write/update: +5. Daily decay: ×0.995 (~138-day half-life for untouched cells).
+- **Recency Decay:** r = exp(−Δt / 30), applied as a retrieval score multiplier at query time. ~21-day half-life. Does not modify stored ι — only affects ranking.
+- **Maturity Tiers with Hysteresis:** Draft → Validated (ι ≥ 65, demote < 35) → Core (ι ≥ 85, demote < 60). 30-point and 25-point hysteresis gaps prevent oscillation. Skip-tier promotion supported.
+- **Tier-Based Retrieval Boost:** Core memories receive 1.25× retrieval score boost, Validated 1.1×, Draft 1.0×. This makes tiers behaviorally meaningful — proven memories rank higher.
+- **Eviction:** `evict_draft_packs(threshold, owner)` removes Draft-tier packs below importance threshold. Validated and Core packs are never evicted. Owner-scoped.
+
+## Future Work
+
+These capabilities are described in the original TDD but are **not yet implemented**:
+
+- **GPU DMA Offloading:** Direct NVMe→GPU transfers via cuFile/GDS, bypassing CPU bounce buffers. Requires CUDA SDK integration.
+- **Decoupled Position Encoding:** RoPE remapping for safe cross-prompt KV injection. Designed but not needed for current deployment paths.
+- **RelayCaching:** Cross-agent KV cache reuse for multi-agent handoffs. Estimated 4.7× TTFT reduction (from literature). Requires multi-agent scheduling logic.
+- **BatchQuantizedKVCache:** Concurrent Q4 inference across multiple agents. Stub only.
+- **Vamana Edge Persistence:** Serializing graph edges to disk for O(1) refresh instead of O(n²) rebuild.
+- **Segment Compaction:** Background merge of old segments to reclaim space from deleted packs.

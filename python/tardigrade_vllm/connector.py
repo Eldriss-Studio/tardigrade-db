@@ -157,10 +157,13 @@ if HAS_VLLM:
 
             self.hidden_size = model_config.hf_config.hidden_size
 
-            # Retrieval key strategy (Strategy pattern).
-            from tardigrade_vllm.retrieval_key import check_key_alignment, get_strategy
+            from tardigrade_vllm.retrieval_key import (
+                LAST_TOKEN_EMBEDDING,
+                check_key_alignment,
+                get_strategy,
+            )
 
-            strategy_name = config.get("retrieval_key_strategy", "last_token_embedding")
+            strategy_name = config.get("retrieval_key_strategy", LAST_TOKEN_EMBEDDING)
             self._retrieval_key_strategy = get_strategy(strategy_name)
             check_key_alignment(self.hidden_size, self.kv_dim)
 

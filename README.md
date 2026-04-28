@@ -230,10 +230,7 @@ It also hosts the **vLLM KV Connector** (`tardigrade_vllm.connector`), which plu
 | Engine `mem_write` | **8.2ms** | single cell with fsync |
 | Batch write (amortized) | **~80μs/cell** | 100-cell batch, single fsync |
 
-**Architectural targets** (from spec, not yet all measured):
-- **91–135x** prefill reduction via latent-space retrieval (MemArt)
-- **4x** more agent contexts in fixed device memory via Q4 quantization
-- **Up to 4.7x** TTFT reduction through cross-agent KV cache reuse (RelayCaching)
+**Validated capability**: 4× more agent contexts in fixed device memory via Q4 quantization.
 
 ## Architecture (Aeon)
 
@@ -245,17 +242,17 @@ Four-layer system treating memory as a managed OS resource:
 │                importance scoring · maturity tiers    │
 │                recency decay · self-curation          │
 ├─────────────────────────────────────────────────────┤
-│  Organization  Atlas Index (SIMD vector index)       │
+│  Organization  Vamana graph index (DiskANN-style)    │
 │                Trace (causal episodic graph)          │
-│                WAL · epoch-based reclamation          │
+│                WAL · checkpointed on refresh          │
 ├─────────────────────────────────────────────────────┤
-│  Retrieval     MemArt (latent-space attention)       │
+│  Retrieval     Per-token Top5Avg (latent attention)  │
 │                SLB (INT8 scalar quantization)         │
-│                RelayCaching (cross-agent KV reuse)    │
+│                BruteForce (exact fallback)            │
 ├─────────────────────────────────────────────────────┤
 │  Storage       Q4 KV-cache block pool                │
-│                custom mmap arena · GPU DMA            │
-│                blob arena · decoupled position IDs    │
+│                append-only segments · TextStore       │
+│                DeletionLog · SynapticStore            │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -275,7 +272,6 @@ Four-layer system treating memory as a managed OS resource:
 - **Rust** ≥ 1.95 (edition 2024) — MSRV enforced in CI (`MSRV (1.95)`), local toolchain tracks `stable` via `rust-toolchain.toml`
 - **[just](https://github.com/casey/just)** — task runner (`cargo install just`)
 - **[lefthook](https://github.com/evilmartians/lefthook)** — git hooks (`brew install lefthook`)
-- **CUDA toolkit** (optional, for GPU DMA paths)
 - **Nightly toolchain** (optional, for fuzzing: `rustup toolchain install nightly`)
 
 ## Getting Started
@@ -402,7 +398,7 @@ Two semantically related prompts find each other through **latent-space attentio
 
 ## Testing
 
-### Rust (238 tests)
+### Rust (249 tests)
 
 ```bash
 cargo nextest run --workspace --exclude tdb-python    # all unit/acceptance tests
@@ -412,7 +408,7 @@ cargo fmt --all -- --check                            # format check
 just test-crate tdb-storage                           # single crate
 ```
 
-### Python (145 tests)
+### Python (201+ tests)
 
 ```bash
 source .venv/bin/activate
@@ -471,18 +467,17 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 | Layer | Crate | Tests | Coverage |
 |-------|-------|-------|----------|
-| Core types | `tdb-core` | 5 | Builder, SynapticBank, KVPack types, tier defaults |
-| Storage | `tdb-storage` | 12 | Q4 round-trip, segment rollover, persistence, SynapticStore |
-| Retrieval | `tdb-retrieval` | 36 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter |
-| Organization | `tdb-index` | 20 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
-| Governance | `tdb-governance` | 22 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | `tdb-engine` | 34 | Write/read, pack API, state rebuild, SLB chain, Vamana activation, throughput |
-| Docs | doctests | 10 | Crate-level usage examples |
-| Python | pytest | 145 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, KnowledgePackStore, multi-memory injection, trace-linked retrieval, store_and_link, RoPE composer, diagnostics, RAG baseline, sweep, **vLLM connector format/load-path/integration (4 + 4 + 4 + 5 with `-m gpu`)** |
+| Core types | `tdb-core` | 6 | Builder, SynapticBank, KVPack types, tier defaults |
+| Storage | `tdb-storage` | 33 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore, DeletionLog |
+| Retrieval | `tdb-retrieval` | 51 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig |
+| Organization | `tdb-index` | 23 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
+| Governance | `tdb-governance` | 26 | Importance scoring, tier hysteresis, recency decay, sweep |
+| Engine | `tdb-engine` | 110 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation, refresh, WAL checkpoint, active governance (tier boost + eviction), throughput |
+| Python | pytest | 201+ | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, KnowledgePackStore, multi-memory injection, trace-linked retrieval, retrieval key strategies (3), MCP tools, diagnostics, prefix builder, vLLM connector/prefix client, **vLLM integration (GPU)** |
 
 ## Research Milestones Implemented
 
-**All 11 planned prototype phases are implemented.** Current evidence: 383+ tests passing (238 Rust + 145 Python including vLLM round-trip on Qwen3-0.6B) and end-to-end demos/experiments working.
+**All prototype phases implemented + P1 architectural unification complete.** Current evidence: 450+ tests passing (249 Rust + 201+ Python including vLLM round-trip on Qwen3-0.6B) and end-to-end demos/experiments verified.
 
 ### Storage Layer — Custom from scratch, not a wrapper
 
@@ -553,6 +548,7 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] Delete API — `delete_pack` / `tardigrade_forget` with crash-safe `DeletionLog`
 - [x] **vLLM KV Connector v1 integration** — `tardigrade_vllm.connector.TardigradeConnector` captures KV during vLLM generation (per-request slot extraction, one pack per request via fingerprint dedup), persists as packs, and supports cross-process state sync via `Engine.refresh()`. Validated on Qwen3-0.6B with vLLM 0.19 (27 tests: 22 CPU + 5 GPU + 1 cross-session). **Architectural finding: the v1 connector API is prefix-cache only (token-identical prefix matching) — it cannot carry cross-prompt KV injection.** The "memory" pitch is served by the HuggingFace `KnowledgePackStore` path instead. See [experiments/README.md](docs/experiments/README.md).
 - [x] 370+ tests (238 Rust + 145 Python including vLLM connector + integration suites)
+- [x] **P1 Architectural Unification** — Active governance (tier boost: Core 1.25×, Validated 1.1×; `evict_draft_packs`), WAL checkpointing, text store consolidation (JSON sidecar removed), dead code cleanup, status API, configurable engine from Python, pluggable retrieval key strategies
 
 ### Next up
 
@@ -587,11 +583,13 @@ If neither Path 2 nor Path 3 is sufficient, the remaining option is to modify vL
 
 #### Engine and infrastructure
 
-- [ ] **CUDA GPU DMA kernels** — Direct NVMe→GPU transfers via cuFile/GDS for GPU-resident inference.
-- [ ] **Disk-aware Vamana** — PageANN-style page-node alignment for billion-scale cold storage on NVMe.
+- [ ] **Vamana edge persistence** — Serialize graph to disk; avoid O(n²) rebuild on refresh.
+- [ ] **Segment compaction** — Background merge of old segments to reclaim deleted pack space.
+- [ ] **Disk-aware Vamana** — PageANN-style page-node alignment for billion-scale cold storage.
 - [ ] **Multi-model dimension support** — Handle different models (different d_k) in one engine instance.
+- [ ] **CUDA GPU DMA** — Direct NVMe→GPU transfers via cuFile/GDS (requires CUDA SDK integration).
 - [ ] **RelayCaching** — Cross-agent KV cache reuse for multi-agent handoffs.
-- [ ] **Decoupled position encoding** — Safe injection of historical KV blocks with position ID remapping.
+- [ ] **Decoupled position encoding** — RoPE remapping for cross-prompt KV injection.
 
 See `docs/technical/tdd.md` for the full technical design document and `docs/technical/spec.md` for the condensed specification.
 

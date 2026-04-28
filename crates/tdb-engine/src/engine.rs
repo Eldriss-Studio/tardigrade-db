@@ -119,6 +119,20 @@ pub struct ReadResult {
     pub tier: Tier,
 }
 
+/// Snapshot of engine state for monitoring and diagnostics.
+#[derive(Debug, Clone)]
+pub struct EngineStatus {
+    pub cell_count: usize,
+    pub pack_count: usize,
+    pub segment_count: usize,
+    pub slb_occupancy: usize,
+    pub slb_capacity: usize,
+    pub vamana_active: bool,
+    pub pipeline_stages: usize,
+    pub governance_entries: usize,
+    pub trace_edges: usize,
+}
+
 /// A single write request for batch operations (Batch Command pattern).
 ///
 /// Groups the parameters that `mem_write` accepts into a reusable struct
@@ -691,6 +705,21 @@ impl Engine {
     /// Directory path of this engine.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Snapshot of engine state for monitoring and diagnostics.
+    pub fn status(&self) -> EngineStatus {
+        EngineStatus {
+            cell_count: self.pool.cell_count(),
+            pack_count: self.pack_directory.len(),
+            segment_count: self.pool.segment_count(),
+            slb_occupancy: self.slb.len(),
+            slb_capacity: self.slb.capacity(),
+            vamana_active: self.vamana.is_some(),
+            pipeline_stages: self.pipeline.stage_count(),
+            governance_entries: self.governance.len(),
+            trace_edges: self.trace.edge_count(),
+        }
     }
 
     /// Simulate passage of time for governance decay.

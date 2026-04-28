@@ -2849,3 +2849,38 @@ fn test_mem_read_tier_boost_not_truncated_by_early_exit() {
         "Core cell with 1.25× boost should outrank Draft cell at k=1"
     );
 }
+
+// ── Engine Status API acceptance tests ────────────────────────────────────
+
+/// ATDD: `Engine::status()` returns a consistent snapshot of engine state.
+#[test]
+fn test_engine_status_reflects_current_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let status = engine.status();
+    assert_eq!(status.cell_count, 0);
+    assert_eq!(status.pack_count, 0);
+    assert_eq!(status.segment_count, 1); // one empty segment on open
+    assert_eq!(status.slb_occupancy, 0);
+    assert!(!status.vamana_active);
+    assert_eq!(status.pipeline_stages, 2); // PerToken + BruteForce
+
+    // Write some packs.
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: Some("Test fact".to_owned()),
+        })
+        .unwrap();
+
+    let status = engine.status();
+    assert!(status.cell_count > 0);
+    assert_eq!(status.pack_count, 1);
+    assert!(status.slb_occupancy > 0);
+}

@@ -16,6 +16,11 @@ import numpy as np
 logger = logging.getLogger("tardigrade_vllm")
 
 
+LAST_TOKEN_EMBEDDING = "last_token_embedding"
+MEAN_POOL_EMBEDDING = "mean_pool_embedding"
+PROJECTED_EMBEDDING = "projected_embedding"
+
+
 class RetrievalKeyStrategy(ABC):
     """Strategy interface: compute a retrieval key from token IDs + embedding table."""
 
@@ -44,8 +49,59 @@ class LastTokenEmbeddingStrategy(RetrievalKeyStrategy):
         return embed_weights[valid_ids[-1]].astype(np.float32)
 
 
+class MeanPoolEmbeddingStrategy(RetrievalKeyStrategy):
+    """Mean-pool all token embeddings as retrieval key.
+
+    More robust than last-token for variable-length prompts: captures
+    the overall semantic direction rather than depending on a single
+    token. Still requires hidden_size == kv_dim for space alignment.
+    """
+
+    def compute(self, token_ids, embed_weights):
+        if embed_weights.size == 0 or len(token_ids) == 0:
+            return None
+        valid_ids = [tid for tid in token_ids if 0 <= tid < embed_weights.shape[0]]
+        if not valid_ids:
+            return None
+        embeddings = embed_weights[valid_ids]
+        return embeddings.mean(axis=0).astype(np.float32)
+
+
+class ProjectedEmbeddingStrategy(RetrievalKeyStrategy):
+    """Project last-token embedding from hidden_size to kv_dim.
+
+    Handles models where hidden_size != kv_dim (e.g., GQA models with
+    fewer KV heads than query heads). Uses a learned or random projection
+    matrix W in R^(kv_dim x hidden_size) to bridge the vector spaces.
+
+    If no projection matrix is provided, initializes a random orthogonal
+    projection (preserves distances approximately).
+    """
+
+    def __init__(self, kv_dim: int, hidden_size: int, projection: np.ndarray | None = None):
+        self._kv_dim = kv_dim
+        self._hidden_size = hidden_size
+        if projection is not None:
+            self._projection = projection.astype(np.float32)
+        else:
+            rng = np.random.default_rng(42)
+            raw = rng.standard_normal((kv_dim, hidden_size)).astype(np.float32)
+            u, _, vt = np.linalg.svd(raw, full_matrices=False)
+            self._projection = u @ vt
+
+    def compute(self, token_ids, embed_weights):
+        if embed_weights.size == 0 or len(token_ids) == 0:
+            return None
+        valid_ids = [tid for tid in token_ids if 0 <= tid < embed_weights.shape[0]]
+        if not valid_ids:
+            return None
+        embedding = embed_weights[valid_ids[-1]].astype(np.float32)
+        return (self._projection @ embedding).astype(np.float32)
+
+
 _STRATEGIES: dict[str, type[RetrievalKeyStrategy]] = {
-    "last_token_embedding": LastTokenEmbeddingStrategy,
+    LAST_TOKEN_EMBEDDING: LastTokenEmbeddingStrategy,
+    MEAN_POOL_EMBEDDING: MeanPoolEmbeddingStrategy,
 }
 
 
