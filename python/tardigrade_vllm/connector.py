@@ -97,13 +97,15 @@ if HAS_VLLM:
 
     @dataclass
     class _TardigradeConnectorMetadata(KVConnectorMetadata):
-        """DTO: carries matched pack data from scheduler to worker.
+        """DTO: carries scheduler decisions to the worker across IPC.
 
         Serializable across process boundaries (all fields are plain Python
         types). The scheduler populates this in build_connector_meta; the
-        worker reads it in start_load_kv via _get_connector_metadata().
+        worker reads load_requests in start_load_kv and save_token_map
+        in _write_pack_for_batch via _resolve_save_token_ids.
         """
         load_requests: list = field(default_factory=list)
+        save_token_map: dict = field(default_factory=dict)
 
     class TardigradeConnector(KVConnectorBase_V1):
         """Injects stored KV cache blocks into vLLM's prefix-cache slots
@@ -204,6 +206,11 @@ if HAS_VLLM:
 
             # Strategy for extracting per-request slices from attn_metadata
             self._slot_resolver = RequestSlotResolver()
+
+            # Scheduler-side token ID stash for save-side retrieval key.
+            # Keyed by fingerprint (first block index) — same key the worker
+            # uses in wait_for_save. Packaged into DTO by build_connector_meta.
+            self._save_token_ids_by_fingerprint: dict[int, list[int]] = {}
 
             # Minimum retrieval score to consider a match
             self._match_threshold = float(config.get("match_threshold", 150.0))
@@ -362,7 +369,7 @@ if HAS_VLLM:
             blocks,
             num_external_tokens: int,
         ) -> None:
-            """Record allocated block IDs for the load phase."""
+            """Record allocated block IDs for the load phase and stash token IDs."""
             req_id = getattr(request, "request_id", id(request))
             if req_id in self._load_packs and num_external_tokens > 0:
                 self._load_meta[req_id] = {
@@ -370,12 +377,20 @@ if HAS_VLLM:
                     "num_tokens": num_external_tokens,
                 }
 
-        def build_connector_meta(self, scheduler_output) -> "KVConnectorMetadata":
-            """Build metadata DTO for worker-side load.
+            # Stash token IDs keyed by fingerprint for save-side retrieval key.
+            # Works for ALL requests, not just load-matched ones.
+            prompt_ids = getattr(request, "prompt_token_ids", None)
+            if prompt_ids is not None:
+                first_blocks = blocks[0] if isinstance(blocks, tuple) else blocks
+                if first_blocks:
+                    fp = first_blocks[0] if isinstance(first_blocks, list) else first_blocks
+                    self._save_token_ids_by_fingerprint[fp] = list(prompt_ids)
 
-            Packages all matched pack data from scheduler-side dicts into a
-            serializable DTO. Clears scheduler state after packaging — the
-            worker receives everything it needs via the metadata object.
+        def build_connector_meta(self, scheduler_output) -> "KVConnectorMetadata":
+            """Build metadata DTO for the worker side.
+
+            Packages load-matched packs and save-side token IDs into a
+            serializable DTO. Clears scheduler state after packaging.
             """
             requests = []
             for req_id, load_info in self._load_packs.items():
@@ -391,7 +406,12 @@ if HAS_VLLM:
                 ))
             self._load_packs.clear()
             self._load_meta.clear()
-            return _TardigradeConnectorMetadata(load_requests=requests)
+            save_token_map = dict(self._save_token_ids_by_fingerprint)
+            self._save_token_ids_by_fingerprint.clear()
+            return _TardigradeConnectorMetadata(
+                load_requests=requests,
+                save_token_map=save_token_map,
+            )
 
         # -- Worker-side methods ---------------------------------------------------
 
@@ -517,7 +537,7 @@ if HAS_VLLM:
                     except Exception as e:
                         logger.debug(f"wait_for_save: stale delete failed: {e!r}")
 
-                pack_id = self._write_pack_for_batch(layer_buf)
+                pack_id = self._write_pack_for_batch(layer_buf, fingerprint)
                 if pack_id is not None:
                     self._pack_id_by_fingerprint[fingerprint] = pack_id
                     self._pack_id_by_fingerprint.move_to_end(fingerprint)
@@ -526,7 +546,21 @@ if HAS_VLLM:
 
             self._save_buffers.clear()
 
-        def _write_pack_for_batch(self, layer_buf: dict):
+        def _resolve_save_token_ids(self, fingerprint: int):
+            """Look up token IDs for a save-side request via the bound DTO."""
+            meta = getattr(self, "_connector_metadata", None)
+            if meta is None or not hasattr(meta, "save_token_map"):
+                return None
+            return meta.save_token_map.get(fingerprint)
+
+        def _raw_k_retrieval_key(self, layer_payloads):
+            """Fallback: extract last-token K from last layer as retrieval key."""
+            last_layer_data = layer_payloads[-1][1]
+            half = len(last_layer_data) // 2
+            k_last_layer = last_layer_data[:half].reshape(-1, self.kv_dim)
+            return k_last_layer[-1].astype(np.float32)
+
+        def _write_pack_for_batch(self, layer_buf: dict, fingerprint: int = -1):
             """Build and write a pack from one request's accumulated layers.
 
             ``layer_buf`` is ``{layer_idx: (kv_layer_tensor, BatchSlice)}``.
@@ -543,7 +577,6 @@ if HAS_VLLM:
                 k_np, v_np = self._extract_kv_slice(kv, sl, _torch)
                 if k_np is None:
                     continue
-                # Flatten to TardigradeDB format: [K_flat | V_flat]
                 flat = np.concatenate([k_np.ravel(), v_np.ravel()])
                 layer_payloads.append((layer_idx, flat))
 
@@ -551,18 +584,15 @@ if HAS_VLLM:
                 logger.debug("wait_for_save: no layer payloads built")
                 return None
 
-            # KNOWN ASYMMETRY: save uses last-token K from last layer,
-            # load uses embedding table lookup. These live in different
-            # vector spaces unless hidden_size == kv_dim. The strategy ABC
-            # now has compute_for_save() to unify both sides, but wiring
-            # it here requires token ID plumbing from scheduler → worker
-            # (attn_metadata doesn't carry token IDs). Needs vLLM env to
-            # validate. See plan: connector-hardening.md
-            # Phase 3 for the full design.
-            last_layer_data = layer_payloads[-1][1]
-            half = len(last_layer_data) // 2
-            k_last_layer = last_layer_data[:half].reshape(-1, self.kv_dim)
-            retrieval_key = k_last_layer[-1].astype(np.float32)  # last token
+            token_ids = self._resolve_save_token_ids(fingerprint)
+            embed_weights = self._get_embed_weights() if token_ids else None
+            if token_ids is not None and embed_weights is not None:
+                key = self._retrieval_key_strategy.compute_for_save(
+                    token_ids, embed_weights,
+                )
+                retrieval_key = key if key is not None else self._raw_k_retrieval_key(layer_payloads)
+            else:
+                retrieval_key = self._raw_k_retrieval_key(layer_payloads)
 
             try:
                 pack_id = self.engine.mem_write_pack(
@@ -650,6 +680,13 @@ if HAS_VLLM:
             req_id = getattr(request, "request_id", id(request))
             self._load_packs.pop(req_id, None)
             self._load_meta.pop(req_id, None)
+            # Defense-in-depth: clean token stash for finished requests.
+            # Normally cleared per-step in build_connector_meta.
+            if block_ids is not None:
+                first_blocks = block_ids[0] if isinstance(block_ids, tuple) else block_ids
+                if first_blocks:
+                    fp = first_blocks[0] if isinstance(first_blocks, list) else first_blocks
+                    self._save_token_ids_by_fingerprint.pop(fp, None)
             return False, None
 
         def shutdown(self) -> None:

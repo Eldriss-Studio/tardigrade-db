@@ -671,6 +671,7 @@ def _build_connector_for_save_path(tmp_path, max_fingerprints=4):
     c._load_meta = {}
     c._save_buffers = {}
     c._pack_id_by_fingerprint = OrderedDict()
+    c._save_token_ids_by_fingerprint = {}
     c._max_fingerprints = max_fingerprints
     c._embed_weights = np.random.RandomState(42).randn(1000, 8).astype(np.float32)
     c._match_threshold = 1.0
@@ -686,7 +687,26 @@ def _build_connector_for_save_path(tmp_path, max_fingerprints=4):
     return c
 
 
-def _simulate_save_cycle(connector, batch_idx, block_index, layer_data=None):
+def _make_kv_tensor_for_save(connector, block_index, num_blocks=None):
+    """Build a mock 5D KV tensor matching vLLM 0.19+ format.
+
+    Shape: [2, num_blocks, block_size, num_kv_heads, head_dim]
+    num_blocks defaults to max(block_index + 1, 8) so the index is always valid.
+    """
+    torch = pytest.importorskip("torch")
+    if num_blocks is None:
+        num_blocks = max(block_index + 1, 8)
+    shape = (2, num_blocks, connector.block_size,
+             connector.num_kv_heads, connector.head_dim)
+    kv = torch.zeros(shape, dtype=torch.float32)
+    kv[:, block_index] = torch.arange(
+        2 * connector.block_size * connector.num_kv_heads * connector.head_dim,
+        dtype=torch.float32,
+    ).reshape(2, connector.block_size, connector.num_kv_heads, connector.head_dim) * 0.01
+    return kv
+
+
+def _simulate_save_cycle(connector, batch_idx, block_index):
     """Simulate one complete save_kv_layer + wait_for_save cycle for a request.
 
     Manually populates _save_buffers with one layer's data keyed by batch_idx,
@@ -694,8 +714,7 @@ def _simulate_save_cycle(connector, batch_idx, block_index, layer_data=None):
     """
     from tardigrade_vllm.slot_resolver import BatchSlice
 
-    if layer_data is None:
-        layer_data = np.arange(2 * 4 * connector.kv_dim, dtype=np.float32) * 0.01
+    kv = _make_kv_tensor_for_save(connector, block_index)
 
     sl = BatchSlice(
         batch_index=batch_idx,
@@ -703,7 +722,7 @@ def _simulate_save_cycle(connector, batch_idx, block_index, layer_data=None):
         slot_count=4,
         first_slot=block_index * connector.block_size,
     )
-    connector._save_buffers[batch_idx] = {0: (layer_data, sl)}
+    connector._save_buffers[batch_idx] = {0: (kv, sl)}
     connector.wait_for_save()
 
 
@@ -928,3 +947,158 @@ def test_build_connector_meta_with_no_matches_returns_empty(tmp_path):
 
     assert hasattr(meta, "load_requests")
     assert len(meta.load_requests) == 0
+
+
+# -- Phase 3: Save-Side Retrieval Key Unification (Strategy + DTO patterns) ----
+
+class _EngineKeyCapture:
+    """Wrapper around Engine that captures retrieval keys passed to mem_write_pack."""
+    def __init__(self, engine):
+        self._engine = engine
+        self.captured_keys = []
+
+    def mem_write_pack(self, owner, key, layers, score):
+        self.captured_keys.append(np.array(key, dtype=np.float32).copy())
+        return self._engine.mem_write_pack(owner, key, layers, score)
+
+    def __getattr__(self, name):
+        return getattr(self._engine, name)
+
+
+def test_save_side_retrieval_key_uses_strategy_not_raw_k(tmp_path):
+    """GIVEN a connector with LastTokenEmbeddingStrategy and known embed_weights
+    AND save_token_map maps fingerprint 5 → [101, 202, 303]
+    AND the metadata is bound on the worker side
+    WHEN _write_pack_for_batch is called with layer data and fingerprint=5
+    THEN the retrieval key passed to mem_write_pack equals
+         strategy.compute_for_save(token_ids, embed_weights)"""
+    from tardigrade_vllm.connector import _TardigradeConnectorMetadata
+    from tardigrade_vllm.slot_resolver import BatchSlice
+
+    c = _build_connector_for_save_path(tmp_path)
+    spy = _EngineKeyCapture(c.engine)
+    c.engine = spy
+
+    token_ids = [101, 202, 303]
+    fingerprint = 5
+
+    expected_key = c._retrieval_key_strategy.compute_for_save(token_ids, c._embed_weights)
+
+    meta = _TardigradeConnectorMetadata(save_token_map={fingerprint: token_ids})
+    c._connector_metadata = meta
+
+    kv = _make_kv_tensor_for_save(c, fingerprint)
+    sl = BatchSlice(
+        batch_index=0, block_indices=(fingerprint,),
+        slot_count=4, first_slot=fingerprint * c.block_size,
+    )
+    layer_buf = {0: (kv, sl)}
+
+    pack_id = c._write_pack_for_batch(layer_buf, fingerprint)
+    assert pack_id is not None, "Pack should be written"
+    assert len(spy.captured_keys) == 1
+    assert np.allclose(spy.captured_keys[0], expected_key, atol=1e-6), (
+        f"Save-side key should use strategy (embedding table), not raw K.\n"
+        f"Expected: {expected_key[:4]}...\nGot: {spy.captured_keys[0][:4]}..."
+    )
+
+
+def test_save_and_load_retrieval_keys_identical_for_same_prompt(tmp_path):
+    """GIVEN a connector configured with LastTokenEmbeddingStrategy
+    AND token_ids = [101, 202, 303] with known embed_weights
+    WHEN save computes retrieval key via compute_for_save
+    AND load computes retrieval key via compute
+    THEN np.allclose(save_key, load_key) is True"""
+    c = _build_connector_for_save_path(tmp_path)
+    token_ids = [101, 202, 303]
+    embed_weights = c._embed_weights
+
+    save_key = c._retrieval_key_strategy.compute_for_save(token_ids, embed_weights)
+    load_key = c._retrieval_key_strategy.compute(token_ids, embed_weights)
+
+    assert save_key is not None
+    assert load_key is not None
+    assert np.allclose(save_key, load_key), (
+        "Save and load retrieval keys must be identical for the same token sequence"
+    )
+
+
+def test_save_side_falls_back_to_raw_k_when_no_token_ids(tmp_path):
+    """GIVEN a connector with no token IDs in the save_token_map for fingerprint 3
+    WHEN _write_pack_for_batch is called with layer data and fingerprint=3
+    THEN it falls back to raw K extraction (k_last_layer[-1])
+    AND the pack is still written successfully"""
+    from tardigrade_vllm.connector import _TardigradeConnectorMetadata
+    from tardigrade_vllm.slot_resolver import BatchSlice
+
+    c = _build_connector_for_save_path(tmp_path)
+    spy = _EngineKeyCapture(c.engine)
+    c.engine = spy
+
+    meta = _TardigradeConnectorMetadata(save_token_map={})
+    c._connector_metadata = meta
+
+    fingerprint = 3
+    kv = _make_kv_tensor_for_save(c, fingerprint)
+    sl = BatchSlice(
+        batch_index=0, block_indices=(fingerprint,),
+        slot_count=4, first_slot=fingerprint * c.block_size,
+    )
+    layer_buf = {0: (kv, sl)}
+
+    pack_id = c._write_pack_for_batch(layer_buf, fingerprint=fingerprint)
+
+    assert pack_id is not None, "Pack should be written even without token IDs"
+    assert len(spy.captured_keys) == 1
+    assert spy.captured_keys[0].shape == (c.kv_dim,), (
+        f"Fallback key should have shape ({c.kv_dim},), got {spy.captured_keys[0].shape}"
+    )
+
+
+def test_build_connector_meta_includes_save_token_map(tmp_path):
+    """GIVEN a connector where update_state_after_alloc was called with two requests
+    WHEN build_connector_meta is called
+    THEN returned metadata.save_token_map maps fingerprint → token_ids
+    AND _save_token_ids_by_fingerprint is cleared"""
+    c = _build_connector_for_save_path(tmp_path)
+    c._save_token_ids_by_fingerprint = {}
+
+    req_a = MagicMock()
+    req_a.request_id = "req_a"
+    req_a.prompt_token_ids = [10, 20, 30]
+    c.update_state_after_alloc(req_a, ([5, 6],), 0)
+
+    req_b = MagicMock()
+    req_b.request_id = "req_b"
+    req_b.prompt_token_ids = [40, 50]
+    c.update_state_after_alloc(req_b, ([7, 8],), 0)
+
+    meta = c.build_connector_meta(MagicMock())
+
+    assert hasattr(meta, "save_token_map"), "DTO must carry save_token_map"
+    assert meta.save_token_map == {5: [10, 20, 30], 7: [40, 50]}, (
+        f"save_token_map should map fingerprint → token_ids, got {meta.save_token_map}"
+    )
+    assert len(c._save_token_ids_by_fingerprint) == 0, (
+        "Scheduler-side stash must be cleared after packaging into DTO"
+    )
+
+
+def test_save_token_ids_survive_metadata_bridge(tmp_path):
+    """GIVEN _TardigradeConnectorMetadata with save_token_map
+    WHEN deepcopy'd (simulating IPC serialization)
+    THEN the copy's save_token_map is preserved and usable"""
+    import copy
+    from tardigrade_vllm.connector import _TardigradeConnectorMetadata
+
+    meta = _TardigradeConnectorMetadata(
+        save_token_map={5: [10, 20, 30], 7: [40, 50]},
+    )
+
+    meta_copy = copy.deepcopy(meta)
+
+    assert meta_copy.save_token_map == {5: [10, 20, 30], 7: [40, 50]}
+    meta_copy.save_token_map[5].append(999)
+    assert 999 not in meta.save_token_map[5], (
+        "Deepcopy should produce independent copies"
+    )
