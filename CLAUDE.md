@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All phases complete through P4. 517 tests (265 Rust + 252 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies with unified save/load via `compute_for_save` (Template Method). **vLLM connector hardened:** metadata DTO bridge (scheduler→worker), bounded fingerprint cache (LRU eviction at `max_num_seqs`), safetensors-first embedding weight loading, **save-side retrieval key asymmetry resolved** (token IDs flow scheduler→DTO→worker, both sides use `compute_for_save` in the same retrieval-key space, raw K fallback for graceful degradation). WAL checkpointing. Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
+**Status:** All phases complete through P4. 519 tests (267 Rust + 252 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies with unified save/load via `compute_for_save` (Template Method). **vLLM connector hardened:** metadata DTO bridge (scheduler→worker), bounded fingerprint cache (LRU eviction at `max_num_seqs`), safetensors-first embedding weight loading, **save-side retrieval key asymmetry resolved** (token IDs flow scheduler→DTO→worker, both sides use `compute_for_save` in the same retrieval-key space, raw K fallback for graceful degradation). WAL checkpointing. Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
 
 ## Build & Test
 
@@ -75,10 +75,10 @@ Captures KV cache from GPT-2 inference on *"The capital of France is"*, then ret
 | Retrieval | tdb-retrieval | 51 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig |
 | Organization | tdb-index | 25 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
 | Governance | tdb-governance | 26 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | tdb-engine | 124 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation, refresh + WAL checkpoint, active governance (tier boost + eviction), semantic edges (Supports/Contradicts), multi-agent isolation (3 agents × 5 packs), status API |
+| Engine | tdb-engine | 126 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation, refresh + WAL checkpoint, active governance (tier boost + eviction), semantic edges (Supports/Contradicts), multi-agent isolation (3 agents × 5 packs), status API, crash recovery (truncated segment + truncated WAL) |
 | Python | pytest | 252 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, diagnostics, RAG baseline, vLLM connector/prefix client, synthetic-fact KV injection, prefix builder, retrieval key strategies (17), semantic edges (4), SynapticBank (6), multi-agent (5), connector hardening: metadata bridge (5), fingerprint bounds (3), save-side key unification (5), lifecycle regression (1) |
 
-Per-crate counts include unit + acceptance + doctest tests. Sum: 6+33+51+25+26+124+252 = 517.
+Per-crate counts include unit + acceptance + doctest tests. Sum: 6+33+51+25+26+126+252 = 519.
 
 ## Crate Structure
 
@@ -89,26 +89,33 @@ Rust workspace with strict dependency ordering:
 - **tdb-retrieval** — Per-token retrieval (Top5Avg), SLB, SIMD brute-force matmul, retriever pipeline. Depends on tdb-core, tdb-storage.
 - **tdb-index** — Vamana graph (DiskANN-style), Trace causal graph, WAL. Depends on tdb-core, tdb-storage.
 - **tdb-governance** — AKL: importance scoring, tier state machine, recency decay. Depends on tdb-core.
-- **tdb-engine** — Top-level orchestrator, scheduler, batch cache. Depends on all above.
-- **cuda/** — CUDA C++ kernels (attention, quantization), linked via cudarc FFI.
+- **tdb-engine** — Top-level orchestrator. Single-threaded (`&mut self`). Depends on all above.
 
 ## Architecture (Aeon Architecture)
 
 Four-layer system treating memory as a managed OS resource:
 
-1. **Storage Layer** — Persistent quantized KV-cache block pool. 4-bit (Q4) quantized custom mmap arena (`safetensors` retained for import/export only). GPU DMA for direct NVMe→GPU transfers bypassing CPU. Decoupled position encoding for safe historical KV block reuse. Includes a sidecar blob arena (append-only, mmap-backed) with generational GC.
+1. **Storage Layer** — Persistent quantized KV-cache block pool. 4-bit (Q4) quantized custom mmap arena (`safetensors` retained for import/export only). Append-only segments with per-write fsync. Includes a sidecar blob arena (append-only, mmap-backed) with generational GC. *Design targets (not yet implemented): GPU DMA for direct NVMe→GPU transfers; decoupled position encoding for safe historical KV block reuse.*
 
 2. **Retrieval Layer** — Per-token latent-space scoring, not text search. PerTokenRetriever with Top5Avg scoring computes dot products between individual query and memory hidden-state tokens (100% recall at 100 memories). Semantic Lookaside Buffer (SLB) for sub-5μs retrieval using INT8 scalar quantization with NEON SDOT intrinsics. Three-stage pipeline: SLB → PerTokenRetriever → BruteForceRetriever.
 
-3. **Organization Layer** — Neuro-symbolic dual topology. Atlas Index: SIMD-accelerated Page-Clustered Vector Index (small-world graph + B+ Tree disk locality). Trace: episodic graph tracking causal relationships between KV blocks. Decoupled WAL for crash recovery with <1% overhead. Epoch-based reclamation for lock-free concurrent reads.
+3. **Organization Layer** — Neuro-symbolic dual topology. Vamana graph (DiskANN-style approximate nearest neighbor). Trace: episodic graph tracking causal relationships between KV blocks. Decoupled WAL for crash recovery. *Design targets (not yet implemented): epoch-based reclamation for lock-free concurrent reads.*
 
 4. **Governance Layer** — Adaptive Knowledge Lifecycle (AKL). Importance scoring (ι ∈ [0,100], +3 access / +5 update, 0.995 daily decay). Three maturity tiers with hysteresis: draft→validated at ι≥65 (demote <35), validated→core at ι≥85 (demote <60). Recency decay: r = exp(-Δt/τ), τ=30 days (~21-day half-life).
 
 ## Key Technical Specs
 
-- **Target perf:** 3.09μs tree traversal at 100K nodes, P99 read latency 750ns under 16-thread contention
-- **Concurrency:** BatchQuantizedKVCache for concurrent Q4 inference; interleaved prefill/decode scheduling hides 500ms warm-reload latency
-- **Bridge:** Zero-copy C++/Python bridge between inference engine and memory kernel
+**Benchmarked (Criterion):**
+- **SLB query:** sub-5μs at 256 entries (INT8 scalar quantization)
+- **Engine read:** ~119μs at 1K cells, single-threaded
+- **Engine write:** ~8.2ms per cell (includes fsync)
+- **Retrieval recall:** 100% at 100 memories (Top5Avg, per-token hidden states, Q4 pipeline)
+
+**Design targets (not yet benchmarked):**
+- Sub-microsecond read latency under concurrent access (engine is currently single-threaded)
+- Vamana graph traversal at 100K+ nodes (current benchmarks test up to 1K nodes)
+
+**Bridge:** Zero-copy Rust→Python via PyO3 (`PyReadonlyArray1` for NumPy float32 arrays)
 
 ## Key Documents
 

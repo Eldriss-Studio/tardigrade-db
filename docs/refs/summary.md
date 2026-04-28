@@ -1,21 +1,45 @@
 **TardigradeDB: Project Summary**
 
 **Overview**
-TardigradeDB is a from-scratch, LLM-native database kernel designed to act as the literal long-term hippocampus for autonomous AI agents. Moving completely away from the "Flat RAG" architecture of external text storage and vector databases, TardigradeDB treats memory as a managed cognitive resource. It operates directly within the neural network's native format by persisting, organizing, and retrieving the model's Key-Value (KV) cache tensors.
 
-**Core Architecture & Technical Pillars**
+TardigradeDB is a from-scratch, LLM-native memory kernel designed as the persistent memory system for autonomous AI agents. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-1. **Persistent Latent Storage (Quantized KV-Cache):**
-   Instead of storing plaintext, TardigradeDB persists the agent's memory state directly to disk as 4-bit quantized KV cache blocks. This dense quantization allows the system to fit four times more agent contexts into fixed device memory compared to standard precision. By utilizing hardware-accelerated GPU Direct Memory Access (DMA), the database streams these latent blocks directly from NVMe SSDs to the GPU, bypassing CPU bottlenecks.
+> **Status: experimental prototype.** APIs, on-disk formats, and guarantees may change. Current results are from controlled experiments and benchmarks.
 
-2. **Latent Space Retrieval (MemArt & SLB):**
-   TardigradeDB eliminates the need to re-read and tokenize text. It utilizes a retrieval strategy known as MemArt, which computes attention scores directly in the latent space using compressed keys for efficient KV selection. For immediate working memory, it employs a Semantic Lookaside Buffer (SLB) that exploits conversational locality to achieve sub-5 microsecond retrieval latencies. By reloading these blocks directly into the model's attention layer, TardigradeDB eliminates redundant $O(n)$ prefill computations and reduces the time-to-first-token latency by up to 136x.
+**What Works Today**
+
+1. **Persistent Quantized KV Storage:**
+   KV cache blocks are persisted to disk as 4-bit quantized tensors in a custom mmap-backed arena. Q4 quantization preserves 89% of injection quality while fitting 4x more context into fixed storage. Append-only segments with per-write fsync. Engine is single-threaded (`&mut self`); multi-agent isolation is via logical owner filtering, not concurrent access.
+
+2. **Latent-Space Retrieval:**
+   Per-token Top5Avg scoring computes dot products between individual query and memory hidden-state tokens — 100% recall at 100 memories through the full engine pipeline (Q4 quantization, INT8 scoring, 97ms latency). Semantic Lookaside Buffer (SLB) provides sub-5μs retrieval using INT8 scalar quantization. Three-stage pipeline: SLB → PerTokenRetriever → BruteForceRetriever.
 
 3. **Neuro-Symbolic Organization:**
-   To ensure the LLM can traverse complex logical relationships and avoid retrieving disjointed, contextless facts ("Vector Haze"), TardigradeDB organizes latent blocks using a dual-topology structure. It combines a high-speed spatial index (the Atlas Index, a SIMD-accelerated Page-Clustered Vector Index) with a neuro-symbolic episodic graph (Trace) that explicitly maps causal relationships between memories.
+   Vamana graph index (DiskANN-style) for approximate nearest neighbor search. Trace graph for causal relationships between KV blocks. Decoupled WAL for crash recovery.
 
 4. **Self-Curating Governance (Adaptive Knowledge Lifecycle):**
-   Because an autonomous agent continuously generates state, TardigradeDB prevents infinite cache accumulation using an Adaptive Knowledge Lifecycle (AKL). Every latent block carries an algorithmic importance score that increases when the agent accesses or updates it. Based on these scores, memories autonomously promote or demote across maturity tiers (draft, validated, core). A mathematical recency decay function ensures that stale or unused information naturally fades over time.
+   Every stored block carries an importance score (ι ∈ [0,100]) that increases on access (+3) and update (+5), with 0.995 daily decay. Memories autonomously promote/demote across maturity tiers (draft → validated → core) with hysteresis thresholds. Tier-based retrieval boost (Core 1.25×, Validated 1.1×).
+
+5. **Verified KV Injection:**
+   Fully synthetic gibberish facts (nonsense proper nouns, fake units) injected via KV tensors and recalled by Qwen3-0.6B at 9/10, matching text RAG at 100% recall ratio. Any correct recall is unambiguous — these strings cannot come from model weights.
+
+**Deployment Paths**
+
+- **Path 1 (HuggingFace direct injection):** `KnowledgePackStore` passes `past_key_values` directly to `model.generate()`. This is the path with the strongest results (9/10 synthetic fact recall). Not integrated into production serving frameworks.
+- **Path 2 (vLLM prefix adapter):** `MemoryPrefixBuilder` assembles governed memory text prefixes. vLLM's stock prefix-cache serves them automatically at zero prefill cost. This is a text adapter, not KV injection.
+- **vLLM KV Connector:** Implements vLLM's KV Connector v1 API as a persistent prefix-cache accelerator. The v1 API is prefix-cache only — it cannot do cross-prompt KV injection.
+
+**Architectural Vision (Not Yet Implemented)**
+
+These are design targets from the technical design document, not current capabilities:
+
+- **GPU DMA:** Direct NVMe→GPU transfers via cuFile/GDS, bypassing CPU.
+- **Decoupled position encoding:** RoPE remapping for safe historical KV block reuse across contexts.
+- **BatchQuantizedKVCache:** Concurrent Q4 inference with interleaved prefill/decode scheduling.
+- **Cross-agent KV reuse (RelayCaching):** Sharing KV cache across agents for estimated TTFT reduction.
 
 **Value Proposition**
-TardigradeDB represents a paradigm shift from "storage as a service" to "storage as cognition." By replacing text retrieval with direct cache restoration and governing it through a neuro-symbolic causal graph, TardigradeDB provides multi-agent systems with a highly resilient, deeply native, and exceptionally fast memory ecosystem.
+
+TardigradeDB replaces text retrieval with direct cache restoration. Instead of tokenize → embed → search → detokenize → re-tokenize, it stores the model's own internal state and restores it directly into the attention stack. The search IS attention — relevance is computed in the same mathematical space the model uses to think.
+
+No existing project unifies persistent quantized KV storage, latent-space retrieval, neuro-symbolic organization, and adaptive lifecycle into a single kernel. The closest overlaps are partial: LMCache (persistent KV, but prefix-cache only), MemArt (latent retrieval, but not a full engine), ByteRover 2.0 (adaptive lifecycle, but text-based).
