@@ -4,8 +4,8 @@ Strategy pattern: pluggable retrieval key computation.
 The retrieval key determines which stored KV pack matches a new request.
 
 Both save and load sides use the same strategy (via compute/compute_for_save).
-This guarantees keys live in the same vector space regardless of model
-architecture. The embedding table is the shared ground truth — no GPU
+This guarantees keys live in the same retrieval-key space — a proxy space
+derived from the embedding table, not the KV latent space itself. No GPU
 forward pass required on either side.
 """
 
@@ -41,10 +41,10 @@ class RetrievalKeyStrategy(ABC):
 class LastTokenEmbeddingStrategy(RetrievalKeyStrategy):
     """Last token's embedding vector as retrieval key.
 
-    Matches save-side key (last-token K, last layer) ONLY when
-    hidden_size == kv_dim. For models where these differ, retrieval
-    recall degrades because load and save keys live in different
-    vector spaces.
+    Both save and load sides now use this strategy via compute_for_save /
+    compute, producing identical proxy keys in the embedding-derived
+    retrieval-key space. Falls back to raw K extraction only when token
+    IDs are unavailable on the save side.
 
     Validated on: Qwen3-0.6B (hidden_size=1024, kv_dim=8*128=1024).
     """
@@ -63,7 +63,7 @@ class MeanPoolEmbeddingStrategy(RetrievalKeyStrategy):
 
     More robust than last-token for variable-length prompts: captures
     the overall semantic direction rather than depending on a single
-    token. Still requires hidden_size == kv_dim for space alignment.
+    token. Both sides use the embedding table — same retrieval-key space.
     """
 
     def compute(self, token_ids, embed_weights):
@@ -81,7 +81,7 @@ class ProjectedEmbeddingStrategy(RetrievalKeyStrategy):
 
     Handles models where hidden_size != kv_dim (e.g., GQA models with
     fewer KV heads than query heads). Uses a learned or random projection
-    matrix W in R^(kv_dim x hidden_size) to bridge the vector spaces.
+    matrix W in R^(kv_dim x hidden_size) to bridge the dimension gap.
 
     If no projection matrix is provided, initializes a random orthogonal
     projection (preserves distances approximately).
@@ -126,19 +126,19 @@ def get_strategy(name: str) -> RetrievalKeyStrategy:
 
 
 def check_key_alignment(hidden_size: int, kv_dim: int) -> bool:
-    """Diagnostic: check if load-side and save-side key spaces align.
+    """Diagnostic: check if embedding and KV dimensions match.
 
-    Returns True if hidden_size == kv_dim (embedding lookup produces
-    vectors in the same space as K projections). Logs a warning on
-    mismatch.
+    Returns True if hidden_size == kv_dim. When they differ, the raw-K
+    fallback path (used when token IDs are unavailable) produces keys in
+    a different dimension than the embedding-derived retrieval keys.
     """
     aligned = hidden_size == kv_dim
     if not aligned:
         logger.warning(
-            "Key space mismatch: hidden_size=%d != kv_dim=%d. "
-            "Load-side retrieval keys (embedding table) live in a different "
-            "vector space than save-side keys (K projections). Retrieval recall "
-            "may degrade. Consider a projected embedding strategy.",
+            "Dimension mismatch: hidden_size=%d != kv_dim=%d. "
+            "The raw-K fallback (when token IDs are unavailable) will "
+            "produce keys in a different dimension than the embedding-based "
+            "strategy. Consider a projected embedding strategy.",
             hidden_size,
             kv_dim,
         )

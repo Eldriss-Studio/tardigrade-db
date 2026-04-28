@@ -89,7 +89,7 @@ def test_alignment_check_warns_on_dimension_mismatch(caplog):
         result = check_key_alignment(2048, 1024)
 
     assert result is False
-    assert "Key space mismatch" in caplog.text
+    assert "Dimension mismatch" in caplog.text
 
 
 # ── MeanPoolEmbeddingStrategy ─────────────────────────────────────────────
