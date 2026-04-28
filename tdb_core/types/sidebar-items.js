@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Tier"],"type":["CellId","LayerId","OwnerId","SynapticId","TagBits"]};
+window.SIDEBAR_ITEMS = {"constant":["CORE_RETRIEVAL_BOOST","DRAFT_RETRIEVAL_BOOST","VALIDATED_RETRIEVAL_BOOST"],"enum":["Tier"],"type":["CellId","LayerId","OwnerId","SynapticId","TagBits"]};
