@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All phases complete through P4. 523 tests (271 Rust + 252 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies with unified save/load via `compute_for_save` (Template Method). **vLLM connector hardened:** metadata DTO bridge (scheduler→worker), bounded fingerprint cache (LRU eviction at `max_num_seqs`), safetensors-first embedding weight loading, **save-side retrieval key asymmetry resolved** (token IDs flow scheduler→DTO→worker, both sides use `compute_for_save` in the same retrieval-key space, raw K fallback for graceful degradation). WAL checkpointing. Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
+**Status:** All phases complete through P4. 527 tests (271 Rust + 256 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies with unified save/load via `compute_for_save` (Template Method). **vLLM connector hardened:** metadata DTO bridge (scheduler→worker), bounded fingerprint cache (LRU eviction at `max_num_seqs`), safetensors-first embedding weight loading, **save-side retrieval key asymmetry resolved** (token IDs flow scheduler→DTO→worker, both sides use `compute_for_save` in the same retrieval-key space, raw K fallback for graceful degradation). WAL checkpointing. Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
 
 ## Build & Test
 
@@ -76,9 +76,9 @@ Captures KV cache from GPT-2 inference on *"The capital of France is"*, then ret
 | Organization | tdb-index | 25 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
 | Governance | tdb-governance | 26 | Importance scoring, tier hysteresis, recency decay, sweep |
 | Engine | tdb-engine | 130 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation, refresh + WAL checkpoint, active governance (tier boost + eviction), semantic edges (Supports/Contradicts), multi-agent isolation (3 agents × 5 packs), status API, crash recovery (segment + WAL truncation), multi-component atomicity (text store, deletion log, flush) |
-| Python | pytest | 252 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, diagnostics, RAG baseline, vLLM connector/prefix client, synthetic-fact KV injection, prefix builder, retrieval key strategies (17), semantic edges (4), SynapticBank (6), multi-agent (5), connector hardening: metadata bridge (5), fingerprint bounds (3), save-side key unification (5), lifecycle regression (1) |
+| Python | pytest | 256 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, diagnostics, RAG baseline, vLLM connector/prefix client, synthetic-fact KV injection, prefix builder, retrieval key strategies (17), semantic edges (4), SynapticBank (6), multi-agent (5), connector hardening: metadata bridge (5), fingerprint bounds (3), save-side key unification (5), lifecycle regression (1), thread safety: GIL release (2) + concurrent access (2) |
 
-Per-crate counts include unit + acceptance + doctest tests. Sum: 6+33+51+25+26+130+252 = 523.
+Per-crate counts include unit + acceptance + doctest tests. Sum: 6+33+51+25+26+130+256 = 527.
 
 ## Crate Structure
 
@@ -89,7 +89,7 @@ Rust workspace with strict dependency ordering:
 - **tdb-retrieval** — Per-token retrieval (Top5Avg), SLB, SIMD brute-force matmul, retriever pipeline. Depends on tdb-core, tdb-storage.
 - **tdb-index** — Vamana graph (DiskANN-style), Trace causal graph, WAL. Depends on tdb-core, tdb-storage.
 - **tdb-governance** — AKL: importance scoring, tier state machine, recency decay. Depends on tdb-core.
-- **tdb-engine** — Top-level orchestrator. Single-threaded (`&mut self`). Depends on all above.
+- **tdb-engine** — Top-level orchestrator. Rust side is `&mut self` (single-threaded); Python bindings wrap in `Arc<Mutex<>>` for thread-safe access with GIL release. Depends on all above.
 
 ## Architecture (Aeon Architecture)
 
@@ -112,8 +112,10 @@ Four-layer system treating memory as a managed OS resource:
 - **Retrieval recall:** 100% at 100 memories (Top5Avg, per-token hidden states, Q4 pipeline)
 
 **Design targets (not yet benchmarked):**
-- Sub-microsecond read latency under concurrent access (engine is currently single-threaded)
+- Sub-microsecond read latency under concurrent access
 - Vamana graph traversal at 100K+ nodes (current benchmarks test up to 1K nodes)
+
+**Concurrency:** Python Engine is wrapped in `Arc<Mutex<>>` (Monitor Object pattern). GIL is released via `py.detach()` during engine operations so other Python threads can run. Mutex serializes access to the Rust engine — safe for multi-threaded Python, but not lock-free.
 
 **Bridge:** Zero-copy Rust→Python via PyO3 (`PyReadonlyArray1` for NumPy float32 arrays)
 
