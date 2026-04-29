@@ -155,9 +155,14 @@ impl TextStore {
         let mut cursor = 0;
 
         while cursor + RECORD_HEADER_SIZE <= data.len() {
-            let pack_id = u64::from_le_bytes(data[cursor..cursor + 8].try_into().unwrap());
-            let text_len =
-                u32::from_le_bytes(data[cursor + 8..cursor + 12].try_into().unwrap()) as usize;
+            let pack_id_bytes: [u8; 8] = data[cursor..cursor + 8]
+                .try_into()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "truncated pack_id"))?;
+            let pack_id = u64::from_le_bytes(pack_id_bytes);
+            let len_bytes: [u8; 4] = data[cursor + 8..cursor + 12]
+                .try_into()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "truncated text_len"))?;
+            let text_len = u32::from_le_bytes(len_bytes) as usize;
 
             let record_end = cursor + RECORD_HEADER_SIZE + text_len;
             if record_end > data.len() {

@@ -726,6 +726,16 @@ impl Engine {
         }
     }
 
+    /// Explicit durability checkpoint (Write Fence / Barrier pattern).
+    ///
+    /// Ensures all durable components have fsynced. Individual writes already
+    /// fsync on each operation, so this is a semantic guarantee: after `flush()`
+    /// returns, reopening the engine will see all prior writes.
+    pub fn flush(&mut self) -> Result<()> {
+        self.wal.checkpoint()?;
+        Ok(())
+    }
+
     /// Simulate passage of time for governance decay.
     pub fn advance_days(&mut self, days: f32) {
         for gov in self.governance.values_mut() {

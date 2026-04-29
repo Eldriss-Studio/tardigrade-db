@@ -95,8 +95,10 @@ impl DeletionLog {
         let mut cursor = 0;
 
         while cursor + RECORD_SIZE <= data.len() {
-            let pack_id =
-                u64::from_le_bytes(data[cursor..cursor + RECORD_SIZE].try_into().unwrap());
+            let bytes: [u8; 8] = data[cursor..cursor + RECORD_SIZE]
+                .try_into()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "truncated pack_id"))?;
+            let pack_id = u64::from_le_bytes(bytes);
             deleted.insert(pack_id);
             cursor += RECORD_SIZE;
         }

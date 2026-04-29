@@ -592,6 +592,11 @@ impl Engine {
         self.inner.delete_pack(pack_id).map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Explicit durability checkpoint — ensures all components have fsynced.
+    fn flush(&mut self) -> PyResult<()> {
+        self.inner.flush().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     fn __repr__(&self) -> String {
         format!("Engine(path='{}', cells={})", self.inner.dir().display(), self.inner.cell_count())
     }

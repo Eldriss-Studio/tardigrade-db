@@ -98,7 +98,7 @@ impl BlockPool {
     pub fn append(&mut self, cell: &MemoryCell) -> Result<CellId> {
         self.ensure_active_segment_has_capacity()?;
 
-        let active = self.active_segment_mut();
+        let active = self.active_segment_mut()?;
         let seg_id = active.id();
         let byte_offset = active.append(cell)?;
 
@@ -118,7 +118,7 @@ impl BlockPool {
 
         self.ensure_active_segment_has_capacity()?;
 
-        let active = self.active_segment_mut();
+        let active = self.active_segment_mut()?;
         let seg_id = active.id();
         let offsets = active.append_batch(cells)?;
 
@@ -165,14 +165,17 @@ impl BlockPool {
             self.segments.last().is_some_and(|s| s.size() >= self.segment_size_threshold);
 
         if needs_rollover {
-            let new_id = self.segments.last().unwrap().id() + 1;
+            let last = self.segments.last().ok_or(TardigradeError::SegmentFull { path: self.dir.display().to_string() })?;
+            let new_id = last.id() + 1;
             let new_segment = Segment::create(&self.dir, new_id)?;
             self.segments.push(new_segment);
         }
         Ok(())
     }
 
-    fn active_segment_mut(&mut self) -> &mut Segment {
-        self.segments.last_mut().expect("pool always has at least one segment")
+    fn active_segment_mut(&mut self) -> Result<&mut Segment> {
+        self.segments
+            .last_mut()
+            .ok_or(TardigradeError::SegmentFull { path: self.dir.display().to_string() })
     }
 }

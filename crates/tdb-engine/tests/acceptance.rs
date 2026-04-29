@@ -3316,3 +3316,163 @@ fn test_crash_recovery_truncated_wal() {
     // Engine opened without panic — truncated WAL record was discarded gracefully
     let _ = pack_ids;
 }
+
+// -- Multi-Component Atomicity (Fault Injection pattern) -----------------------
+
+/// ATDD: Pack with text survives clean reopen.
+///
+/// GIVEN 3 packs, each with associated text
+/// WHEN all writes complete and the engine is reopened
+/// THEN all 3 packs have their text metadata intact
+#[test]
+fn test_pack_text_round_trip_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let key: Vec<f32> = (0..32).map(|i| (i as f32 * 0.1).sin()).collect();
+
+    let pack_ids;
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let mut ids = Vec::new();
+        for i in 0..3u64 {
+            let pack = KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key.clone(),
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![i as f32; 64] }],
+                salience: 50.0,
+                text: Some(format!("Memory fact #{i}")),
+            };
+            ids.push(engine.mem_write_pack(&pack).unwrap());
+        }
+        pack_ids = ids;
+    }
+
+    let mut engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine.pack_count(), 3);
+    for (i, &pid) in pack_ids.iter().enumerate() {
+        let pack = engine.load_pack_by_id(pid).unwrap();
+        assert_eq!(
+            pack.pack.text.as_deref(),
+            Some(format!("Memory fact #{i}").as_str()),
+            "pack {pid} text must survive reopen"
+        );
+    }
+}
+
+/// ATDD: Truncated text store — pack cells survive, text is lost gracefully.
+///
+/// GIVEN a pack written to the pool (cells fsynced)
+/// BUT the text store file is truncated before its fsync completes
+/// WHEN the engine is reopened
+/// THEN the pack's cells exist (pool is authoritative)
+/// AND the text for that pack may be empty (text store lost its write)
+/// AND no panic occurs
+#[test]
+fn test_crash_truncated_text_store_pack_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let key: Vec<f32> = (0..32).map(|i| (i as f32 * 0.1).sin()).collect();
+
+    let pack_id;
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let pack = KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0f32; 64] }],
+            salience: 50.0,
+            text: Some("This text will be lost in the crash".into()),
+        };
+        pack_id = engine.mem_write_pack(&pack).unwrap();
+    }
+
+    // Simulate crash: truncate text store
+    let text_path = dir.path().join("text_store.bin");
+    if text_path.exists() {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&text_path)
+            .unwrap()
+            .set_len(0)
+            .unwrap();
+    }
+
+    // Recovery: engine should open without panic
+    let mut engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine.pack_count(), 1, "pack cells must survive (pool is authoritative)");
+
+    // Text may be missing — that's acceptable after text store crash
+    let pack = engine.load_pack_by_id(pack_id).unwrap();
+    // We just verify no panic; text being None is the expected degradation
+    let _ = pack.pack.text;
+}
+
+/// ATDD: Deletion log persistence after crash.
+///
+/// GIVEN 5 packs where pack 3 is deleted
+/// AND the deletion log is fsynced
+/// WHEN the engine is reopened
+/// THEN pack 3 is not returned by mem_read_pack
+/// AND packs 1,2,4,5 are intact
+#[test]
+fn test_deletion_log_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut pack_ids;
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        pack_ids = Vec::new();
+        for i in 0..5u64 {
+            let mut k: Vec<f32> = (0..32).map(|j| (j as f32 * 0.1).sin()).collect();
+            k[0] = i as f32;
+            let pack = KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: k,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![i as f32; 64] }],
+                salience: 50.0,
+                text: None,
+            };
+            pack_ids.push(engine.mem_write_pack(&pack).unwrap());
+        }
+        engine.delete_pack(pack_ids[2]).unwrap();
+    }
+
+    let engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine.pack_count(), 4, "4 packs should survive (pack 3 deleted)");
+    assert!(
+        !engine.pack_exists(pack_ids[2]),
+        "deleted pack must not exist after reopen"
+    );
+    for &pid in &[pack_ids[0], pack_ids[1], pack_ids[3], pack_ids[4]] {
+        assert!(engine.pack_exists(pid), "non-deleted pack {pid} must survive");
+    }
+}
+
+/// ATDD: Explicit flush guarantees durability.
+///
+/// GIVEN an engine with pending writes
+/// WHEN engine.flush() is called
+/// THEN reopening the engine recovers all written data
+#[test]
+fn test_flush_guarantees_durability() {
+    let dir = tempfile::tempdir().unwrap();
+    let key: Vec<f32> = (0..32).map(|i| (i as f32 * 0.1).sin()).collect();
+
+    {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let pack = KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0f32; 64] }],
+            salience: 50.0,
+            text: Some("durable after flush".into()),
+        };
+        engine.mem_write_pack(&pack).unwrap();
+        engine.flush().unwrap();
+    }
+
+    let engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(engine.pack_count(), 1, "flushed pack must survive reopen");
+}
