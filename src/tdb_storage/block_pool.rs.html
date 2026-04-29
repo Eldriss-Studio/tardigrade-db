@@ -133,7 +133,7 @@
 <a href=#98 id=98 data-nosnippet>98</a>    </span><span class="kw">pub fn </span>append(<span class="kw-2">&amp;mut </span><span class="self">self</span>, cell: <span class="kw-2">&amp;</span>MemoryCell) -&gt; <span class="prelude-ty">Result</span>&lt;CellId&gt; {
 <a href=#99 id=99 data-nosnippet>99</a>        <span class="self">self</span>.ensure_active_segment_has_capacity()<span class="question-mark">?</span>;
 <a href=#100 id=100 data-nosnippet>100</a>
-<a href=#101 id=101 data-nosnippet>101</a>        <span class="kw">let </span>active = <span class="self">self</span>.active_segment_mut();
+<a href=#101 id=101 data-nosnippet>101</a>        <span class="kw">let </span>active = <span class="self">self</span>.active_segment_mut()<span class="question-mark">?</span>;
 <a href=#102 id=102 data-nosnippet>102</a>        <span class="kw">let </span>seg_id = active.id();
 <a href=#103 id=103 data-nosnippet>103</a>        <span class="kw">let </span>byte_offset = active.append(cell)<span class="question-mark">?</span>;
 <a href=#104 id=104 data-nosnippet>104</a>
@@ -153,7 +153,7 @@
 <a href=#118 id=118 data-nosnippet>118</a>
 <a href=#119 id=119 data-nosnippet>119</a>        <span class="self">self</span>.ensure_active_segment_has_capacity()<span class="question-mark">?</span>;
 <a href=#120 id=120 data-nosnippet>120</a>
-<a href=#121 id=121 data-nosnippet>121</a>        <span class="kw">let </span>active = <span class="self">self</span>.active_segment_mut();
+<a href=#121 id=121 data-nosnippet>121</a>        <span class="kw">let </span>active = <span class="self">self</span>.active_segment_mut()<span class="question-mark">?</span>;
 <a href=#122 id=122 data-nosnippet>122</a>        <span class="kw">let </span>seg_id = active.id();
 <a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">let </span>offsets = active.append_batch(cells)<span class="question-mark">?</span>;
 <a href=#124 id=124 data-nosnippet>124</a>
@@ -200,15 +200,18 @@
 <a href=#165 id=165 data-nosnippet>165</a>            <span class="self">self</span>.segments.last().is_some_and(|s| s.size() &gt;= <span class="self">self</span>.segment_size_threshold);
 <a href=#166 id=166 data-nosnippet>166</a>
 <a href=#167 id=167 data-nosnippet>167</a>        <span class="kw">if </span>needs_rollover {
-<a href=#168 id=168 data-nosnippet>168</a>            <span class="kw">let </span>new_id = <span class="self">self</span>.segments.last().unwrap().id() + <span class="number">1</span>;
-<a href=#169 id=169 data-nosnippet>169</a>            <span class="kw">let </span>new_segment = Segment::create(<span class="kw-2">&amp;</span><span class="self">self</span>.dir, new_id)<span class="question-mark">?</span>;
-<a href=#170 id=170 data-nosnippet>170</a>            <span class="self">self</span>.segments.push(new_segment);
-<a href=#171 id=171 data-nosnippet>171</a>        }
-<a href=#172 id=172 data-nosnippet>172</a>        <span class="prelude-val">Ok</span>(())
-<a href=#173 id=173 data-nosnippet>173</a>    }
-<a href=#174 id=174 data-nosnippet>174</a>
-<a href=#175 id=175 data-nosnippet>175</a>    <span class="kw">fn </span>active_segment_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Segment {
-<a href=#176 id=176 data-nosnippet>176</a>        <span class="self">self</span>.segments.last_mut().expect(<span class="string">"pool always has at least one segment"</span>)
-<a href=#177 id=177 data-nosnippet>177</a>    }
-<a href=#178 id=178 data-nosnippet>178</a>}
+<a href=#168 id=168 data-nosnippet>168</a>            <span class="kw">let </span>last = <span class="self">self</span>.segments.last().ok_or(TardigradeError::SegmentFull { path: <span class="self">self</span>.dir.display().to_string() })<span class="question-mark">?</span>;
+<a href=#169 id=169 data-nosnippet>169</a>            <span class="kw">let </span>new_id = last.id() + <span class="number">1</span>;
+<a href=#170 id=170 data-nosnippet>170</a>            <span class="kw">let </span>new_segment = Segment::create(<span class="kw-2">&amp;</span><span class="self">self</span>.dir, new_id)<span class="question-mark">?</span>;
+<a href=#171 id=171 data-nosnippet>171</a>            <span class="self">self</span>.segments.push(new_segment);
+<a href=#172 id=172 data-nosnippet>172</a>        }
+<a href=#173 id=173 data-nosnippet>173</a>        <span class="prelude-val">Ok</span>(())
+<a href=#174 id=174 data-nosnippet>174</a>    }
+<a href=#175 id=175 data-nosnippet>175</a>
+<a href=#176 id=176 data-nosnippet>176</a>    <span class="kw">fn </span>active_segment_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;mut </span>Segment&gt; {
+<a href=#177 id=177 data-nosnippet>177</a>        <span class="self">self</span>.segments
+<a href=#178 id=178 data-nosnippet>178</a>            .last_mut()
+<a href=#179 id=179 data-nosnippet>179</a>            .ok_or(TardigradeError::SegmentFull { path: <span class="self">self</span>.dir.display().to_string() })
+<a href=#180 id=180 data-nosnippet>180</a>    }
+<a href=#181 id=181 data-nosnippet>181</a>}
 </code></pre></div></section></main></body></html>
