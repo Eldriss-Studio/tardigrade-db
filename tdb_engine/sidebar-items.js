@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["EdgeType"],"mod":["engine","maintenance","pack_directory","pack_materialization","scheduler"]};
+window.SIDEBAR_ITEMS = {"enum":["EdgeType"],"mod":["encoding","engine","maintenance","pack_directory","pack_materialization","scheduler"]};
