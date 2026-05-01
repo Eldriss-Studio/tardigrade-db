@@ -41,8 +41,10 @@ def store_memories(engine, hook, model, tokenizer, query_layer, count):
     distractors = generate_distractors(distractor_count) if distractor_count > 0 else []
     all_memories = list(MEMORIES[:signal_count]) + distractors
 
+    device = next(model.parameters()).device
     for memory in all_memories:
         inputs = tokenizer(memory, return_tensors="pt", truncation=True, max_length=256)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         with torch.no_grad():
             out = model(**inputs, use_cache=True, output_hidden_states=True)
         d = hook.on_generate(
@@ -56,6 +58,7 @@ def store_memories(engine, hook, model, tokenizer, query_layer, count):
 
 def query_workload(engine, hook, model, tokenizer, query_layer):
     """Run the standard 30-query workload, return (latencies, recall_at_5)."""
+    device = next(model.parameters()).device
     latencies = []
     hits = 0
     total = 0
@@ -68,6 +71,7 @@ def query_workload(engine, hook, model, tokenizer, query_layer):
 
         total += 1
         inputs = tokenizer(query_text, return_tensors="pt", truncation=True, max_length=256)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         with torch.no_grad():
             out = model(**inputs, use_cache=True, output_hidden_states=True)
 
@@ -131,12 +135,13 @@ def main():
     print(f"Scale points: {counts}")
     print("=" * 70)
 
-    print(f"\n  Loading {MODEL_NAME}...", end=" ", flush=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"\n  Loading {MODEL_NAME} on {device}...", end=" ", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME, dtype=torch.float32, attn_implementation="eager",
     )
-    model.eval()
+    model.to(device).eval()
     n_layers = model.config.num_hidden_layers
     query_layer = int(n_layers * 0.67)
     print(f"OK ({n_layers}L, query_layer={query_layer})")

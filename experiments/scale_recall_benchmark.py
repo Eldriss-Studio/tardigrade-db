@@ -90,9 +90,11 @@ def run_scale_point(model, tokenizer, hook, query_layer, count: int) -> dict:
 
     all_memories = list(MEMORIES[:signal_count]) + distractors
 
+    device = next(model.parameters()).device
     t0 = time.time()
     for i, memory in enumerate(all_memories):
         inputs = tokenizer(memory, return_tensors="pt", truncation=True, max_length=256)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         with torch.no_grad():
             out = model(**inputs, use_cache=True, output_hidden_states=True)
         d = hook.on_generate(
@@ -117,6 +119,7 @@ def run_scale_point(model, tokenizer, hook, query_layer, count: int) -> dict:
 
         total_queries += 1
         inputs = tokenizer(query_text, return_tensors="pt", truncation=True, max_length=256)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         with torch.no_grad():
             out = model(**inputs, use_cache=True, output_hidden_states=True)
 
@@ -175,11 +178,13 @@ def main():
     print(f"Scale points: {counts}")
     print("=" * 70)
 
-    print(f"\n  Loading {MODEL_NAME}...", end=" ", flush=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"\n  Loading {MODEL_NAME} on {device}...", end=" ", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME, dtype=torch.float32, attn_implementation="eager",
     )
+    model.to(device)
     model.eval()
     n_layers = model.config.num_hidden_layers
     query_layer = int(n_layers * 0.67)
