@@ -3456,3 +3456,138 @@ fn test_flush_guarantees_durability() {
     let engine = Engine::open(dir.path()).unwrap();
     assert_eq!(engine.pack_count(), 1, "flushed pack must survive reopen");
 }
+
+// ── Background Maintenance (P5) ──────────────────────────────────────────
+
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tdb_engine::maintenance::{MaintenanceConfig, MaintenanceWorker};
+
+const MAINTENANCE_FAST_INTERVAL: Duration = Duration::from_millis(50);
+const MAINTENANCE_AGGRESSIVE_DECAY: f32 = 24.0;
+
+fn maintenance_test_engine(dir: &std::path::Path) -> Arc<Mutex<Engine>> {
+    let engine = Engine::open_with_segment_size(dir, 512).unwrap();
+    Arc::new(Mutex::new(engine))
+}
+
+/// ATDD: Maintenance worker runs governance sweep on schedule.
+#[test]
+fn test_maintenance_runs_sweep() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = maintenance_test_engine(dir.path());
+
+    {
+        let mut eng = engine.lock().unwrap();
+        for i in 0..5u64 {
+            let key = encode_per_token_keys(&[&[i as f32 + 1.0, 0.0, 0.0, 0.0]]);
+            eng.mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+                salience: 50.0,
+                text: None,
+            })
+            .unwrap();
+        }
+    }
+
+    let config = MaintenanceConfig {
+        sweep_interval: MAINTENANCE_FAST_INTERVAL,
+        compaction_interval: Duration::from_secs(9999),
+        eviction_threshold: DEFAULT_EVICTION_THRESHOLD,
+        hours_per_tick: MAINTENANCE_AGGRESSIVE_DECAY,
+        enabled: true,
+    };
+
+    let mut worker = MaintenanceWorker::new(config);
+    worker.start(Arc::clone(&engine));
+    std::thread::sleep(Duration::from_millis(300));
+    worker.stop();
+
+    let status = worker.status();
+    assert!(status.sweep_count >= 2, "expected at least 2 sweeps, got {}", status.sweep_count);
+}
+
+/// ATDD: Maintenance worker evicts low-importance Draft packs.
+#[test]
+fn test_maintenance_evicts_drafts() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = maintenance_test_engine(dir.path());
+
+    {
+        let mut eng = engine.lock().unwrap();
+        for i in 0..3u64 {
+            let key = encode_per_token_keys(&[&[i as f32 + 1.0, 0.0, 0.0, 0.0]]);
+            eng.mem_write_pack(&KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+                salience: 10.0,
+                text: None,
+            })
+            .unwrap();
+        }
+    }
+
+    let config = MaintenanceConfig {
+        sweep_interval: MAINTENANCE_FAST_INTERVAL,
+        compaction_interval: Duration::from_secs(9999),
+        eviction_threshold: 14.0,
+        hours_per_tick: 720.0, // 30 days per tick — one tick drives importance near zero
+        enabled: true,
+    };
+
+    let mut worker = MaintenanceWorker::new(config);
+    worker.start(Arc::clone(&engine));
+    std::thread::sleep(Duration::from_millis(500));
+    worker.stop();
+
+    let status = worker.status();
+    assert!(status.total_packs_evicted > 0, "should have evicted at least one pack");
+    let remaining = engine.lock().unwrap().pack_count();
+    assert!(remaining < 3, "some packs should have been evicted, got {remaining}");
+}
+
+/// ATDD: Maintenance worker stops gracefully.
+#[test]
+fn test_maintenance_stops_gracefully() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = maintenance_test_engine(dir.path());
+
+    let mut worker = MaintenanceWorker::new(MaintenanceConfig {
+        sweep_interval: MAINTENANCE_FAST_INTERVAL,
+        enabled: true,
+        ..MaintenanceConfig::default()
+    });
+
+    worker.start(Arc::clone(&engine));
+    assert!(worker.is_running());
+
+    worker.stop();
+    assert!(!worker.is_running());
+}
+
+/// ATDD: Disabled worker is a no-op.
+#[test]
+fn test_maintenance_disabled_noop() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = maintenance_test_engine(dir.path());
+
+    let mut worker = MaintenanceWorker::new(MaintenanceConfig {
+        enabled: false,
+        ..MaintenanceConfig::default()
+    });
+
+    worker.start(Arc::clone(&engine));
+    std::thread::sleep(Duration::from_millis(200));
+    worker.stop();
+
+    let status = worker.status();
+    assert_eq!(status.sweep_count, 0);
+    assert_eq!(status.compaction_count, 0);
+}
+
+use tdb_engine::maintenance::DEFAULT_EVICTION_THRESHOLD;
