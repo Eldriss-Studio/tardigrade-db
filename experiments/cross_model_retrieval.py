@@ -34,7 +34,19 @@ Training data scaling (run 2026-04-29):
   Per-token projection overfits cross-family (regresses to 10%).
 
   Same-family + per-token linear projection is a viable cross-model path.
-  Cross-family remains model-specific without deeper alignment.
+
+Cross-family deep dive (run 2026-04-29):
+  Orthogonal Procrustes is the best linear approach for cross-family:
+    10 samples: 13.3%  →  100: 36.7%  →  500: 46.7%
+  Plateau around 40-47%. Procrustes (rotation only) has a ceiling for
+  fundamentally different architectures. Layer depth sweep confirms
+  67% depth is optimal. Per-token Procrustes overfits (768 dims, few tokens).
+
+  Best cross-family result: 46.7% R@5 (Qwen3→GPT-2, Procrustes, 500 samples)
+  vs same-model baseline of 96.7%. ~48% recall recovery.
+
+  Next steps for cross-family would require nonlinear alignment (neural
+  fuser as in C2C paper) or contrastive pre-training on shared corpora.
 
 Conditions (100 memories, 30 queries, per-token encoding, skip pos 0):
   A: Qwen3-0.6B → Qwen3-0.6B native (baseline, known 96.7%)
