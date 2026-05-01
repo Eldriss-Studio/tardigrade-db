@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Cross-model retrieval experiment.
+"""Cross-model retrieval experiment — per-token encoding with projection.
 
-Scientific method: test hypotheses, report results, don't assume.
+Controlled Experiment (Isolation of Variables):
+Each condition isolates one variable while holding the per-token
+encoding path constant. We only vary projection and model source.
 
 Hypotheses:
-  H1: Same-model retrieval via HuggingFaceKVHook achieves high recall (baseline)
-  H2: Same-model retrieval via mean-pooled hidden states achieves comparable recall
-  H3: Cross-model retrieval (store model A, query model B) has non-zero recall
-  H4: Projection method affects cross-model recall
+  H1: Per-token encoding still works after dimension projection (same-model)
+  H2: Per-token encoding works cross-model with projected hidden states
+  H3: Projection method matters (truncation vs random orthogonal)
 
-Conditions (all use 100 memories, 30 queries):
-  A: Qwen3→Qwen3 via HuggingFaceKVHook (proven path, baseline)
-  B: Qwen3→Qwen3 via mean-pool hidden states (isolates hook vs raw)
-  C: GPT-2→GPT-2 via mean-pool hidden states (second model baseline)
-  D: Qwen3→GPT-2 via mean-pool + truncation projection (cross-model)
-  E: GPT-2→Qwen3 via mean-pool + zero-pad projection (cross-model)
+Conditions (100 memories, 30 queries, per-token encoding throughout):
+  A: Qwen3→Qwen3 native dim=1024 (baseline, proven 100%)
+  B: Qwen3→Qwen3 truncated to dim=768 (H1: does projection hurt?)
+  C: Qwen3→GPT-2 truncation, dim=768 (H2a: cross-model)
+  D: GPT-2→Qwen3 zero-pad+truncate, dim=768 (H2b: reverse direction)
+  E: Qwen3→Qwen3 random orthogonal to dim=768 (H3: projection method)
+  F: GPT-2→GPT-2 native dim=768 (second model baseline)
 
-Models: Qwen3-0.6B (hidden=1024, 28 layers) + GPT-2 (hidden=768, 12 layers).
-Sequential model loading to avoid OOM.
+Models loaded sequentially to avoid OOM.
 """
 
 import gc
 import shutil
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 import numpy as np
@@ -36,48 +36,13 @@ sys.path.insert(0, str(Path(".").resolve() / "experiments"))
 
 import tardigrade_db
 from corpus_100 import ALL_QUERIES, MEMORIES
-from tardigrade_hooks.hf_kv_hook import HuggingFaceKVHook
+from tardigrade_hooks.encoding import encode_per_token
 
-
-def extract_hidden_state(model, tokenizer, text, query_layer):
-    """Extract mean-pooled hidden state from a specific layer."""
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
-    with torch.no_grad():
-        out = model(**inputs, output_hidden_states=True)
-    hs = out.hidden_states[query_layer]
-    return hs[0].mean(dim=0).numpy().astype(np.float32)
-
-
-def project_to_dim(vec, target_dim):
-    """Project vector to target_dim via truncation or zero-padding."""
-    if len(vec) == target_dim:
-        return vec
-    if len(vec) > target_dim:
-        return vec[:target_dim].copy()
-    padded = np.zeros(target_dim, dtype=np.float32)
-    padded[:len(vec)] = vec
-    return padded
-
-
-def query_recall(engine, query_fn, num_memories):
-    """Run 30-query workload, return recall@5 and hit count."""
-    hits, total = 0, 0
-    for query_text, expected, qtype in ALL_QUERIES:
-        if qtype == "negative":
-            continue
-        if any(e >= num_memories for e in expected):
-            continue
-        total += 1
-        results = query_fn(query_text)
-        top5 = [r.cell_id for r in results[:5]]
-        if any(m in expected for m in top5):
-            hits += 1
-    recall = 100 * hits / total if total else 0
-    return recall, hits, total
+COMMON_DIM = 768
 
 
 def load_model(name):
-    """Load model + tokenizer, return (model, tokenizer, num_layers, query_layer, hidden_dim)."""
+    """Load model, return (model, tokenizer, query_layer, hidden_dim). Caller must free."""
     tokenizer = AutoTokenizer.from_pretrained(name)
     model = AutoModelForCausalLM.from_pretrained(
         name, dtype=torch.float32, attn_implementation="eager",
@@ -86,86 +51,107 @@ def load_model(name):
     n_layers = model.config.num_hidden_layers
     ql = int(n_layers * 0.67)
     hidden = model.config.hidden_size
-    return model, tokenizer, n_layers, ql, hidden
+    print(f"  Loaded {name} ({n_layers}L, ql={ql}, dim={hidden})")
+    return model, tokenizer, ql, hidden
 
 
-def free_model(*objs):
-    for o in objs:
-        del o
+def free_model(model, tokenizer):
+    del model, tokenizer
     gc.collect()
 
 
-def run_condition_hook(model_name):
-    """Condition A: Full HuggingFaceKVHook pipeline (proven 100% recall path)."""
-    model, tokenizer, n_layers, ql, hidden = load_model(model_name)
-    db_dir = tempfile.mkdtemp(prefix="tdb_xm_hook_")
-    engine = tardigrade_db.Engine(db_dir)
-    hook = HuggingFaceKVHook(engine, owner=1, model_config=model.config,
-                              model=model, use_hidden_states=True)
+def extract_per_token_hidden(model, tokenizer, text, query_layer):
+    """Extract per-token hidden states from a layer, skipping position 0.
 
+    Position 0 is the attention sink token — it dominates dot products
+    and creates gravity wells. The HuggingFaceKVHook skips it (h[1:]).
+    """
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
+    with torch.no_grad():
+        out = model(**inputs, output_hidden_states=True)
+    hs = out.hidden_states[query_layer][0]  # (seq_len, hidden_dim)
+    return hs[1:].numpy().astype(np.float32)  # skip position 0
+
+
+def make_random_orthogonal_projection(dim_out, dim_in, seed=42):
+    """Random orthogonal projection matrix (dim_out, dim_in). Preserves distances approximately."""
+    rng = np.random.default_rng(seed)
+    raw = rng.standard_normal((dim_out, dim_in)).astype(np.float32)
+    u, _, vt = np.linalg.svd(raw, full_matrices=False)
+    return u @ vt  # (dim_out, dim_in), orthonormal rows
+
+
+def project(token_vecs, projection):
+    """Project (seq_len, dim_in) → (seq_len, dim_out) via matrix multiply."""
+    if projection is None:
+        return token_vecs
+    return (token_vecs @ projection.T).astype(np.float32)
+
+
+def truncate_to_dim(token_vecs, target_dim):
+    """Truncate or zero-pad (seq_len, dim) to (seq_len, target_dim)."""
+    _, dim = token_vecs.shape
+    if dim == target_dim:
+        return token_vecs
+    if dim > target_dim:
+        return token_vecs[:, :target_dim].copy()
+    padded = np.zeros((token_vecs.shape[0], target_dim), dtype=np.float32)
+    padded[:, :dim] = token_vecs
+    return padded
+
+
+def store_memories(model, tokenizer, ql, engine, dim_transform):
+    """Store 100 memories with per-token encoding. dim_transform: fn(token_vecs) → token_vecs."""
     for memory in MEMORIES:
-        inputs = tokenizer(memory, return_tensors="pt", truncation=True, max_length=256)
-        with torch.no_grad():
-            out = model(**inputs, use_cache=True, output_hidden_states=True)
-        d = hook.on_generate(layer=ql, past_key_values=out.past_key_values,
-                             model_hidden_states=out.hidden_states[ql])
-        if d.should_write:
-            engine.mem_write(1, ql, d.key, d.value, d.salience, None)
+        tokens = extract_per_token_hidden(model, tokenizer, memory, ql)
+        tokens = dim_transform(tokens)
+        key = encode_per_token(tokens, tokens.shape[1])
+        value = np.zeros(tokens.shape[1], dtype=np.float32)
+        engine.mem_write(1, 0, key, value, 50.0, None)
 
-    def query_fn(text):
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
-        with torch.no_grad():
-            out = model(**inputs, use_cache=True, output_hidden_states=True)
-        return hook.on_prefill(layer=ql, past_key_values=out.past_key_values,
-                               model_hidden_states=out.hidden_states[ql])
 
-    recall, hits, total = query_recall(engine, query_fn, len(MEMORIES))
-    shutil.rmtree(db_dir)
-    free_model(model, tokenizer, hook)
+def query_recall(model, tokenizer, ql, engine, dim_transform):
+    """Run 30 queries with per-token encoding, return (R@5, hits, total)."""
+    hits, total = 0, 0
+    for query_text, expected, qtype in ALL_QUERIES:
+        if qtype == "negative":
+            continue
+        if any(e >= len(MEMORIES) for e in expected):
+            continue
+        total += 1
+        tokens = extract_per_token_hidden(model, tokenizer, query_text, ql)
+        tokens = dim_transform(tokens)
+        key = encode_per_token(tokens, tokens.shape[1])
+        results = engine.mem_read(key, 5, None)
+        top5 = [r.cell_id for r in results[:5]]
+        if any(m in expected for m in top5):
+            hits += 1
+    recall = 100 * hits / total if total else 0
     return recall, hits, total
 
 
-def run_condition_meanpool(store_name, query_name, common_dim=None):
-    """Conditions B-E: Mean-pool hidden states, optional dimension projection."""
-    same_model = store_name == query_name
+def run_condition(label, store_model_name, query_model_name,
+                  store_transform, query_transform):
+    """Run one condition: load models sequentially, store, query, report."""
+    print(f"\n--- {label} ---")
 
-    # Phase 1: Store
-    model, tokenizer, _, ql, hidden = load_model(store_name)
-    store_dim = hidden
-
-    if common_dim is None:
-        if same_model:
-            common_dim = store_dim
-        else:
-            from transformers import AutoConfig
-            query_cfg = AutoConfig.from_pretrained(query_name)
-            common_dim = min(store_dim, query_cfg.hidden_size)
-
-    db_dir = tempfile.mkdtemp(prefix="tdb_xm_mp_")
+    # Store phase
+    model, tokenizer, ql, _ = load_model(store_model_name)
+    db_dir = tempfile.mkdtemp(prefix="tdb_xm_pt_")
     engine = tardigrade_db.Engine(db_dir)
+    store_memories(model, tokenizer, ql, engine, store_transform)
+    print(f"  Stored {engine.cell_count()} memories")
 
-    for memory in MEMORIES:
-        hs = extract_hidden_state(model, tokenizer, memory, ql)
-        key = project_to_dim(hs, common_dim)
-        engine.mem_write(1, 0, key, np.zeros_like(key), 50.0, None)
-
-    if not same_model:
+    same = store_model_name == query_model_name
+    if not same:
         free_model(model, tokenizer)
+        model, tokenizer, ql, _ = load_model(query_model_name)
 
-    # Phase 2: Query
-    if same_model:
-        q_model, q_tok, q_ql = model, tokenizer, ql
-    else:
-        q_model, q_tok, _, q_ql, _ = load_model(query_name)
+    recall, hits, total = query_recall(model, tokenizer, ql, engine, query_transform)
+    print(f"  Recall@5: {recall:.1f}% ({hits}/{total})")
 
-    def query_fn(text):
-        hs = extract_hidden_state(q_model, q_tok, text, q_ql)
-        qk = project_to_dim(hs, common_dim)
-        return engine.mem_read(qk, 5, None)
-
-    recall, hits, total = query_recall(engine, query_fn, len(MEMORIES))
+    free_model(model, tokenizer)
     shutil.rmtree(db_dir)
-    free_model(q_model, q_tok)
     return recall, hits, total
 
 
@@ -173,79 +159,80 @@ def main():
     qwen = "Qwen/Qwen3-0.6B"
     gpt2 = "openai-community/gpt2"
 
+    ortho_proj = make_random_orthogonal_projection(COMMON_DIM, 1024)
+
+    identity = lambda t: t
+    trunc_768 = lambda t: truncate_to_dim(t, COMMON_DIM)
+    ortho_768 = lambda t: project(t, ortho_proj)
+
     print("=" * 70)
-    print("CROSS-MODEL RETRIEVAL EXPERIMENT")
-    print(f"Memories: {len(MEMORIES)}, Queries: 30")
-    print(f"Models: Qwen3-0.6B (1024-dim) + GPT-2 (768-dim)")
+    print("CROSS-MODEL RETRIEVAL: Per-Token Encoding + Projection")
+    print(f"Memories: {len(MEMORIES)}, Queries: 30, Common dim: {COMMON_DIM}")
     print("=" * 70)
 
     results = {}
 
-    # Condition A: Qwen3→Qwen3 via hook (proven path)
-    print("\n--- A: Qwen3→Qwen3 via HuggingFaceKVHook (baseline) ---")
-    r, h, t = run_condition_hook(qwen)
+    # A: Qwen3→Qwen3 native (baseline)
+    r, _, _ = run_condition("A: Qwen3→Qwen3 native dim=1024 (baseline)",
+                            qwen, qwen, identity, identity)
     results["A"] = r
-    print(f"  Recall@5: {r:.1f}% ({h}/{t})")
 
-    # Condition B: Qwen3→Qwen3 via mean-pool (isolate hook effect)
-    print("\n--- B: Qwen3→Qwen3 via mean-pool (raw hidden states) ---")
-    r, h, t = run_condition_meanpool(qwen, qwen)
+    # B: Qwen3→Qwen3 truncated to 768 (H1: projection effect)
+    r, _, _ = run_condition("B: Qwen3→Qwen3 truncated to 768 (H1)",
+                            qwen, qwen, trunc_768, trunc_768)
     results["B"] = r
-    print(f"  Recall@5: {r:.1f}% ({h}/{t})")
 
-    # Condition C: GPT-2→GPT-2 via mean-pool (second model baseline)
-    print("\n--- C: GPT-2→GPT-2 via mean-pool ---")
-    r, h, t = run_condition_meanpool(gpt2, gpt2)
+    # C: Qwen3→GPT-2, Qwen truncated to 768, GPT-2 native 768 (H2a)
+    r, _, _ = run_condition("C: Qwen3→GPT-2 (H2a: cross-model, truncation)",
+                            qwen, gpt2, trunc_768, identity)
     results["C"] = r
-    print(f"  Recall@5: {r:.1f}% ({h}/{t})")
 
-    # Condition D: Qwen3→GPT-2 via mean-pool + truncation (cross-model)
-    print("\n--- D: Qwen3→GPT-2 (cross, truncation to 768) ---")
-    r, h, t = run_condition_meanpool(qwen, gpt2, common_dim=768)
+    # D: GPT-2→Qwen3, GPT-2 native 768, Qwen truncated to 768 (H2b)
+    r, _, _ = run_condition("D: GPT-2→Qwen3 (H2b: cross-model, reverse)",
+                            gpt2, qwen, identity, trunc_768)
     results["D"] = r
-    print(f"  Recall@5: {r:.1f}% ({h}/{t})")
 
-    # Condition E: GPT-2→Qwen3 via mean-pool + zero-pad (cross-model)
-    print("\n--- E: GPT-2→Qwen3 (cross, zero-pad to 768) ---")
-    r, h, t = run_condition_meanpool(gpt2, qwen, common_dim=768)
+    # E: Qwen3→Qwen3 random orthogonal to 768 (H3: projection method)
+    r, _, _ = run_condition("E: Qwen3→Qwen3 ortho projection to 768 (H3)",
+                            qwen, qwen, ortho_768, ortho_768)
     results["E"] = r
-    print(f"  Recall@5: {r:.1f}% ({h}/{t})")
+
+    # F: GPT-2→GPT-2 native (second model baseline)
+    r, _, _ = run_condition("F: GPT-2→GPT-2 native dim=768 (baseline)",
+                            gpt2, gpt2, identity, identity)
+    results["F"] = r
 
     # Summary
     print(f"\n{'=' * 70}")
     print(f"  RESULTS")
     print(f"{'=' * 70}")
+    labels = {
+        "A": "Qwen3→Qwen3 native 1024 (baseline)",
+        "B": "Qwen3→Qwen3 truncated 768 (H1: projection)",
+        "C": "Qwen3→GPT-2 truncation (H2a: cross-model)",
+        "D": "GPT-2→Qwen3 truncation (H2b: reverse)",
+        "E": "Qwen3→Qwen3 ortho 768 (H3: projection method)",
+        "F": "GPT-2→GPT-2 native 768 (baseline)",
+    }
     print(f"  {'Condition':<50} {'R@5':>8}")
     print(f"  {'─' * 60}")
-    labels = {
-        "A": "Qwen3→Qwen3 hook (per-token, baseline)",
-        "B": "Qwen3→Qwen3 mean-pool (raw hidden states)",
-        "C": "GPT-2→GPT-2 mean-pool",
-        "D": "Qwen3→GPT-2 cross (truncation)",
-        "E": "GPT-2→Qwen3 cross (zero-pad)",
-    }
-    for k in "ABCDE":
+    for k in "ABCDEF":
         print(f"  {labels[k]:<50} {results[k]:>7.1f}%")
 
     # Analysis
-    print(f"\n  ANALYSIS:")
-    print(f"  Hook vs mean-pool (A vs B): {results['A'] - results['B']:+.1f}% "
-          f"({'hook wins' if results['A'] > results['B'] else 'mean-pool competitive'})")
+    print(f"\n  HYPOTHESIS TESTS:")
+    print(f"  H1 (projection hurts?): A={results['A']:.0f}% → B={results['B']:.0f}% "
+          f"(Δ={results['B']-results['A']:+.0f}%)")
+    print(f"  H2a (cross Qwen→GPT2): C={results['C']:.0f}%")
+    print(f"  H2b (cross GPT2→Qwen): D={results['D']:.0f}%")
+    print(f"  H3 (ortho vs trunc):   E={results['E']:.0f}% vs B={results['B']:.0f}% "
+          f"(Δ={results['E']-results['B']:+.0f}%)")
+    print(f"  Baselines: Qwen={results['A']:.0f}%, GPT-2={results['F']:.0f}%")
 
-    same_model_avg = (results["B"] + results["C"]) / 2
-    cross_model_avg = (results["D"] + results["E"]) / 2
-    print(f"  Same-model mean-pool avg: {same_model_avg:.1f}%")
-    print(f"  Cross-model avg:          {cross_model_avg:.1f}%")
-    print(f"  Cross-model drop:         {same_model_avg - cross_model_avg:+.1f}%")
-
-    if cross_model_avg >= same_model_avg * 0.7:
-        verdict = "VIABLE — cross-model within 30% of same-model baseline"
-    elif cross_model_avg > 0:
-        verdict = "WEAK — non-zero cross-model signal but significant degradation"
-    else:
-        verdict = "NONE — no cross-model retrieval, model-specific only"
-
-    print(f"\n  VERDICT: {verdict}")
+    cross_avg = (results["C"] + results["D"]) / 2
+    same_avg = (results["A"] + results["F"]) / 2
+    print(f"\n  Same-model avg (native): {same_avg:.1f}%")
+    print(f"  Cross-model avg:         {cross_avg:.1f}%")
     print(f"{'=' * 70}")
 
 
