@@ -247,7 +247,8 @@ Automated governance sweep (decay + eviction) and segment compaction via a backg
 |---------|----------|------------|
 | **KV injection transfers novel knowledge** | 9/10 synthetic gibberish facts recalled on Qwen3-0.6B, matching text RAG | High — nonsense strings can only come from injected KV |
 | **Per-token Top5Avg retrieval works at scale** | 100% R@5 at 5,000 memories, no gravity well, no degradation (100→500→1K→2K→5K all 100%) | High — 30 queries per scale point, clean scaling curve |
-| **Vamana acceleration works** | 1.44x latency speedup at 1K memories with zero recall loss | High — Criterion benchmarked |
+| **Vamana acceleration works on CPU** | 1.44x latency speedup at 1K memories (CPU) with zero recall loss. On GPU, only 1.05x at 5K — model inference dominates, engine scan is no longer the bottleneck. | High — Criterion + end-to-end benchmarks |
+| **Model inference is the latency bottleneck on GPU** | At 5K memories on GPU (RTX 3070 Ti), latency is ~3.2s and barely changes from 2K→5K. The engine retrieval pipeline finishes in milliseconds; the model forward pass for query encoding takes seconds. Vamana speedup disappears because there's nothing left to speed up on the engine side. | High — GPU latency benchmark, 2K vs 5K near-identical |
 | **Q4 quantization preserves retrieval** | 89% of injection quality preserved through Q4 pipeline | High — measured in injection results |
 | **Mean-pooling is broken for retrieval** | 10% same-model recall (vs 100% per-token) | High — repeated across models |
 | **Position 0 must be skipped** | Including attention sink drops recall from 96.7% to 3.3% | High — immediate, reproducible |
@@ -272,7 +273,7 @@ Automated governance sweep (decay + eviction) and segment compaction via a backg
 |-----------|---------------|-----------------|
 | ~~**Vague queries**~~ | **TESTED** — see Proven table above. 46% R@5 for non-specific queries. The cliff is vocabulary overlap, not vagueness. Retrieval needs augmentation (context signals, domain priors, re-ranking) for vague queries. | — |
 | ~~**RoPE injection**~~ | **TESTED** — 5/5 synthetic gibberish facts on Qwen3-0.6B (RoPE model) with current KnowledgePackStore pipeline. Bare model: 0/5. KV injection: 5/5. RoPE is handled correctly by HuggingFace's `generate()` auto-position-ID offsetting. See Proven table. | — |
-| **Scale beyond 5K** | Proven at 5K memories (100% R@5). Untested at 10K, 100K. Latency is linear without Vamana (4.5s at 5K). Vamana latency benchmark at 5K pending. | The "database" claim would benefit from 10K+ validation. |
+| **Scale beyond 5K** | Proven at 5K memories (100% R@5). Untested at 10K, 100K. On GPU, latency plateaus at ~3.2s regardless of memory count (model inference dominates). Engine scan is not the bottleneck. | Lower risk than expected — engine scales, model inference is the ceiling. |
 
 #### Medium priority — improves quality and trust
 
@@ -310,7 +311,7 @@ Automated governance sweep (decay + eviction) and segment compaction via a backg
 | [P2+P3: Production & Differentiators](p2-p3-production-and-differentiators.md) | Complete |
 | [SGLang Investigation](sglang-investigation.md) | Complete — NOT VIABLE |
 | Scale recall benchmark (100→5K memories) | Complete — 100% R@5 at 5K, no degradation |
-| Latency benchmark (Vamana vs brute-force) | Complete — 1.44x speedup |
+| Latency benchmark (Vamana vs brute-force) | Complete — CPU: 1.44x speedup. GPU: 1.05x (model inference dominates) |
 | Cross-model retrieval (same-family + cross-family) | Complete — 90% same-family, 77% cross-family with MLP |
 | vLLM connector — semantic save | Complete |
 | vLLM cross-session retrieval | Complete |
