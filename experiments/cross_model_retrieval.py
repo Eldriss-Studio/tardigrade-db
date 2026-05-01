@@ -27,6 +27,15 @@ Follow-up diagnostic:
   Cross-model is NOT a fundamental impossibility — it's a coordinate
   system mismatch solvable with learned projections.
 
+Training data scaling (run 2026-04-29):
+  Same-family (Qwen3-0.6B → 1.7B) with per-token projection (2433 tokens):
+    90.0% R@5 — near baseline (96.7%) with zero model modification.
+  Cross-family (Qwen3 → GPT-2) caps at ~23% with mean-pool projection.
+  Per-token projection overfits cross-family (regresses to 10%).
+
+  Same-family + per-token linear projection is a viable cross-model path.
+  Cross-family remains model-specific without deeper alignment.
+
 Conditions (100 memories, 30 queries, per-token encoding, skip pos 0):
   A: Qwen3-0.6B → Qwen3-0.6B native (baseline, known 96.7%)
   B: Qwen3-1.7B → Qwen3-1.7B native (H1 control)
