@@ -210,25 +210,81 @@ SGLang's RadixAttention architecture is strictly prefix-based (same as vLLM v1).
 
 **Implication:** Path 1 (HuggingFace direct injection) remains the only working approach for zero-token KV injection. Path 2 (memory prefix) works for production serving. Path 3 (SGLang) is closed. Path 4 (custom attention plugin) is the only remaining theoretical option.
 
-## Planned Experiments
+## Research Status — What's Proven, What's Not
 
-| Experiment | Goal | Status |
-|-----------|------|--------|
-| **[Synthetic-fact KV injection](synthetic-kv-injection.md)** | Does KV injection transfer knowledge the model has never seen? | **Complete — PASS: 9/10, 100% recall ratio vs text RAG** |
-| **[Memory prefix adapter](memory-prefix-adapter.md)** | Governed memory → deterministic text prefix for vLLM prefix-cache | **Complete — 4/4 GPU tests passing on vLLM 0.19.1** |
-| **100-memory scale test** | Does Q*K retrieval hold at realistic memory counts? | **Complete — 40% recall, needs scoring improvements** |
-| **Traditional RAG baseline** | Compare current Q*K retrieval against standard embedding retrieval | **Complete — RAG got 100% recall on this corpus** |
-| **Hidden states + top5_pair_avg validation** | Validate 100% recall path through engine pipeline | **Complete — 30/30 recall, all rank #1, 97ms latency** |
-| **False positive calibration** | Reduce 10% negFP rate via score thresholding | Planned |
-| GQA K-expansion | Expand K heads to match Q dims for Q*K retrieval | Complete |
-| Per-head scoring | Score per attention head instead of concatenating all heads | Planned |
-| Multi-session memory | Cross-day retrieval ("what happened last week") | Planned |
-| Adversarial retrieval | Contradictory memories, test which surfaces | Planned |
-| Confidence thresholding | Calibrate "I don't remember" cutoff using SNR | Planned |
-| [Cross-model retrieval](cross-model-memory-test.md) | Store with one model, retrieve with another | **Complete — weak but non-zero cross-model signal (25% avg vs 33.3% baseline). Model-specific by default; learned projection needed for portability.** |
-| RoPE injection | Test KV injection with rotary position encoding | Planned |
-| **vLLM connector — semantic save** | Thread per-request `slot_mapping` from `attn_metadata` so save captures the request's actual blocks (not placeholder block 0). Validate that re-querying the same prompt returns the stored KV with non-zero overlap. | **Complete — `RequestSlotResolver` extracts per-request blocks; retrieval key asymmetry resolved (save/load both use `compute_for_save` in same retrieval-key space)** |
-| **vLLM cross-session retrieval** | Save with vLLM run #1, restart, query with vLLM run #2. Confirm load path injects the prior session's KV and `start_load_kv` writes non-zero data into the allocated GPU block slots. | **Complete — validated with `Engine.refresh()` + `test_vllm_cross_session.py` (1 GPU test)** |
+### Proven (tested with data)
+
+| Finding | Evidence | Confidence |
+|---------|----------|------------|
+| **KV injection transfers novel knowledge** | 9/10 synthetic gibberish facts recalled on Qwen3-0.6B, matching text RAG | High — nonsense strings can only come from injected KV |
+| **Per-token Top5Avg retrieval works at scale** | 100% R@5 at 2,000 memories, no gravity well, no degradation | High — 30 queries, clean scaling curve |
+| **Vamana acceleration works** | 1.44x latency speedup at 1K memories with zero recall loss | High — Criterion benchmarked |
+| **Q4 quantization preserves retrieval** | 89% of injection quality preserved through Q4 pipeline | High — measured in injection results |
+| **Mean-pooling is broken for retrieval** | 10% same-model recall (vs 100% per-token) | High — repeated across models |
+| **Position 0 must be skipped** | Including attention sink drops recall from 96.7% to 3.3% | High — immediate, reproducible |
+| **Same-family cross-model works** | 90% R@5 via per-token linear projection (Qwen3-0.6B → 1.7B) | High — closed-form, no training loop |
+| **Cross-family cross-model is viable** | 76.7% R@5 via MLP adapter (Qwen3 → GPT-2, 400K params) | Medium — single corpus, single model pair |
+| **Dimension projection is free** | Truncation and orthogonal projection have zero recall cost same-model | High — tested truncation + random orthogonal |
+| **Energy distribution differs across model sizes** | Qwen3-0.6B: 71% energy in first quarter; 1.7B: 52% in last quarter | High — direct measurement |
+| **Linear alignment has a ceiling** | Procrustes plateaus at ~47% cross-family (500 training samples) | High — scaling curve flattens |
+| **vLLM v1 is prefix-cache only** | No mechanism for cross-prompt KV injection in the API | High — traced scheduler code + synthetic fact test |
+| **Thread-safe concurrent access works** | Arc<Mutex<Engine>> with GIL release, 4 ATDD tests pass | High |
+| **Crash recovery works** | Truncated segment + truncated WAL both recover cleanly | High — acceptance tests |
+
+### Not Yet Tested (roads untravelled)
+
+#### Highest priority — determines real-world viability
+
+| Experiment | Why it matters | Risk if untested |
+|-----------|---------------|-----------------|
+| **Vague queries** | Every test uses specific vocabulary ("What did Sonia translate for the pharma company?"). Real agents ask vague questions ("How is work going?"). Zero data on whether retrieval works with vague queries. | We might have 100% recall on benchmarks but 20% on real usage. This is the biggest unknown. |
+| **RoPE injection** | All production models (Llama, Qwen, Mistral) use rotary position encoding. KV tensors encode position via RoPE. Injecting KV from position N into position M breaks attention if RoPE isn't handled. | KV injection might not work at all on production models without RoPE decoupling. The HF direct path bypasses this by injecting into a fresh context, but that's a workaround. |
+| **Scale beyond 2K** | Proven at 2K memories. Untested at 10K, 100K. Latency is linear (3s at 2K). At 100K it would be ~150s per query without acceleration. Does Vamana's 1.44x scale, or plateau? | The "database" claim requires at least 10K-memory validation. |
+
+#### Medium priority — improves quality and trust
+
+| Experiment | Why it matters |
+|-----------|---------------|
+| **Adversarial retrieval** | What happens with contradictory memories? ("Meeting at 3pm" vs "Meeting moved to 5pm"). Does governance (recency decay, importance) surface the right one? |
+| **Confidence thresholding** | When should the engine say "I don't remember"? 10% false positive rate was measured but never addressed. No calibrated threshold exists. |
+| **Multi-session memory** | "What happened last week?" requires temporal awareness. Engine stores timestamps but scoring ignores time entirely. |
+| **Cross-model KV injection** | We proved cross-model *retrieval* (finding memories). Never tested cross-model *injection* (putting Qwen's K/V tensors into GPT-2's attention). Retrieval uses hidden states; injection uses K/V projections — different tensors. |
+| **Governance under load** | AKL promotion/demotion/decay is unit-tested. Never tested at scale. With 10K memories and continuous access, does importance scoring create its own gravity wells? |
+| **Storage cost at scale** | How much disk per memory with Q4? Is 100K memories practical on a consumer SSD? Nobody measured. |
+
+#### Lower priority — research directions
+
+| Experiment | Why it matters |
+|-----------|---------------|
+| **Per-head scoring** | Current approach concatenates all attention heads. Per-head scoring might capture different relevance types (syntactic vs semantic). |
+| **False positive calibration** | Score thresholding to reduce 10% negFP rate. |
+| **Model version regression** | Same architecture, different training checkpoint (Qwen3-0.6B v1 vs v2). Do stored memories survive weight updates? Different from cross-model. |
+| **Cross-family with more model pairs** | MLP adapter tested on one pair (Qwen→GPT-2). Does it generalize to Llama→Mistral, etc.? |
+| **Canonical representation space** | Instead of N² adapters, train N adapters to a shared space. Reduces adapter count from quadratic to linear. |
+
+### Completed Experiments Table
+
+| Experiment | Status |
+|-----------|--------|
+| [Two-Agent Memory Cycle](two-agent-memory-test.md) | Complete |
+| [KV Injection Critique & Validation](kv-injection-critique.md) | Complete |
+| [Sonia Parallel Subagent](sonia-subagent-parallel-test.md) | Complete |
+| [vLLM KV Connector](../experiments/README.md#vllm-kv-connector) | Complete |
+| [Path 2: Memory Prefix Adapter](memory-prefix-adapter.md) | Complete |
+| [Path 1: Synthetic-Fact KV Injection](synthetic-kv-injection.md) | Complete — 9/10 |
+| [KV Cache Validation](kv-cache-validation.md) | Complete — 100% recall |
+| [P1: Architectural Unification](p1-architectural-unification.md) | Complete |
+| [P2+P3: Production & Differentiators](p2-p3-production-and-differentiators.md) | Complete |
+| [SGLang Investigation](sglang-investigation.md) | Complete — NOT VIABLE |
+| Scale recall benchmark (100→2K memories) | Complete — 100% R@5 at 2K |
+| Latency benchmark (Vamana vs brute-force) | Complete — 1.44x speedup |
+| Cross-model retrieval (same-family + cross-family) | Complete — 90% same-family, 77% cross-family with MLP |
+| vLLM connector — semantic save | Complete |
+| vLLM cross-session retrieval | Complete |
+| GQA K-expansion | Complete |
+| Hidden states + Top5Avg validation | Complete — 30/30 |
+| 100-memory Q*K scale test | Complete — 40% (superseded by hidden states path) |
+| Traditional RAG baseline | Complete — 100% |
 
 ## Running Experiments
 
