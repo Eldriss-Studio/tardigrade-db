@@ -11,6 +11,22 @@ Hypotheses:
   H3: CCA alignment (SVD-based, no training loop) finds a shared space
       where cross-model dot products are meaningful.
 
+Results (run 2026-04-29):
+  A: Qwen3-0.6B baseline:      100.0%
+  B: Qwen3-1.7B baseline:      100.0%
+  C: Same-family truncation:      0.0%  (energy distribution mismatch)
+  D: GPT-2 baseline:            100.0%
+  E: Cross-family raw:            6.7%
+  F: Cross-family learned proj:  13.3%  (50 training samples)
+  G: Cross-family CCA:            0.0%  (overfits on 50 samples)
+
+Follow-up diagnostic:
+  Same-family learned projection (100 training samples): 43.3%
+  Truncation destroys signal because Qwen3-1.7B has 67% energy in
+  upper dims (1024-2047), opposite of 0.6B (71% in dims 0-255).
+  Cross-model is NOT a fundamental impossibility — it's a coordinate
+  system mismatch solvable with learned projections.
+
 Conditions (100 memories, 30 queries, per-token encoding, skip pos 0):
   A: Qwen3-0.6B → Qwen3-0.6B native (baseline, known 96.7%)
   B: Qwen3-1.7B → Qwen3-1.7B native (H1 control)
