@@ -302,25 +302,14 @@ class KnowledgePackStore:
         h_tokens = hidden[1:].numpy().astype(np.float32)
         query_key = encode_per_token(h_tokens, self.hidden_size)
 
-        # Trace-Boosted Retrieval: Rust handles expanded retrieval,
-        # score boosting by link count, and re-ranking in one call
-        packs = self.engine.mem_read_pack_with_trace_boost(
+        # Trace-Boosted Retrieval with link traversal: single Rust call
+        # handles expanded retrieval, score boosting, re-ranking, and
+        # following trace links to discover related packs.
+        packs = self.engine.mem_read_pack_with_trace_boost_and_follow(
             query_key, k, self.owner, boost_factor
         )
         if not packs:
             return None, query_input, None
-
-        # Follow trace links to discover related packs (via Rust)
-        retrieved_ids = {p["pack_id"] for p in packs}
-        linked_ids = set()
-        for p in packs:
-            linked_ids.update(self.engine.pack_links(p["pack_id"]))
-
-        for pid in linked_ids - retrieved_ids:
-            try:
-                packs.append(self.engine.load_pack_by_id(pid))
-            except Exception:
-                pass  # Pack may have been deleted
 
         cache = composer.compose(
             packs, self.num_kv_heads, self.head_dim, self.kv_dim, self.n_layers

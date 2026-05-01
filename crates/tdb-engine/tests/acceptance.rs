@@ -3705,3 +3705,44 @@ fn test_auto_link_high_threshold_no_links() {
 
     assert!(result.linked_pack_ids.is_empty());
 }
+
+/// ATDD: Trace-boost with follow returns linked packs directly.
+#[test]
+fn test_trace_boost_follow_links_returns_linked_packs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key_a = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack_a = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_a,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: Some("Fact A".to_owned()),
+        })
+        .unwrap();
+
+    let key_b = encode_per_token_keys(&[&[0.0f32, 1.0, 0.0, 0.0]]);
+    let pack_b = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_b,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+            salience: 80.0,
+            text: Some("Fact B (linked to A)".to_owned()),
+        })
+        .unwrap();
+
+    engine.add_pack_link(pack_a, pack_b).unwrap();
+
+    let query = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let results =
+        engine.mem_read_pack_with_trace_boost_and_follow(&query, 1, Some(1), 0.3).unwrap();
+
+    let ids: Vec<u64> = results.iter().map(|r| r.pack.id).collect();
+    assert!(ids.contains(&pack_a));
+    assert!(ids.contains(&pack_b));
+}
