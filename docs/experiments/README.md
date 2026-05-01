@@ -233,6 +233,7 @@ SGLang's RadixAttention architecture is strictly prefix-based (same as vLLM v1).
 | **Vague queries degrade to ~46% R@5** | 100 specific queries: 100% R@5. 100 moderate queries: 45% R@5. 100 vague queries: 48% R@5. The cliff is binary — vocabulary overlap vs not — not a gradient of vagueness. | High — 100 queries per tier, 10 phrasings × 10 domains |
 | **Moderate and vague are indistinguishable** | Moderate (45%) and vague (48%) show no statistical difference. The critical factor is whether the query shares exact vocabulary with the stored memory, not how specifically it's phrased. | High — 200 total non-specific queries |
 | **Gravity wells in vague retrieval** | Short generic queries route to Fitness and Work domains regardless of intent. Hidden states for vague queries converge to a shared high-energy pattern. R@5 == R@10 — misses are categorical, not rank-based. | High — consistent across all phrasings |
+| **RoPE injection works (already proven)** | 9/10 synthetic fact recall on Qwen3-0.6B (which uses RoPE). `RoPEPositionEncoder` and `RoPECorrectedConcatComposer` implemented and tested. RoPE correction experiment showed zero difference vs naive concat — position encoding is not the bottleneck. HuggingFace `generate()` auto-handles position ID offsetting. | High — proven by synthetic fact result + dedicated RoPE experiment + composer tests |
 
 ### Not Yet Tested (roads untravelled)
 
@@ -241,7 +242,7 @@ SGLang's RadixAttention architecture is strictly prefix-based (same as vLLM v1).
 | Experiment | Why it matters | Risk if untested |
 |-----------|---------------|-----------------|
 | ~~**Vague queries**~~ | **TESTED** — see Proven table above. 46% R@5 for non-specific queries. The cliff is vocabulary overlap, not vagueness. Retrieval needs augmentation (context signals, domain priors, re-ranking) for vague queries. | — |
-| **RoPE injection** | All production models (Llama, Qwen, Mistral) use rotary position encoding. KV tensors encode position via RoPE. Injecting KV from position N into position M breaks attention if RoPE isn't handled. | KV injection might not work at all on production models without RoPE decoupling. The HF direct path bypasses this by injecting into a fresh context, but that's a workaround. |
+| ~~**RoPE injection**~~ | **TESTED** — 5/5 synthetic gibberish facts on Qwen3-0.6B (RoPE model) with current KnowledgePackStore pipeline. Bare model: 0/5. KV injection: 5/5. RoPE is handled correctly by HuggingFace's `generate()` auto-position-ID offsetting. See Proven table. | — |
 | **Scale beyond 2K** | Proven at 2K memories. Untested at 10K, 100K. Latency is linear (3s at 2K). At 100K it would be ~150s per query without acceleration. Does Vamana's 1.44x scale, or plateau? | The "database" claim requires at least 10K-memory validation. |
 
 #### Medium priority — improves quality and trust
@@ -289,6 +290,7 @@ SGLang's RadixAttention architecture is strictly prefix-based (same as vLLM v1).
 | 100-memory Q*K scale test | Complete — 40% (superseded by hidden states path) |
 | Traditional RAG baseline | Complete — 100% |
 | Vague query retrieval (100 queries per tier) | Complete — specific 100%, moderate 45%, vague 48% R@5 |
+| RoPE injection (Qwen3-0.6B, current pipeline) | Complete — 5/5 gibberish facts, 0/5 bare. RoPE is not a blocker. |
 
 ## Running Experiments
 
