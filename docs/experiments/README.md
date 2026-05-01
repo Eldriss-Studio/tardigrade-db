@@ -210,6 +210,24 @@ SGLang's RadixAttention architecture is strictly prefix-based (same as vLLM v1).
 
 **Implication:** Path 1 (HuggingFace direct injection) remains the only working approach for zero-token KV injection. Path 2 (memory prefix) works for production serving. Path 3 (SGLang) is closed. Path 4 (custom attention plugin) is the only remaining theoretical option.
 
+### P4.2: Segment Compaction (Mark-Sweep GC)
+
+**Date:** May 1, 2026
+**Status:** Complete — 6 ATDD tests passing
+
+When packs are deleted via `delete_pack`, their cells remained on disk in segment files — invisible (filtered by DeletionLog) but occupying space. Compaction rewrites segments with a high ratio of dead cells, reclaiming disk space.
+
+**Design (Mark-Sweep GC analogy):**
+- **Mark:** Scan non-active segments. For each, compute live ratio (cells in PackDirectory / total cells in segment). Segments below 50% live ratio are candidates.
+- **Sweep:** Read live cells from candidate segments, append them to the active segment (with fsync), delete old segment files.
+- **Crash-safe:** New cells are fsynced before old file deletion. If crash occurs between write and delete, next `open()` rebuilds from all segments — duplicate CellIds deduplicated by BTreeMap.
+
+**Bug found during implementation:** `BlockPool::get()` used `segments.get(segment_id as usize)` — Vec position indexing. After compaction removes segments from the middle, positions shift and lookups return wrong cells. Fixed to `segments.iter().find(|s| s.id() == segment_id)`.
+
+**API:** `Engine::compact()` computes live cell set from PackDirectory, delegates to `BlockPool::compact(live_cell_ids)`. Returns `CompactionResult { segments_compacted, cells_moved, bytes_reclaimed }`. Exposed to Python.
+
+**Tests:** 6 storage ATDD tests: reclaims space, preserves live cells, skips active segment, idempotent (convergence), survives reopen, no-op with no deletions.
+
 ## Research Status — What's Proven, What's Not
 
 ### Proven (tested with data)
