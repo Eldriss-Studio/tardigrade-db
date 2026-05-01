@@ -190,3 +190,7 @@ pub(crate) mod pack_read_profile;
 pub mod scheduler;
 
 pub use tdb_index::trace::EdgeType;
+
+pub mod encoding {
+    pub use tdb_retrieval::per_token::{DIM_IDX, HEADER_SENTINEL, HEADER_SIZE, N_TOKENS_IDX};
+}

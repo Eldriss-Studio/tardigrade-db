@@ -281,10 +281,16 @@ impl Default for PerTokenRetriever {
 ///   Group 0 (indices 0-31):  [SENTINEL, 0, 0, ..., 0]  (sentinel dominates)
 ///   Group 1 (indices 32-63): `[n_tokens, dim, 0, ..., 0]` (metadata preserved)
 ///   Data (index 64+):        [token vectors]
-const HEADER_SIZE: usize = 64;
+pub const HEADER_SIZE: usize = 64;
 
 /// Sentinel value at position 0 marking a per-token encoded key.
-const HEADER_SENTINEL: f32 = -1.0e9;
+pub const HEADER_SENTINEL: f32 = -1.0e9;
+
+/// Index within the header where the token count is stored.
+pub const N_TOKENS_IDX: usize = 32;
+
+/// Index within the header where the vector dimension is stored.
+pub const DIM_IDX: usize = 33;
 
 /// Encode multiple per-token K vectors into a flat f32 slice with header.
 ///
@@ -330,8 +336,8 @@ pub fn decode_per_token_keys(encoded: &[f32]) -> Option<(usize, usize, &[f32])> 
     }
 
     // Metadata in group 1 (indices 32, 33).
-    let encoded_n = encoded[32].round() as usize;
-    let d = encoded[33].round() as usize;
+    let encoded_n = encoded[N_TOKENS_IDX].round() as usize;
+    let d = encoded[DIM_IDX].round() as usize;
 
     if d == 0 {
         return None;
