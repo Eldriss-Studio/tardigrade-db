@@ -182,6 +182,7 @@
 #![deny(unsafe_code)]
 
 pub mod engine;
+pub mod maintenance;
 pub(crate) mod pack_directory;
 pub(crate) mod pack_materialization;
 #[cfg(test)]

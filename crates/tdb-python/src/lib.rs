@@ -63,6 +63,7 @@ impl ReadResult {
 #[pyclass]
 struct Engine {
     inner: Arc<Mutex<RustEngine>>,
+    maintenance_worker: Option<tdb_engine::maintenance::MaintenanceWorker>,
 }
 
 fn lock_engine(inner: &Mutex<RustEngine>) -> PyResult<std::sync::MutexGuard<'_, RustEngine>> {
@@ -90,7 +91,7 @@ impl Engine {
             (None, None) => RustEngine::open(dir),
         }
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(Self { inner: Arc::new(Mutex::new(inner)) })
+        Ok(Self { inner: Arc::new(Mutex::new(inner)), maintenance_worker: None })
     }
 
     /// Write key/value vectors to the engine (cell-level API).
@@ -375,6 +376,66 @@ impl Engine {
         dict.set_item("segments_compacted", result.segments_compacted)?;
         dict.set_item("cells_moved", result.cells_moved)?;
         dict.set_item("bytes_reclaimed", result.bytes_reclaimed)?;
+        Ok(dict.into_any().unbind())
+    }
+
+    // ── Maintenance (background governance + compaction) ────────────────
+
+    /// Start background maintenance (governance sweep + auto-compaction).
+    #[pyo3(signature = (sweep_interval_secs=3600.0, compaction_interval_secs=21600.0, eviction_threshold=15.0, hours_per_tick=1.0))]
+    fn start_maintenance(
+        &mut self,
+        sweep_interval_secs: f64,
+        compaction_interval_secs: f64,
+        eviction_threshold: f32,
+        hours_per_tick: f32,
+    ) -> PyResult<()> {
+        use tdb_engine::maintenance::{MaintenanceConfig, MaintenanceWorker};
+
+        if self.maintenance_worker.as_ref().is_some_and(|w| w.is_running()) {
+            return Err(PyRuntimeError::new_err("maintenance already running"));
+        }
+
+        let config = MaintenanceConfig {
+            sweep_interval: std::time::Duration::from_secs_f64(sweep_interval_secs),
+            compaction_interval: std::time::Duration::from_secs_f64(compaction_interval_secs),
+            eviction_threshold,
+            hours_per_tick,
+            enabled: true,
+        };
+
+        let mut worker = MaintenanceWorker::new(config);
+        worker.start(Arc::clone(&self.inner));
+        self.maintenance_worker = Some(worker);
+        Ok(())
+    }
+
+    /// Stop background maintenance.
+    fn stop_maintenance(&mut self) {
+        if let Some(ref mut worker) = self.maintenance_worker {
+            worker.stop();
+        }
+    }
+
+    /// Whether background maintenance is currently running.
+    fn is_maintenance_running(&self) -> bool {
+        self.maintenance_worker.as_ref().is_some_and(|w| w.is_running())
+    }
+
+    /// Get maintenance statistics.
+    fn maintenance_status(&self, py: Python<'_>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        let status = self
+            .maintenance_worker
+            .as_ref()
+            .map_or_else(tdb_engine::maintenance::MaintenanceStatus::default, |w| w.status());
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("sweep_count", status.sweep_count)?;
+        dict.set_item("compaction_count", status.compaction_count)?;
+        dict.set_item("total_packs_evicted", status.total_packs_evicted)?;
+        dict.set_item("total_bytes_reclaimed", status.total_bytes_reclaimed)?;
+        dict.set_item("last_sweep_epoch_secs", status.last_sweep_epoch_secs)?;
+        dict.set_item("last_compaction_epoch_secs", status.last_compaction_epoch_secs)?;
         Ok(dict.into_any().unbind())
     }
 
