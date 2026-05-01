@@ -552,9 +552,9 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 ### Next up
 
-- [ ] **PyPI packaging** — `pip install tardigrade-db` via maturin publish.
-- [ ] **Release-mode benchmark numbers** — Run `cargo bench`, publish actual performance data vs. spec targets.
-- [ ] **Background governance sweep** — Tokio timer task for autonomous AKL decay/eviction instead of manual `advance_days()`.
+- [ ] **v0.1.0 release + PyPI packaging** — Tag release, trigger `publish.yml` workflow → `pip install tardigrade-db`.
+- [ ] **Release-mode benchmark numbers** — Run `cargo bench`, publish actual performance data.
+- [x] **Background governance sweep** — `MaintenanceWorker` (Active Object, `std::thread`) runs decay + eviction + compaction automatically.
 - [ ] **Storage reduction** — 730 KB per memory is large. Investigate selective layer storage, INT8 KV, or FP16 for injection-critical layers.
 
 ### Future
@@ -583,13 +583,16 @@ If neither Path 2 nor Path 3 is sufficient, the remaining option is to modify vL
 
 #### Engine and infrastructure
 
-- [ ] **Vamana edge persistence** — Serialize graph to disk; avoid O(n²) rebuild on refresh.
-- [ ] **Segment compaction** — Background merge of old segments to reclaim deleted pack space.
+- [x] **Vamana edge persistence** — Graph serialized to disk; O(n) load on refresh instead of O(n²) rebuild.
+- [x] **Segment compaction** — Mark-Sweep GC rewrites segments below 50% live ratio. `Engine::compact()` + Python binding.
+- [x] **Background maintenance** — `MaintenanceWorker` (Active Object) runs governance sweep + auto-compaction in a background `std::thread`.
+- [ ] **Vague-query recall augmentation** — 46% R@5 on non-specific queries (vs 100% specific). Hybrid retrieval (latent + BM25/embedding fallback) needed to close the vocabulary-overlap cliff.
+- [ ] **Incremental compaction** — Release engine lock between segments to reduce contention window during compaction.
 - [ ] **Disk-aware Vamana** — PageANN-style page-node alignment for billion-scale cold storage.
 - [ ] **Multi-model dimension support** — Handle different models (different d_k) in one engine instance.
 - [ ] **CUDA GPU DMA** — Direct NVMe→GPU transfers via cuFile/GDS (requires CUDA SDK integration).
 - [ ] **RelayCaching** — Cross-agent KV cache reuse for multi-agent handoffs.
-- [ ] **Decoupled position encoding** — RoPE remapping for cross-prompt KV injection.
+- [ ] **Custom vLLM attention plugin** — The only remaining path for cross-prompt KV injection in production serving. Requires vLLM fork + RoPE offset handling.
 
 See `docs/technical/tdd.md` for the full technical design document and `docs/technical/spec.md` for the condensed specification.
 
