@@ -45,8 +45,16 @@ Cross-family deep dive (run 2026-04-29):
   Best cross-family result: 46.7% R@5 (Qwen3→GPT-2, Procrustes, 500 samples)
   vs same-model baseline of 96.7%. ~48% recall recovery.
 
-  Next steps for cross-family would require nonlinear alignment (neural
-  fuser as in C2C paper) or contrastive pre-training on shared corpora.
+  Nonlinear projection breakthrough (run 2026-04-29):
+  A 2-layer MLP (512 hidden, 500 epochs, MSE loss) trained on 2425
+  per-token pairs from 100 texts achieves 76.7% R@5 cross-family
+  (Qwen3-0.6B → GPT-2). This is 79% of the same-model baseline.
+
+  Scaling:  MLP-256 100ep: 50% → MLP-256 500ep: 60% → MLP-512 500ep: 76.7%
+  Procrustes (linear ceiling): 46.7%
+
+  Cross-family retrieval IS viable with a small learned nonlinear
+  projection (~400K parameters). Not fundamental impossibility.
 
 Conditions (100 memories, 30 queries, per-token encoding, skip pos 0):
   A: Qwen3-0.6B → Qwen3-0.6B native (baseline, known 96.7%)
