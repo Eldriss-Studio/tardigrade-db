@@ -343,6 +343,14 @@ Five jobs run on every push and PR:
 
 ## Quick Start
 
+### Install from PyPI
+
+```bash
+pip install tardigrade-db
+```
+
+### Build from source
+
 ```bash
 git clone https://github.com/Eldriss-Studio/tardigrade-db.git
 cd tardigrade-db
@@ -350,16 +358,13 @@ cd tardigrade-db
 # Build Rust workspace
 cargo build --workspace
 
-# Run all Rust tests (238 unit/acceptance + 10 doctests)
-cargo nextest run --workspace --exclude tdb-python
-cargo test --doc --workspace --exclude tdb-python
-
 # Set up Python environment
 python3 -m venv .venv && source .venv/bin/activate
 pip install maturin numpy pytest
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
 
-# Run Python tests
+# Run tests
+cargo nextest run --workspace --exclude tdb-python
 pytest tests/python/ -v
 
 # Run the GPT-2 end-to-end demo
@@ -552,7 +557,7 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 ### Next up
 
-- [ ] **v0.1.0 release + PyPI packaging** — Tag release, trigger `publish.yml` workflow → `pip install tardigrade-db`.
+- [x] **v0.1.0 release + PyPI packaging** — `pip install tardigrade-db` (wheels for Linux, macOS, Windows).
 - [ ] **Release-mode benchmark numbers** — Run `cargo bench`, publish actual performance data.
 - [x] **Background governance sweep** — `MaintenanceWorker` (Active Object, `std::thread`) runs decay + eviction + compaction automatically.
 - [ ] **Storage reduction** — 730 KB per memory is large. Investigate selective layer storage, INT8 KV, or FP16 for injection-critical layers.

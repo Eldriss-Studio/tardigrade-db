@@ -25,7 +25,7 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          args: --release --out dist --manifest-path crates/tdb-python/Cargo.toml
+          args: --release --out dist --manifest-path crates/tdb-python/Cargo.toml --find-interpreter
           manylinux: auto
 
       - name: Upload wheels
