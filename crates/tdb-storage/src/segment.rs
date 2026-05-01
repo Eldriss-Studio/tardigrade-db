@@ -247,7 +247,7 @@ pub fn scan_segment(dir: &Path, segment_id: u32) -> io::Result<Vec<(CellId, u64)
     Ok(entries)
 }
 
-fn segment_path(dir: &Path, id: u32) -> PathBuf {
+pub(crate) fn segment_path(dir: &Path, id: u32) -> PathBuf {
     dir.join(format!("segment_{id:06}.tdb"))
 }
 

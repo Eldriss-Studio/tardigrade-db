@@ -777,6 +777,16 @@ impl Engine {
         Ok(count)
     }
 
+    /// Compact storage segments by rewriting live cells and deleting dead ones.
+    ///
+    /// Computes the live cell set from the current `PackDirectory`, then
+    /// delegates to `BlockPool::compact`. Returns compaction statistics.
+    pub fn compact(&mut self) -> Result<tdb_storage::block_pool::CompactionResult> {
+        let live_cell_ids: std::collections::HashSet<CellId> =
+            self.pack_directory.all_cell_ids().collect();
+        self.pool.compact(&live_cell_ids)
+    }
+
     /// Store a `SynapticBankEntry` (`LoRA` adapter) for an agent/user.
     pub fn store_synapsis(&mut self, entry: &SynapticBankEntry) -> Result<()> {
         self.synaptic_store.append(entry).map_err(|e| TardigradeError::Io { source: e })

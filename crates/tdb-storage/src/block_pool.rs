@@ -4,17 +4,34 @@
 //! with an in-memory index mapping `CellId` → (`segment_id`, `byte_offset`).
 //! The index is rebuilt from segment files on open (recovery).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use tdb_core::CellId;
 use tdb_core::error::{Result, TardigradeError};
 use tdb_core::memory_cell::MemoryCell;
 
-use crate::segment::{RecordLocation, Segment, list_segments, scan_segment};
+use crate::segment::{RecordLocation, Segment, list_segments, scan_segment, segment_path};
 
 /// Default segment size threshold: 256 MB.
 const DEFAULT_SEGMENT_SIZE: u64 = 256 * 1024 * 1024;
+
+/// Segments with a live-cell ratio below this threshold are candidates for compaction.
+const COMPACTION_LIVE_RATIO_THRESHOLD: f64 = 0.5;
+
+/// Result of a compaction operation.
+#[derive(Debug, Clone, Default)]
+pub struct CompactionResult {
+    pub segments_compacted: usize,
+    pub cells_moved: usize,
+    pub bytes_reclaimed: u64,
+}
+
+struct CompactJob {
+    seg_id: u32,
+    cells: Vec<MemoryCell>,
+    file_size: u64,
+}
 
 /// Repository over segmented, append-only storage for memory cells.
 ///
@@ -137,7 +154,8 @@ impl BlockPool {
 
         let segment = self
             .segments
-            .get(loc.segment_id as usize)
+            .iter()
+            .find(|s| s.id() == loc.segment_id)
             .ok_or(TardigradeError::CellNotFound(cell_id))?;
 
         Ok(segment.read_at(loc.byte_offset)?)
@@ -165,12 +183,110 @@ impl BlockPool {
             self.segments.last().is_some_and(|s| s.size() >= self.segment_size_threshold);
 
         if needs_rollover {
-            let last = self.segments.last().ok_or(TardigradeError::SegmentFull { path: self.dir.display().to_string() })?;
+            let last = self
+                .segments
+                .last()
+                .ok_or(TardigradeError::SegmentFull { path: self.dir.display().to_string() })?;
             let new_id = last.id() + 1;
             let new_segment = Segment::create(&self.dir, new_id)?;
             self.segments.push(new_segment);
         }
         Ok(())
+    }
+
+    /// Compact segments by rewriting live cells and deleting dead ones (Mark-Sweep).
+    ///
+    /// Non-active segments where the ratio of live cells falls below
+    /// `COMPACTION_LIVE_RATIO_THRESHOLD` are rewritten: live cells are
+    /// appended to the active segment, then the old segment file is deleted.
+    ///
+    /// Crash-safe: new cells are fsynced before old segment deletion. If a
+    /// crash occurs between write and delete, the next `open()` rebuilds
+    /// from all segments — duplicates are harmless (index deduplicates).
+    pub fn compact(&mut self, live_cell_ids: &HashSet<CellId>) -> Result<CompactionResult> {
+        let mut result = CompactionResult::default();
+
+        if self.segments.len() <= 1 {
+            return Ok(result);
+        }
+
+        let active_seg_id = self.segments.last().map_or(0, Segment::id);
+
+        let mut jobs: Vec<CompactJob> = Vec::new();
+
+        for seg_idx in 0..self.segments.len() {
+            let seg_id = self.segments[seg_idx].id();
+            if seg_id == active_seg_id {
+                continue;
+            }
+
+            let entries =
+                scan_segment(&self.dir, seg_id).map_err(|e| TardigradeError::Io { source: e })?;
+            if entries.is_empty() {
+                continue;
+            }
+
+            let live_count = entries.iter().filter(|(cid, _)| live_cell_ids.contains(cid)).count();
+            let total = entries.len();
+            let live_ratio = live_count as f64 / total as f64;
+
+            if live_ratio >= COMPACTION_LIVE_RATIO_THRESHOLD {
+                continue;
+            }
+
+            let mut cells = Vec::with_capacity(live_count);
+            for (cell_id, byte_offset) in &entries {
+                if live_cell_ids.contains(cell_id) {
+                    let cell = self.segments[seg_idx]
+                        .read_at(*byte_offset)
+                        .map_err(|e| TardigradeError::Io { source: e })?;
+                    cells.push(cell);
+                }
+            }
+
+            let seg_path = segment_path(&self.dir, seg_id);
+            let file_size = std::fs::metadata(&seg_path).map_or(0, |m| m.len());
+
+            jobs.push(CompactJob { seg_id, cells, file_size });
+        }
+
+        if jobs.is_empty() {
+            return Ok(result);
+        }
+
+        for job in &jobs {
+            if !job.cells.is_empty() {
+                self.ensure_active_segment_has_capacity()?;
+                let active = self.active_segment_mut()?;
+                let new_seg_id = active.id();
+                let offsets = active
+                    .append_batch(&job.cells)
+                    .map_err(|e| TardigradeError::Io { source: e })?;
+
+                for (cell, offset) in job.cells.iter().zip(offsets) {
+                    self.index.insert(
+                        cell.id,
+                        RecordLocation { segment_id: new_seg_id, byte_offset: offset },
+                    );
+                }
+                result.cells_moved += job.cells.len();
+            }
+
+            result.bytes_reclaimed += job.file_size;
+        }
+
+        let compacted_ids: HashSet<u32> = jobs.iter().map(|j| j.seg_id).collect();
+        self.index.retain(|_, loc| !compacted_ids.contains(&loc.segment_id));
+
+        for seg_id in &compacted_ids {
+            let path = segment_path(&self.dir, *seg_id);
+            std::fs::remove_file(&path).map_err(|e| TardigradeError::Io { source: e })?;
+        }
+
+        self.segments.retain(|s| !compacted_ids.contains(&s.id()));
+        result.segments_compacted = compacted_ids.len();
+
+        Ok(result)
     }
 
     fn active_segment_mut(&mut self) -> Result<&mut Segment> {

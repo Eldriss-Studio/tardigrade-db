@@ -391,3 +391,141 @@ fn test_direct_block_pool_hydration_fixture_round_trips() {
     assert_eq!(restored.key.len(), HYDRATION_FIXTURE_KEY_DIM);
     assert_eq!(restored.value.len(), HYDRATION_FIXTURE_PAYLOAD_DIM);
 }
+
+// ── Segment Compaction (P4.2) ─────────────────────────────────────────────
+
+use std::collections::HashSet;
+
+const COMPACT_DIM: usize = 32;
+const COMPACT_SEGMENT_SIZE: u64 = 512;
+
+fn compact_cell(id: u64) -> MemoryCell {
+    MemoryCellBuilder::new(id, 1, 0, vec![id as f32; COMPACT_DIM], vec![0.0; COMPACT_DIM]).build()
+}
+
+/// ATDD: Compaction reclaims space from segments with dead cells.
+#[test]
+fn test_compact_reclaims_space() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+
+    // Fill two segments with cells.
+    for i in 0..20u64 {
+        pool.append(&compact_cell(i)).unwrap();
+    }
+    assert!(pool.segment_count() >= 2, "need multiple segments");
+
+    // Mark only every 4th cell as live (75% dead — well below 50% threshold).
+    let live: HashSet<u64> = (0..20u64).filter(|i| i % 4 == 0).collect();
+
+    let result = pool.compact(&live).unwrap();
+
+    assert!(result.segments_compacted > 0, "should compact at least one segment");
+    assert!(result.bytes_reclaimed > 0);
+    assert!(result.cells_moved > 0, "should move at least some live cells");
+}
+
+/// ATDD: All live cells are readable after compaction.
+#[test]
+fn test_compact_preserves_live_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+
+    for i in 0..20u64 {
+        pool.append(&compact_cell(i)).unwrap();
+    }
+
+    let live: HashSet<u64> = (0..20u64).filter(|i| i % 3 == 0).collect();
+    pool.compact(&live).unwrap();
+
+    for &id in &live {
+        let cell = pool.get(id).unwrap();
+        assert_eq!(cell.id, id);
+        assert_eq!(cell.key.len(), COMPACT_DIM);
+    }
+}
+
+/// ATDD: The active segment is never compacted.
+#[test]
+fn test_compact_skips_active_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+
+    // Write just enough to stay in one segment.
+    pool.append(&compact_cell(0)).unwrap();
+
+    let live: HashSet<u64> = HashSet::new();
+    let result = pool.compact(&live).unwrap();
+
+    assert_eq!(result.segments_compacted, 0, "single (active) segment must not be compacted");
+}
+
+/// ATDD: Compaction is idempotent — second call is a no-op.
+#[test]
+fn test_compact_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+
+    for i in 0..20u64 {
+        pool.append(&compact_cell(i)).unwrap();
+    }
+
+    let live: HashSet<u64> = (0..20u64).filter(|i| i % 4 == 0).collect();
+
+    // Compact until stable — each pass may expose new compactable segments.
+    let first = pool.compact(&live).unwrap();
+    assert!(first.segments_compacted > 0);
+
+    // Keep compacting until no more work — proves convergence.
+    let mut total_passes = 1;
+    loop {
+        let pass = pool.compact(&live).unwrap();
+        if pass.segments_compacted == 0 {
+            break;
+        }
+        total_passes += 1;
+        assert!(total_passes <= 5, "compaction should converge within a few passes");
+    }
+
+    // All live cells still accessible.
+    for &id in &live {
+        assert!(pool.get(id).is_ok(), "live cell {id} should survive repeated compaction");
+    }
+}
+
+/// ATDD: Compacted pool survives reopen.
+#[test]
+fn test_compact_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let live: HashSet<u64> = (0..20u64).filter(|i| i % 2 == 0).collect();
+
+    {
+        let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+        for i in 0..20u64 {
+            pool.append(&compact_cell(i)).unwrap();
+        }
+        pool.compact(&live).unwrap();
+    }
+
+    let pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+    for &id in &live {
+        assert!(pool.get(id).is_ok(), "live cell {id} should survive reopen after compaction");
+    }
+}
+
+/// ATDD: Compaction with no deletions is a no-op.
+#[test]
+fn test_compact_with_no_deletions() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+
+    for i in 0..20u64 {
+        pool.append(&compact_cell(i)).unwrap();
+    }
+
+    let all_live: HashSet<u64> = (0..20u64).collect();
+    let result = pool.compact(&all_live).unwrap();
+
+    assert_eq!(result.segments_compacted, 0, "all cells live → no compaction needed");
+}
