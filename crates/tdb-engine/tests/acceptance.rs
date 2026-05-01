@@ -3201,7 +3201,7 @@ fn test_multi_agent_mixed_tiers() {
 /// WHEN the segment file is truncated mid-record (simulating crash during write)
 /// AND the engine is reopened from the same directory
 /// THEN at least 4 of the 5 packs survive (the truncated one is discarded)
-/// AND all surviving packs are retrievable via mem_read_pack
+/// AND all surviving packs are retrievable via `mem_read_pack`
 #[test]
 fn test_crash_recovery_truncated_segment() {
     let dir = tempfile::tempdir().unwrap();
@@ -3214,9 +3214,7 @@ fn test_crash_recovery_truncated_segment() {
             let mut k = key.clone();
             k[0] = i as f32;
             let value = vec![i as f32; 32];
-            engine
-                .mem_write(1, 0, &k, value, 50.0 + i as f32, None)
-                .unwrap();
+            engine.mem_write(1, 0, &k, value, 50.0 + i as f32, None).unwrap();
         }
         assert_eq!(engine.cell_count(), 5);
     }
@@ -3238,16 +3236,13 @@ fn test_crash_recovery_truncated_segment() {
     let mut engine = Engine::open(dir.path()).unwrap();
     let recovered = engine.cell_count();
     assert!(
-        recovered >= 1 && recovered < 5,
+        (1..5).contains(&recovered),
         "some cells must survive and truncated cell(s) must be discarded, got {recovered}"
     );
 
     // Surviving cells must be retrievable
     let results = engine.mem_read(&key, 10, None).unwrap();
-    assert!(
-        !results.is_empty(),
-        "surviving cells must be retrievable after crash recovery"
-    );
+    assert!(!results.is_empty(), "surviving cells must be retrievable after crash recovery");
 }
 
 /// ATDD: Truncated WAL — partial record discarded, prior records intact.
@@ -3274,10 +3269,7 @@ fn test_crash_recovery_truncated_wal() {
                 id: 0,
                 owner: 1,
                 retrieval_key: k,
-                layers: vec![KVLayerPayload {
-                    layer_idx: 0,
-                    data: vec![i as f32; 64],
-                }],
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![i as f32; 64] }],
                 salience: 50.0,
                 text: None,
             };
@@ -3308,11 +3300,7 @@ fn test_crash_recovery_truncated_wal() {
 
     // Phase 3: Recovery — engine should open without panic
     let engine = Engine::open(dir.path()).unwrap();
-    assert_eq!(
-        engine.pack_count(),
-        3,
-        "all 3 packs must survive (segment data is intact)"
-    );
+    assert_eq!(engine.pack_count(), 3, "all 3 packs must survive (segment data is intact)");
     // Engine opened without panic — truncated WAL record was discarded gracefully
     let _ = pack_ids;
 }
@@ -3389,12 +3377,7 @@ fn test_crash_truncated_text_store_pack_survives() {
     // Simulate crash: truncate text store
     let text_path = dir.path().join("text_store.bin");
     if text_path.exists() {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&text_path)
-            .unwrap()
-            .set_len(0)
-            .unwrap();
+        std::fs::OpenOptions::new().write(true).open(&text_path).unwrap().set_len(0).unwrap();
     }
 
     // Recovery: engine should open without panic
@@ -3412,7 +3395,7 @@ fn test_crash_truncated_text_store_pack_survives() {
 /// GIVEN 5 packs where pack 3 is deleted
 /// AND the deletion log is fsynced
 /// WHEN the engine is reopened
-/// THEN pack 3 is not returned by mem_read_pack
+/// THEN pack 3 is not returned by `mem_read_pack`
 /// AND packs 1,2,4,5 are intact
 #[test]
 fn test_deletion_log_survives_reopen() {
@@ -3440,10 +3423,7 @@ fn test_deletion_log_survives_reopen() {
 
     let engine = Engine::open(dir.path()).unwrap();
     assert_eq!(engine.pack_count(), 4, "4 packs should survive (pack 3 deleted)");
-    assert!(
-        !engine.pack_exists(pack_ids[2]),
-        "deleted pack must not exist after reopen"
-    );
+    assert!(!engine.pack_exists(pack_ids[2]), "deleted pack must not exist after reopen");
     for &pid in &[pack_ids[0], pack_ids[1], pack_ids[3], pack_ids[4]] {
         assert!(engine.pack_exists(pid), "non-deleted pack {pid} must survive");
     }
@@ -3452,7 +3432,7 @@ fn test_deletion_log_survives_reopen() {
 /// ATDD: Explicit flush guarantees durability.
 ///
 /// GIVEN an engine with pending writes
-/// WHEN engine.flush() is called
+/// WHEN `engine.flush()` is called
 /// THEN reopening the engine recovers all written data
 #[test]
 fn test_flush_guarantees_durability() {

@@ -66,9 +66,7 @@ struct Engine {
 }
 
 fn lock_engine(inner: &Mutex<RustEngine>) -> PyResult<std::sync::MutexGuard<'_, RustEngine>> {
-    inner
-        .lock()
-        .map_err(|_| PyRuntimeError::new_err("engine lock poisoned"))
+    inner.lock().map_err(|_| PyRuntimeError::new_err("engine lock poisoned"))
 }
 
 #[pymethods]
@@ -99,6 +97,7 @@ impl Engine {
     ///
     /// **Deprecated:** Use `mem_write_pack` for new code. The Pack API is
     /// the canonical interface for storing multi-layer KV caches.
+    #[expect(clippy::too_many_arguments)]
     fn mem_write(
         &self,
         py: Python<'_>,
@@ -198,17 +197,15 @@ impl Engine {
 
         Ok(raw_results
             .into_iter()
-            .map(|(r, importance)| {
-                ReadResult {
-                    cell_id: r.cell.id,
-                    owner: r.cell.owner,
-                    layer: r.cell.layer,
-                    score: r.score,
-                    tier: r.tier as u8,
-                    importance,
-                    key_data: r.cell.key,
-                    value_data: r.cell.value,
-                }
+            .map(|(r, importance)| ReadResult {
+                cell_id: r.cell.id,
+                owner: r.cell.owner,
+                layer: r.cell.layer,
+                score: r.score,
+                tier: r.tier as u8,
+                importance,
+                key_data: r.cell.key,
+                value_data: r.cell.value,
             })
             .collect())
     }
@@ -246,11 +243,7 @@ impl Engine {
 
     /// Evict Draft-tier packs below the importance threshold.
     #[pyo3(signature = (importance_threshold, owner=None))]
-    fn evict_draft_packs(
-        &self,
-        importance_threshold: f32,
-        owner: Option<u64>,
-    ) -> PyResult<usize> {
+    fn evict_draft_packs(&self, importance_threshold: f32, owner: Option<u64>) -> PyResult<usize> {
         lock_engine(&self.inner)?
             .evict_draft_packs(importance_threshold, owner)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
@@ -325,8 +318,9 @@ impl Engine {
     ///
     /// Returns list of dicts with f32 numpy arrays (f16 converted to f32 on return).
     fn load_synapsis(&self, py: Python<'_>, owner: u64) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
-        let entries =
-            lock_engine(&self.inner)?.load_synapsis(owner).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let entries = lock_engine(&self.inner)?
+            .load_synapsis(owner)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let mut results = Vec::with_capacity(entries.len());
         for entry in entries {
@@ -366,6 +360,21 @@ impl Engine {
         dict.set_item("pipeline_stages", s.pipeline_stages)?;
         dict.set_item("governance_entries", s.governance_entries)?;
         dict.set_item("trace_edges", s.trace_edges)?;
+        Ok(dict.into_any().unbind())
+    }
+
+    /// Compact storage by rewriting segments with dead cells.
+    ///
+    /// Returns a dict with `segments_compacted`, `cells_moved`, `bytes_reclaimed`.
+    fn compact(&self, py: Python<'_>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        let engine = Arc::clone(&self.inner);
+        let result = py.detach(move || {
+            lock_engine(&engine)?.compact().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("segments_compacted", result.segments_compacted)?;
+        dict.set_item("cells_moved", result.cells_moved)?;
+        dict.set_item("bytes_reclaimed", result.bytes_reclaimed)?;
         Ok(dict.into_any().unbind())
     }
 
@@ -619,13 +628,17 @@ impl Engine {
 
     /// Set or update the stored text for an existing pack.
     fn set_pack_text(&self, pack_id: u64, text: &str) -> PyResult<()> {
-        lock_engine(&self.inner)?.set_pack_text(pack_id, text).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        lock_engine(&self.inner)?
+            .set_pack_text(pack_id, text)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Set or update text for many packs in a single batched fsync.
     fn set_pack_texts(&self, entries: Vec<(u64, String)>) -> PyResult<()> {
         let borrowed: Vec<(u64, &str)> = entries.iter().map(|(id, t)| (*id, t.as_str())).collect();
-        lock_engine(&self.inner)?.set_pack_texts(&borrowed).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        lock_engine(&self.inner)?
+            .set_pack_texts(&borrowed)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Whether a pack with the given ID exists (and has not been deleted).
@@ -635,7 +648,9 @@ impl Engine {
 
     /// Delete a pack permanently. Irreversible.
     fn delete_pack(&self, pack_id: u64) -> PyResult<()> {
-        lock_engine(&self.inner)?.delete_pack(pack_id).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        lock_engine(&self.inner)?
+            .delete_pack(pack_id)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Explicit durability checkpoint — ensures all components have fsynced.
