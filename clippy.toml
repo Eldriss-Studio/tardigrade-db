@@ -1,3 +1,8 @@
+# PyO3 bindings inherently require `&self` + `py: Python` before user-facing
+# params, so the effective user-param budget is limit - 2. Raising to 9
+# keeps user-facing signatures at 7 or fewer visible params.
+too-many-arguments-threshold = 9
+
 # Storage engine safety: disallow methods that bypass project conventions
 disallowed-methods = [
     { path = "std::io::Read::read_to_string", reason = "Use structured deserialization, not raw string reads" },

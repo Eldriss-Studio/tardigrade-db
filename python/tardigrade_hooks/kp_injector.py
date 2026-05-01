@@ -87,26 +87,17 @@ class KnowledgePackStore:
             payload = np.concatenate([k_np.ravel(), v_np.ravel()])
             layer_payloads.append((li, payload))
 
-        # Auto-link: search existing memories BEFORE writing (otherwise the
-        # new pack outscores everything when querying with its own key)
-        auto_link_matches = []
-        if auto_link and self.engine.pack_count() > 0:
-            threshold = auto_link_threshold if auto_link_threshold is not None else 250.0
-            existing = self.engine.mem_read_pack(retrieval_key, 1, self.owner)
-            auto_link_matches = [
-                p["pack_id"] for p in existing if p["score"] >= threshold
-            ]
+        if auto_link:
+            result = self.engine.mem_write_pack_with_auto_link(
+                self.owner, retrieval_key, layer_payloads, salience,
+                auto_link_threshold=auto_link_threshold, text=fact_text,
+            )
+            return result["pack_id"]
 
-        # Single atomic write via Rust pack API (one fsync for all layers)
-        pack_id = self.engine.mem_write_pack(
+        # Plain write without auto-link discovery.
+        return self.engine.mem_write_pack(
             self.owner, retrieval_key, layer_payloads, salience, text=fact_text
         )
-
-        # Create trace links to similar existing packs (via Rust engine)
-        for match_id in auto_link_matches:
-            self.engine.add_pack_link(pack_id, match_id)
-
-        return pack_id
 
     def forget(self, pack_id):
         """Delete a memory permanently. Irreversible."""
