@@ -235,7 +235,7 @@ When packs are deleted via `delete_pack`, their cells remained on disk in segmen
 | Finding | Evidence | Confidence |
 |---------|----------|------------|
 | **KV injection transfers novel knowledge** | 9/10 synthetic gibberish facts recalled on Qwen3-0.6B, matching text RAG | High — nonsense strings can only come from injected KV |
-| **Per-token Top5Avg retrieval works at scale** | 100% R@5 at 2,000 memories, no gravity well, no degradation | High — 30 queries, clean scaling curve |
+| **Per-token Top5Avg retrieval works at scale** | 100% R@5 at 5,000 memories, no gravity well, no degradation (100→500→1K→2K→5K all 100%) | High — 30 queries per scale point, clean scaling curve |
 | **Vamana acceleration works** | 1.44x latency speedup at 1K memories with zero recall loss | High — Criterion benchmarked |
 | **Q4 quantization preserves retrieval** | 89% of injection quality preserved through Q4 pipeline | High — measured in injection results |
 | **Mean-pooling is broken for retrieval** | 10% same-model recall (vs 100% per-token) | High — repeated across models |
@@ -261,7 +261,7 @@ When packs are deleted via `delete_pack`, their cells remained on disk in segmen
 |-----------|---------------|-----------------|
 | ~~**Vague queries**~~ | **TESTED** — see Proven table above. 46% R@5 for non-specific queries. The cliff is vocabulary overlap, not vagueness. Retrieval needs augmentation (context signals, domain priors, re-ranking) for vague queries. | — |
 | ~~**RoPE injection**~~ | **TESTED** — 5/5 synthetic gibberish facts on Qwen3-0.6B (RoPE model) with current KnowledgePackStore pipeline. Bare model: 0/5. KV injection: 5/5. RoPE is handled correctly by HuggingFace's `generate()` auto-position-ID offsetting. See Proven table. | — |
-| **Scale beyond 2K** | Proven at 2K memories. Untested at 10K, 100K. Latency is linear (3s at 2K). At 100K it would be ~150s per query without acceleration. Does Vamana's 1.44x scale, or plateau? | The "database" claim requires at least 10K-memory validation. |
+| **Scale beyond 5K** | Proven at 5K memories (100% R@5). Untested at 10K, 100K. Latency is linear without Vamana (4.5s at 5K). Vamana latency benchmark at 5K pending. | The "database" claim would benefit from 10K+ validation. |
 
 #### Medium priority — improves quality and trust
 
@@ -298,7 +298,7 @@ When packs are deleted via `delete_pack`, their cells remained on disk in segmen
 | [P1: Architectural Unification](p1-architectural-unification.md) | Complete |
 | [P2+P3: Production & Differentiators](p2-p3-production-and-differentiators.md) | Complete |
 | [SGLang Investigation](sglang-investigation.md) | Complete — NOT VIABLE |
-| Scale recall benchmark (100→2K memories) | Complete — 100% R@5 at 2K |
+| Scale recall benchmark (100→5K memories) | Complete — 100% R@5 at 5K, no degradation |
 | Latency benchmark (Vamana vs brute-force) | Complete — 1.44x speedup |
 | Cross-model retrieval (same-family + cross-family) | Complete — 90% same-family, 77% cross-family with MLP |
 | vLLM connector — semantic save | Complete |
