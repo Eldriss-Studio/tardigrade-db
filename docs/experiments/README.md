@@ -228,6 +228,17 @@ When packs are deleted via `delete_pack`, their cells remained on disk in segmen
 
 **Tests:** 6 storage ATDD tests: reclaims space, preserves live cells, skips active segment, idempotent (convergence), survives reopen, no-op with no deletions.
 
+### P5: Background Maintenance Worker (Active Object)
+
+**Date:** May 1, 2026
+**Status:** Complete — 4 Rust ATDD + 4 Python ATDD tests
+
+Automated governance sweep (decay + eviction) and segment compaction via a background `std::thread`. No tokio — uses `std::thread::sleep` with 1-second shutdown poll for responsive graceful stop.
+
+**Design:** `MaintenanceWorker` receives `Arc<Mutex<Engine>>`, spawns `"tdb-maintenance"` thread. Lock held only during operations, never during sleep. Configurable intervals, thresholds, and decay rate. `AtomicBool` stop flag for graceful shutdown. Drop impl auto-stops.
+
+**Python API:** `engine.start_maintenance(sweep_interval_secs, ...)`, `stop_maintenance()`, `is_maintenance_running()`, `maintenance_status()` → dict with sweep_count, compaction_count, total_packs_evicted, total_bytes_reclaimed, timestamps.
+
 ## Research Status — What's Proven, What's Not
 
 ### Proven (tested with data)
