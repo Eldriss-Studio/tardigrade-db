@@ -1004,6 +1004,41 @@ impl Engine {
         Ok(results)
     }
 
+    /// Trace-boosted retrieval with automatic link traversal.
+    ///
+    /// Returns top-k packs with trace boost, plus all transitively
+    /// linked packs not already in the result set.
+    pub fn mem_read_pack_with_trace_boost_and_follow(
+        &mut self,
+        query_key: &[f32],
+        k: usize,
+        owner_filter: Option<OwnerId>,
+        boost_factor: f32,
+    ) -> Result<Vec<PackReadResult>> {
+        let mut results =
+            self.mem_read_pack_with_trace_boost(query_key, k, owner_filter, boost_factor)?;
+
+        let retrieved_ids: std::collections::HashSet<PackId> =
+            results.iter().map(|r| r.pack.id).collect();
+
+        let mut linked_ids = std::collections::HashSet::new();
+        for r in &results {
+            for linked in self.pack_links(r.pack.id) {
+                if !retrieved_ids.contains(&linked) {
+                    linked_ids.insert(linked);
+                }
+            }
+        }
+
+        for linked_id in linked_ids {
+            if let Ok(pack) = self.load_pack_by_id(linked_id) {
+                results.push(pack);
+            }
+        }
+
+        Ok(results)
+    }
+
     fn collect_pack_candidates(
         &mut self,
         query_key: &[f32],

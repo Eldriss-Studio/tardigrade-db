@@ -732,6 +732,48 @@ impl Engine {
         Ok(py_results)
     }
 
+    /// Retrieve packs with trace-boosted scoring and automatic link traversal.
+    fn mem_read_pack_with_trace_boost_and_follow(
+        &self,
+        py: Python<'_>,
+        query_key: PyReadonlyArray1<'_, f32>,
+        k: usize,
+        owner: Option<u64>,
+        boost_factor: f32,
+    ) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
+        let query_vec =
+            query_key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?.to_vec();
+
+        let engine = Arc::clone(&self.inner);
+        let results = py.detach(move || {
+            lock_engine(&engine)?
+                .mem_read_pack_with_trace_boost_and_follow(&query_vec, k, owner, boost_factor)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })?;
+
+        let mut py_results = Vec::with_capacity(results.len());
+        for r in results {
+            let layers_list = pyo3::types::PyList::empty(py);
+            for layer in &r.pack.layers {
+                let layer_dict = pyo3::types::PyDict::new(py);
+                layer_dict.set_item("layer_idx", layer.layer_idx)?;
+                let data_array = numpy::PyArray1::from_slice(py, &layer.data).into_any().unbind();
+                layer_dict.set_item("data", data_array)?;
+                layers_list.append(layer_dict)?;
+            }
+
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("pack_id", r.pack.id)?;
+            dict.set_item("owner", r.pack.owner)?;
+            dict.set_item("score", r.score)?;
+            dict.set_item("tier", r.tier as u8)?;
+            dict.set_item("layers", layers_list)?;
+            dict.set_item("text", r.pack.text.as_deref())?;
+            py_results.push(dict.into_any().unbind());
+        }
+        Ok(py_results)
+    }
+
     /// Get the stored text for a pack, if any.
     fn pack_text(&self, pack_id: u64) -> PyResult<Option<String>> {
         Ok(lock_engine(&self.inner)?.pack_text(pack_id).map(str::to_owned))
