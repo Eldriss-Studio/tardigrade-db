@@ -239,6 +239,21 @@ Automated governance sweep (decay + eviction) and segment compaction via a backg
 
 **Python API:** `engine.start_maintenance(sweep_interval_secs, ...)`, `stop_maintenance()`, `is_maintenance_running()`, `maintenance_status()` → dict with sweep_count, compaction_count, total_packs_evicted, total_bytes_reclaimed, timestamps.
 
+### Python→Rust Engine Logic Migration
+
+**Date:** May 1, 2026
+**Status:** Complete — 4 new Rust ATDD tests
+
+Moved core engine logic from Python to Rust to eliminate round-trips and improve transactional safety:
+
+1. **Auto-link in Rust** (`mem_write_pack_with_auto_link`): Queries existing packs BEFORE writing, creates Follows links above threshold, returns `PackWriteResult` with `pack_id` + `linked_pack_ids`. Eliminates a Python↔Rust retrieval round-trip on every `store()` call.
+
+2. **Trace-link traversal** (`mem_read_pack_with_trace_boost_and_follow`): Single Rust call replaces Python loop of `pack_links()` + `load_pack_by_id()` per pack.
+
+3. **Encoding constants**: `HEADER_SIZE`, `HEADER_SENTINEL`, `N_TOKENS_IDX`, `DIM_IDX` defined in Rust (`tdb-retrieval/per_token.rs`), re-exported via `tdb-engine::encoding`, exposed to Python. `encoding.py` imports from Rust.
+
+4. **`GovernanceSweepThread` deprecated**: `warnings.warn` points to `engine.start_maintenance()`.
+
 ## Research Status — What's Proven, What's Not
 
 ### Proven (tested with data)
