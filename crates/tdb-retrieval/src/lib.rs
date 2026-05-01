@@ -90,3 +90,5 @@ pub mod pipeline;
 pub mod retriever;
 pub mod simd_distance;
 pub mod slb;
+
+pub use per_token::{DIM_IDX, HEADER_SENTINEL, HEADER_SIZE, N_TOKENS_IDX};

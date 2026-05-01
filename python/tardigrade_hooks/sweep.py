@@ -1,24 +1,20 @@
-"""Background governance sweep — Scheduler (Active Object) pattern.
+"""GovernanceSweepThread — DEPRECATED.
 
-A daemon thread that periodically calls `engine.advance_days()` to apply
-AKL decay, evaluate tier transitions, and prepare stale cells for eviction.
+Use the Rust-native MaintenanceWorker instead::
 
-The Engine itself remains single-threaded and passive — this thread is the
-scheduling concern, not the business logic. Same pattern as SQLite
-(single-writer, application-level concurrency).
+    engine.start_maintenance(
+        sweep_interval_secs=3600,
+        compaction_interval_secs=21600,
+        eviction_threshold=15.0,
+    )
 
-Usage::
-
-    from tardigrade_hooks.sweep import GovernanceSweepThread
-
-    engine = tardigrade_db.Engine("/tmp/tdb")
-    sweep = GovernanceSweepThread(engine, interval_secs=3600)
-    sweep.start()
-    # ... use engine normally ...
-    sweep.stop()  # or let it die with the process (daemon thread)
+The Rust implementation runs governance sweep (decay + eviction)
+AND segment compaction in a single background thread with no GIL
+contention. This Python thread only runs decay.
 """
 
 import threading
+import warnings
 
 
 class GovernanceSweepThread:
@@ -34,6 +30,12 @@ class GovernanceSweepThread:
     """
 
     def __init__(self, engine, interval_secs=3600, hours_per_tick=1.0):
+        warnings.warn(
+            "GovernanceSweepThread is deprecated. "
+            "Use engine.start_maintenance() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.engine = engine
         self.interval = interval_secs
         self.hours_per_tick = hours_per_tick

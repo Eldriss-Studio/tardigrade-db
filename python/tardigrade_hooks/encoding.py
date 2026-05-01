@@ -1,24 +1,23 @@
 # Per-token encoding — shared header format for TardigradeDB.
 #
-# Single source of truth for the Q4-safe sentinel header encoding.
-# Used by both HuggingFaceKVHook and KnowledgePackStore.
+# Constants are defined in Rust (tdb-retrieval/src/per_token.rs) and
+# re-exported via the tardigrade_db Python module. This file imports
+# them so Python callers have a single import path.
 #
 # Header layout (64 floats = two Q4 groups):
 #   Group 0 (indices 0-31):  sentinel (-1e9) + zeros
 #   Group 1 (indices 32-63): n_tokens + dim + zeros
 #   Data (index 64+):        concatenated per-token vectors
-#
-# The sentinel and metadata are in separate Q4 groups so the
-# sentinel's magnitude doesn't crush the metadata during Q4
-# quantization (where scale = max(abs) / 7 per 32-value group).
 
 import numpy as np
 
-HEADER_SIZE = 64
-SENTINEL_VALUE = -1.0e9
+import tardigrade_db
+
+HEADER_SIZE = tardigrade_db.ENCODING_HEADER_SIZE
+SENTINEL_VALUE = tardigrade_db.ENCODING_SENTINEL
 SENTINEL_IDX = 0
-N_TOKENS_IDX = 32
-DIM_IDX = 33
+N_TOKENS_IDX = tardigrade_db.ENCODING_N_TOKENS_IDX
+DIM_IDX = tardigrade_db.ENCODING_DIM_IDX
 
 
 def encode_per_token(token_vecs, dim):

@@ -823,5 +823,11 @@ fn tardigrade_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<Engine>()?;
     m.add_class::<ReadResult>()?;
+
+    m.add("ENCODING_HEADER_SIZE", tdb_engine::encoding::HEADER_SIZE)?;
+    m.add("ENCODING_SENTINEL", tdb_engine::encoding::HEADER_SENTINEL)?;
+    m.add("ENCODING_N_TOKENS_IDX", tdb_engine::encoding::N_TOKENS_IDX)?;
+    m.add("ENCODING_DIM_IDX", tdb_engine::encoding::DIM_IDX)?;
+
     Ok(())
 }
