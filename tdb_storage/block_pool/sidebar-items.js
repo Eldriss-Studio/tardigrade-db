@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_SEGMENT_SIZE"],"struct":["BlockPool"]};
+window.SIDEBAR_ITEMS = {"constant":["COMPACTION_LIVE_RATIO_THRESHOLD","DEFAULT_SEGMENT_SIZE"],"struct":["BlockPool","CompactJob","CompactionResult"]};
