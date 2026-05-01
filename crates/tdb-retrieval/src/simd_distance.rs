@@ -27,6 +27,13 @@ impl DotProduct {
         raw as f32 * a.scale * b.scale
     }
 
+    /// Raw INT8 dot product on slices — for `SoA` layout where data is contiguous.
+    #[inline]
+    pub fn int8_dot_raw_slice(a: &[i8], b: &[i8]) -> i32 {
+        debug_assert_eq!(a.len(), b.len());
+        Self::int8_dot_raw(a, b)
+    }
+
     /// Scalar FP32 dot product. Written to auto-vectorize well:
     /// simple loop, no branches, no dependencies between iterations.
     #[inline]
@@ -84,7 +91,7 @@ impl DotProduct {
         acc
     }
 
-    /// x86_64: AVX2 when available, scalar fallback otherwise.
+    /// `x86_64`: `AVX2` when available, scalar fallback otherwise.
     #[cfg(target_arch = "x86_64")]
     #[inline]
     fn int8_dot_raw(a: &[i8], b: &[i8]) -> i32 {
@@ -96,11 +103,17 @@ impl DotProduct {
         }
     }
 
-    /// AVX2 INT8 dot product. Widens i8→i16 then uses `vpmaddwd` (i16×i16→i32
-    /// pairwise add). Processes 32 i8 elements per iteration (two 16-element
-    /// halves widened to i16, then accumulated to i32).
+    /// AVX2 INT8 dot product. Widens i8 to i16 then uses `vpmaddwd` for
+    /// pairwise multiply-add. Processes 32 elements per iteration.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure AVX2 is available (checked via `is_x86_feature_detected!`).
+    /// Pointer arithmetic is bounded by `chunks * 32 <= len`.
+    /// `_mm256_loadu_si256` handles unaligned loads — the `cast` is safe for `loadu`.
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2")]
+    #[expect(clippy::cast_ptr_alignment)]
     unsafe fn int8_dot_avx2(a: &[i8], b: &[i8]) -> i32 {
         use std::arch::x86_64::{
             __m256i, _mm256_add_epi32, _mm256_castsi256_si128, _mm256_cvtepi8_epi16,
@@ -113,31 +126,29 @@ impl DotProduct {
         let mut acc = _mm256_setzero_si256();
 
         for i in 0..chunks {
-            let offset = i * 32;
-            let va = _mm256_loadu_si256(a.as_ptr().add(offset).cast::<__m256i>());
-            let vb = _mm256_loadu_si256(b.as_ptr().add(offset).cast::<__m256i>());
+            let off = i * 32;
+            // SAFETY: bounds checked above; loadu is unaligned-safe.
+            unsafe {
+                let va = _mm256_loadu_si256(a.as_ptr().add(off).cast::<__m256i>());
+                let vb = _mm256_loadu_si256(b.as_ptr().add(off).cast::<__m256i>());
 
-            // Widen lower 16 bytes: i8 → i16 (via sign extension)
-            let va_lo = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(va));
-            let vb_lo = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(vb));
-            // Widen upper 16 bytes
-            let va_hi = _mm256_cvtepi8_epi16(_mm256_extracti128_si256::<1>(va));
-            let vb_hi = _mm256_cvtepi8_epi16(_mm256_extracti128_si256::<1>(vb));
+                let a_lo = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(va));
+                let b_lo = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(vb));
+                let a_hi = _mm256_cvtepi8_epi16(_mm256_extracti128_si256::<1>(va));
+                let b_hi = _mm256_cvtepi8_epi16(_mm256_extracti128_si256::<1>(vb));
 
-            // i16 × i16 → i32 with pairwise horizontal add
-            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(va_lo, vb_lo));
-            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(va_hi, vb_hi));
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(a_lo, b_lo));
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(a_hi, b_hi));
+            }
         }
 
-        // Horizontal sum: 8 × i32 → scalar
-        let hi128 = _mm256_extracti128_si256::<1>(acc);
-        let lo128 = _mm256_castsi256_si128(acc);
-        let sum128 = _mm_add_epi32(lo128, hi128);
-        let sum64 = _mm_add_epi32(sum128, _mm_srli_si128::<8>(sum128));
-        let sum32 = _mm_add_epi32(sum64, _mm_srli_si128::<4>(sum64));
-        let mut result = _mm_cvtsi128_si32(sum32);
+        let upper = _mm256_extracti128_si256::<1>(acc);
+        let lower = _mm256_castsi256_si128(acc);
+        let pair = _mm_add_epi32(lower, upper);
+        let half = _mm_add_epi32(pair, _mm_srli_si128::<8>(pair));
+        let quad = _mm_add_epi32(half, _mm_srli_si128::<4>(half));
+        let mut result = _mm_cvtsi128_si32(quad);
 
-        // Remainder
         let tail = chunks * 32;
         for i in tail..len {
             result += a[i] as i32 * b[i] as i32;

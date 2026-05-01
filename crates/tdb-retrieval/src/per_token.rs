@@ -72,12 +72,64 @@ pub enum ScoringMode {
     Top5Avg,
 }
 
-/// A single token's K vector, quantized to INT8, with its parent cell reference.
+/// Contiguous token store — Structure of Arrays (`SoA`) layout.
+///
+/// All token vectors are packed sequentially in one `Vec<i8>` arena.
+/// Eliminates the pointer-chasing cache misses of `Vec<TokenEntry>`
+/// where each `QuantizedInt8Vec.values` was a separate heap allocation.
 #[derive(Debug)]
-struct TokenEntry {
-    cell_id: CellId,
-    owner: OwnerId,
-    quantized_key: QuantizedInt8Vec,
+struct TokenStore {
+    data: Vec<i8>,
+    scales: Vec<f32>,
+    cell_ids: Vec<CellId>,
+    owners: Vec<OwnerId>,
+    dim: usize,
+}
+
+impl TokenStore {
+    fn new() -> Self {
+        Self { data: Vec::new(), scales: Vec::new(), cell_ids: Vec::new(), owners: Vec::new(), dim: 0 }
+    }
+
+    fn len(&self) -> usize {
+        self.scales.len()
+    }
+
+    fn push(&mut self, cell_id: CellId, owner: OwnerId, quantized: &QuantizedInt8Vec) {
+        if self.dim == 0 {
+            self.dim = quantized.values.len();
+        }
+        self.data.extend_from_slice(&quantized.values);
+        self.scales.push(quantized.scale);
+        self.cell_ids.push(cell_id);
+        self.owners.push(owner);
+    }
+
+    fn token_data(&self, index: usize) -> &[i8] {
+        let start = index * self.dim;
+        &self.data[start..start + self.dim]
+    }
+
+    fn retain_by_cell(&mut self, keep: impl Fn(CellId) -> bool) {
+        let dim = self.dim;
+        if dim == 0 { return; }
+        let mut write = 0;
+        for read in 0..self.len() {
+            if keep(self.cell_ids[read]) {
+                if write != read {
+                    self.data.copy_within(read * dim..(read + 1) * dim, write * dim);
+                    self.scales[write] = self.scales[read];
+                    self.cell_ids[write] = self.cell_ids[read];
+                    self.owners[write] = self.owners[read];
+                }
+                write += 1;
+            }
+        }
+        self.data.truncate(write * dim);
+        self.scales.truncate(write);
+        self.cell_ids.truncate(write);
+        self.owners.truncate(write);
+    }
 }
 
 #[derive(Debug)]
@@ -86,14 +138,15 @@ struct CellSummary {
     pooled_key: Vec<f32>,
 }
 
-/// Per-token retriever using Inverted Multi-Key Index.
+/// Per-token retriever using Inverted Multi-Key Index with `SoA` layout.
 ///
 /// Multiple token entries point back to the same `CellId`. On query,
 /// each query token scores against all stored tokens. Aggregation
-/// depends on [`ScoringMode`].
+/// depends on [`ScoringMode`]. Token vectors are stored contiguously
+/// in a flat arena for cache-friendly sequential access.
 #[derive(Debug)]
 pub struct PerTokenRetriever {
-    tokens: Vec<TokenEntry>,
+    store: TokenStore,
     /// Track token count per cell for diagnostics.
     cell_token_count: HashMap<CellId, usize>,
     /// Fixed-dimension pooled summaries for latent candidate selection.
@@ -122,7 +175,7 @@ impl PerTokenRetriever {
     /// Create a retriever with explicit scoring mode and config (Parameter Object).
     pub fn with_config(mode: ScoringMode, config: PerTokenConfig) -> Self {
         Self {
-            tokens: Vec::new(),
+            store: TokenStore::new(),
             cell_token_count: HashMap::new(),
             cell_summaries: HashMap::new(),
             dim: None,
@@ -134,7 +187,7 @@ impl PerTokenRetriever {
 
     /// Number of individual token entries stored.
     pub fn token_count(&self) -> usize {
-        self.tokens.len()
+        self.store.len()
     }
 
     /// Number of distinct cells indexed.
@@ -187,20 +240,17 @@ impl PerTokenRetriever {
         owner_filter: Option<OwnerId>,
         use_candidate_reduction: bool,
     ) -> Vec<RetrievalResult> {
-        if self.tokens.is_empty() || query_key.is_empty() {
+        if self.store.len() == 0 || query_key.is_empty() {
             return Vec::new();
         }
 
-        // Decode query: could be per-token encoded or a single vector.
         let Ok(query_view) = RetrievalKeyView::parse(query_key) else {
             return Vec::new();
         };
         let query_tokens: Vec<QuantizedInt8Vec> =
             if let Some((n, d, data)) = query_view.raw_tokens() {
-                // Per-token encoded query: quantize each token.
                 (0..n).map(|i| Int8Quantizer::quantize(&data[i * d..(i + 1) * d])).collect()
             } else {
-                // Single vector query (e.g., mean-pooled).
                 vec![Int8Quantizer::quantize(query_key)]
             };
 
@@ -213,28 +263,36 @@ impl PerTokenRetriever {
             None
         };
 
-        // Collect dot products per cell. Aggregation depends on scoring_mode.
+        let store_dim = self.store.dim;
+        let qt_dim = query_tokens[0].values.len();
+
         let mut cell_scores: HashMap<CellId, (Vec<f32>, OwnerId)> = HashMap::new();
 
-        for token_entry in &self.tokens {
-            if owner_filter.is_some_and(|o| o != token_entry.owner) {
+        for i in 0..self.store.len() {
+            let owner = self.store.owners[i];
+            if owner_filter.is_some_and(|o| o != owner) {
                 continue;
             }
 
-            if candidate_cells.as_ref().is_some_and(|ids| !ids.contains(&token_entry.cell_id)) {
+            let cell_id = self.store.cell_ids[i];
+            if candidate_cells.as_ref().is_some_and(|ids| !ids.contains(&cell_id)) {
                 continue;
             }
 
-            if token_entry.quantized_key.values.len() != query_tokens[0].values.len() {
+            if store_dim != qt_dim {
                 continue;
             }
+
+            let token_data = self.store.token_data(i);
+            let token_scale = self.store.scales[i];
 
             for qt in &query_tokens {
-                let dot = DotProduct::int8_dot(qt, &token_entry.quantized_key) * inv_sqrt_dk;
+                let raw = DotProduct::int8_dot_raw_slice(&qt.values, token_data);
+                let dot = raw as f32 * qt.scale * token_scale * inv_sqrt_dk;
 
                 let entry = cell_scores
-                    .entry(token_entry.cell_id)
-                    .or_insert_with(|| (Vec::new(), token_entry.owner));
+                    .entry(cell_id)
+                    .or_insert_with(|| (Vec::new(), owner));
 
                 entry.0.push(dot);
             }
@@ -375,7 +433,6 @@ impl Retriever for PerTokenRetriever {
     }
 
     fn insert(&mut self, cell_id: CellId, owner: OwnerId, key: &[f32]) {
-        // Try to decode as per-token encoded.
         let Ok(view) = RetrievalKeyView::parse(key) else {
             return;
         };
@@ -387,25 +444,18 @@ impl Retriever for PerTokenRetriever {
 
             for i in 0..n {
                 let token_key = &data[i * d..(i + 1) * d];
-                self.tokens.push(TokenEntry {
-                    cell_id,
-                    owner,
-                    quantized_key: Int8Quantizer::quantize(token_key),
-                });
+                let quantized = Int8Quantizer::quantize(token_key);
+                self.store.push(cell_id, owner, &quantized);
             }
 
             *self.cell_token_count.entry(cell_id).or_insert(0) += n;
         } else {
-            // Fallback: treat as a single-token key (backward compatible).
             if self.dim.is_none() {
                 self.dim = Some(key.len());
             }
 
-            self.tokens.push(TokenEntry {
-                cell_id,
-                owner,
-                quantized_key: Int8Quantizer::quantize(key),
-            });
+            let quantized = Int8Quantizer::quantize(key);
+            self.store.push(cell_id, owner, &quantized);
 
             *self.cell_token_count.entry(cell_id).or_insert(0) += 1;
         }
@@ -414,13 +464,13 @@ impl Retriever for PerTokenRetriever {
     }
 
     fn remove(&mut self, cell_id: CellId) {
-        self.tokens.retain(|t| t.cell_id != cell_id);
+        self.store.retain_by_cell(|id| id != cell_id);
         self.cell_token_count.remove(&cell_id);
         self.cell_summaries.remove(&cell_id);
     }
 
     fn len(&self) -> usize {
-        self.tokens.len()
+        self.store.len()
     }
 }
 
