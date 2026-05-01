@@ -225,7 +225,7 @@ SGLang's RadixAttention architecture is strictly prefix-based (same as vLLM v1).
 | Multi-session memory | Cross-day retrieval ("what happened last week") | Planned |
 | Adversarial retrieval | Contradictory memories, test which surfaces | Planned |
 | Confidence thresholding | Calibrate "I don't remember" cutoff using SNR | Planned |
-| [Cross-model retrieval](cross-model-memory-test.md) | Store with one model, retrieve with another | Designed |
+| [Cross-model retrieval](cross-model-memory-test.md) | Store with one model, retrieve with another | **Complete — weak but non-zero cross-model signal (25% avg vs 33.3% baseline). Model-specific by default; learned projection needed for portability.** |
 | RoPE injection | Test KV injection with rotary position encoding | Planned |
 | **vLLM connector — semantic save** | Thread per-request `slot_mapping` from `attn_metadata` so save captures the request's actual blocks (not placeholder block 0). Validate that re-querying the same prompt returns the stored KV with non-zero overlap. | **Complete — `RequestSlotResolver` extracts per-request blocks; retrieval key asymmetry resolved (save/load both use `compute_for_save` in same retrieval-key space)** |
 | **vLLM cross-session retrieval** | Save with vLLM run #1, restart, query with vLLM run #2. Confirm load path injects the prior session's KV and `start_load_kv` writes non-zero data into the allocated GPU block slots. | **Complete — validated with `Engine.refresh()` + `test_vllm_cross_session.py` (1 GPU test)** |

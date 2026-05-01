@@ -8,6 +8,8 @@ TardigradeDB is a from-scratch, LLM-native database kernel designed as a persist
 
 **Status:** All phases complete through P4. 527 tests (271 Rust + 256 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies with unified save/load via `compute_for_save` (Template Method). **vLLM connector hardened:** metadata DTO bridge (scheduler→worker), bounded fingerprint cache (LRU eviction at `max_num_seqs`), safetensors-first embedding weight loading, **save-side retrieval key asymmetry resolved** (token IDs flow scheduler→DTO→worker, both sides use `compute_for_save` in the same retrieval-key space, raw K fallback for graceful degradation). WAL checkpointing. Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
 
+**Scale validated:** 100% recall at 2K memories (Top5Avg, Q4 pipeline). Vamana gives 1.4x latency speedup with zero recall loss. **Thread-safe:** Python Engine wrapped in `Arc<Mutex<>>` with GIL release via `py.detach()`. **Cross-model:** Weak but non-zero signal (25% vs 33.3% baseline) — model-specific by default, learned projection needed for portability.
+
 ## Build & Test
 
 ### Prerequisites
@@ -25,7 +27,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install transformers
 ```
 
-### Rust tests (238 tests)
+### Rust tests (271 tests)
 
 ```bash
 cargo build --workspace                              # build all crates
@@ -39,7 +41,7 @@ cargo test test_rebuild_retriever                     # run a single test by nam
 
 Note: `tdb-python` is excluded from `cargo test/clippy` because PyO3 needs `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` on Python 3.14.
 
-### Python tests (145 tests)
+### Python tests (256 tests)
 
 ```bash
 source .venv/bin/activate
