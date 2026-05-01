@@ -58,92 +58,231 @@ DOMAINS = [
 # Tier "vague": how a real agent/user would actually ask
 
 MODERATE_QUERIES = [
-    # Work (3 queries, different angles)
+    # Work (10 queries)
     ("Any translation projects recently?", list(range(0, 10)), "moderate"),
     ("How are the freelance clients?", list(range(0, 10)), "moderate"),
     ("Any interpreting gigs at the hospital or courts?", [5, 7], "moderate"),
-    # Parenting (3 queries)
+    ("Working on any legal documents?", [1, 4, 7], "moderate"),
+    ("Any new language work come in?", list(range(0, 10)), "moderate"),
+    ("How's the translation business?", list(range(0, 10)), "moderate"),
+    ("Got any deadlines this week?", [0, 3, 6], "moderate"),
+    ("Any interesting documents to translate?", [0, 2, 3, 8], "moderate"),
+    ("Taking on any interpreting shifts?", [5, 7], "moderate"),
+    ("How are the publishing house clients?", [3, 6], "moderate"),
+    # Parenting (10 queries)
     ("What's been happening with Lucia at school?", [11, 17, 19], "moderate"),
     ("How are things at bedtime with Lucia?", [12, 14], "moderate"),
     ("Any milestones or activities with Lucia?", [10, 15, 17, 18], "moderate"),
-    # Cooking (3 queries)
+    ("How is Lucia doing at swimming lessons?", [17], "moderate"),
+    ("Any school events coming up?", [11, 19], "moderate"),
+    ("What's Lucia been drawing or creating?", [16, 18], "moderate"),
+    ("Any parent-teacher updates?", [11], "moderate"),
+    ("How is Lucia handling the family changes?", [12, 14, 16, 19], "moderate"),
+    ("Did Lucia have any playdates?", [13, 15], "moderate"),
+    ("Any funny things Lucia said recently?", [14, 18], "moderate"),
+    # Cooking (10 queries)
     ("Have you tried any new recipes?", list(range(20, 30)), "moderate"),
     ("Done any baking recently?", [22, 24, 29], "moderate"),
     ("Any cooking disasters or successes?", [20, 21, 23, 27], "moderate"),
-    # Health (3 queries)
+    ("Made anything from your grandmother's recipes?", [20, 25], "moderate"),
+    ("What did you cook for Lucia's school?", [22], "moderate"),
+    ("Any Mexican dishes lately?", [20, 25, 26], "moderate"),
+    ("Tried any Asian recipes?", [21, 23], "moderate"),
+    ("How's the sourdough going?", [29], "moderate"),
+    ("Any meal prep this week?", list(range(20, 30)), "moderate"),
+    ("Cook anything special for anyone?", [22, 24, 27, 28], "moderate"),
+    # Health (10 queries)
     ("Any doctor visits or health concerns?", [30, 31, 32, 33, 34, 35], "moderate"),
     ("How is the therapy going?", [38, 39], "moderate"),
     ("Any physical problems lately?", [31, 32, 33, 34], "moderate"),
-    # Legal (3 queries)
+    ("How's your blood pressure?", [30], "moderate"),
+    ("Any dental appointments?", [36], "moderate"),
+    ("Are you sleeping well these days?", [35, 37], "moderate"),
+    ("How's the vitamin D situation?", [30], "moderate"),
+    ("Any medication changes?", [30, 33], "moderate"),
+    ("How are the headaches?", [32], "moderate"),
+    ("Any anxiety or stress episodes?", [34, 38, 39], "moderate"),
+    # Legal (10 queries)
     ("What's the latest with the divorce paperwork?", [40, 42, 45, 47], "moderate"),
     ("Any updates on custody arrangements?", [41, 43, 44], "moderate"),
     ("How are things going with the lawyers?", [42, 45, 47], "moderate"),
-    # Social (3 queries)
+    ("Any mediation sessions scheduled?", [41, 46], "moderate"),
+    ("How's the child support situation?", [42, 48], "moderate"),
+    ("Any court dates coming up?", [40, 45, 47], "moderate"),
+    ("Eduardo following the schedule?", [43, 44, 46], "moderate"),
+    ("Any property division updates?", [47, 49], "moderate"),
+    ("How's communication with Eduardo's lawyer?", [42, 45], "moderate"),
+    ("Any changes to the visitation agreement?", [41, 44, 46], "moderate"),
+    # Social (10 queries)
     ("Seen any friends lately?", list(range(50, 60)), "moderate"),
     ("Any new people you've met?", [52, 55, 56], "moderate"),
     ("How are things with your friends from work?", [51, 53, 57], "moderate"),
-    # Fitness (3 queries)
+    ("Gone to any social events?", [52, 54, 58, 59], "moderate"),
+    ("How's the book club going?", [54], "moderate"),
+    ("Heard from Camila or Ana?", [50, 51], "moderate"),
+    ("Any dates or romantic interests?", [52, 55], "moderate"),
+    ("Gone out in the neighborhood?", [56, 58, 59], "moderate"),
+    ("Any gatherings or dinner parties?", [52, 58], "moderate"),
+    ("Talked to anyone interesting?", list(range(50, 60)), "moderate"),
+    # Fitness (10 queries)
     ("How's the exercise routine going?", list(range(60, 70)), "moderate"),
     ("Any running or swimming lately?", [60, 61, 63, 65], "moderate"),
     ("Have you tried any new workouts?", [62, 64, 66], "moderate"),
-    # Dreams (3 queries)
+    ("Getting to the YMCA?", [61, 62], "moderate"),
+    ("How are the morning runs?", [60, 63, 65], "moderate"),
+    ("Any races or fitness events?", [65, 67], "moderate"),
+    ("Doing any yoga or stretching?", [62, 64], "moderate"),
+    ("How's the lakefront running going?", [60, 63], "moderate"),
+    ("Any activities with Lucia outdoors?", [67, 68, 69], "moderate"),
+    ("Hit any personal records?", [61, 63, 65], "moderate"),
+    # Dreams (10 queries)
     ("Any interesting dreams?", list(range(70, 80)), "moderate"),
     ("Any nightmares recently?", [73, 75, 78], "moderate"),
     ("Had any dreams about family?", [70, 72, 74, 79], "moderate"),
-    # Errands (3 queries)
+    ("Any recurring dreams?", list(range(70, 80)), "moderate"),
+    ("Dreams about work or translation?", [71, 76], "moderate"),
+    ("Any dreams about Eduardo?", [72, 79], "moderate"),
+    ("Had any vivid or unusual dreams?", list(range(70, 80)), "moderate"),
+    ("Any dreams about your grandmother?", [70], "moderate"),
+    ("Dreams about Lucia?", [73, 74, 79], "moderate"),
+    ("Any dreams that felt meaningful?", list(range(70, 80)), "moderate"),
+    # Errands (10 queries)
     ("What errands needed doing?", list(range(80, 90)), "moderate"),
     ("Any car or house problems?", [80, 82, 83, 85], "moderate"),
     ("Had to deal with any stores or services?", [81, 84, 86, 88], "moderate"),
-    # Media (3 queries)
+    ("Any home repairs needed?", [82, 83, 85], "moderate"),
+    ("How's the car situation?", [80, 87], "moderate"),
+    ("Any bureaucratic errands?", [81, 84, 89], "moderate"),
+    ("Had to return anything?", [88], "moderate"),
+    ("Any appointments or waiting in lines?", [81, 84, 89], "moderate"),
+    ("Package deliveries or shipping?", [86, 89], "moderate"),
+    ("Any grocery or shopping trips?", [84, 86, 88], "moderate"),
+    # Media (10 queries)
     ("Watched or read anything good?", list(range(90, 100)), "moderate"),
     ("Any movies or shows with Lucia?", [90, 94, 95], "moderate"),
     ("Read any books recently?", [91, 96, 98], "moderate"),
+    ("Listening to any podcasts?", [92, 93], "moderate"),
+    ("Any music you're enjoying?", [94, 99], "moderate"),
+    ("Seen any art exhibits?", [97], "moderate"),
+    ("Any documentaries or news stories?", [93, 95, 99], "moderate"),
+    ("What are you reading right now?", [91, 96, 98], "moderate"),
+    ("Any concerts or live events?", [94, 99], "moderate"),
+    ("Found any good shows to binge?", [90, 95, 96], "moderate"),
 ]
 
 VAGUE_QUERIES = [
-    # Work (3 phrasings)
+    # Work (10 phrasings)
     ("How is work going?", list(range(0, 10)), "vague"),
     ("Busy with work?", list(range(0, 10)), "vague"),
     ("Anything happening professionally?", list(range(0, 10)), "vague"),
-    # Parenting (3 phrasings)
+    ("Work keeping you busy?", list(range(0, 10)), "vague"),
+    ("How's the career?", list(range(0, 10)), "vague"),
+    ("Making money?", list(range(0, 10)), "vague"),
+    ("Work stress?", list(range(0, 10)), "vague"),
+    ("Job going alright?", list(range(0, 10)), "vague"),
+    ("Productive lately?", list(range(0, 10)), "vague"),
+    ("Any work updates?", list(range(0, 10)), "vague"),
+    # Parenting (10 phrasings)
     ("How is Lucia doing?", list(range(10, 20)), "vague"),
     ("Everything okay with the kid?", list(range(10, 20)), "vague"),
     ("How's parenting going?", list(range(10, 20)), "vague"),
-    # Cooking (3 phrasings)
+    ("Lucia good?", list(range(10, 20)), "vague"),
+    ("How's your daughter?", list(range(10, 20)), "vague"),
+    ("The little one okay?", list(range(10, 20)), "vague"),
+    ("Mom life treating you well?", list(range(10, 20)), "vague"),
+    ("Kids are alright?", list(range(10, 20)), "vague"),
+    ("Family doing well?", list(range(10, 20)), "vague"),
+    ("How's home life?", list(range(10, 20)), "vague"),
+    # Cooking (10 phrasings)
     ("What have you been eating?", list(range(20, 30)), "vague"),
     ("Cooking much?", list(range(20, 30)), "vague"),
     ("What's for dinner these days?", list(range(20, 30)), "vague"),
-    # Health (3 phrasings)
+    ("Eating well?", list(range(20, 30)), "vague"),
+    ("Food been good?", list(range(20, 30)), "vague"),
+    ("In the kitchen much?", list(range(20, 30)), "vague"),
+    ("What are you eating?", list(range(20, 30)), "vague"),
+    ("Feeding yourself okay?", list(range(20, 30)), "vague"),
+    ("Any good meals?", list(range(20, 30)), "vague"),
+    ("Cooking or ordering in?", list(range(20, 30)), "vague"),
+    # Health (10 phrasings)
     ("How are you feeling?", list(range(30, 40)), "vague"),
     ("Everything okay health-wise?", list(range(30, 40)), "vague"),
     ("Taking care of yourself?", list(range(30, 40)), "vague"),
-    # Legal (3 phrasings)
-    ("How are things with Eduardo?", [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 72], "vague"),
-    ("Any drama lately?", [40, 41, 42, 43, 44, 45, 46, 47, 48, 49], "vague"),
+    ("Feeling alright?", list(range(30, 40)), "vague"),
+    ("How's your health?", list(range(30, 40)), "vague"),
+    ("Body holding up?", list(range(30, 40)), "vague"),
+    ("Doing okay physically?", list(range(30, 40)), "vague"),
+    ("Any aches or pains?", list(range(30, 40)), "vague"),
+    ("Feeling healthy?", list(range(30, 40)), "vague"),
+    ("How's your wellbeing?", list(range(30, 40)), "vague"),
+    # Legal (10 phrasings)
+    ("How are things with Eduardo?", list(range(40, 50)), "vague"),
+    ("Any drama lately?", list(range(40, 50)), "vague"),
     ("How's the co-parenting situation?", [41, 43, 44, 46, 48], "vague"),
-    # Social (3 phrasings)
+    ("Eduardo being difficult?", list(range(40, 50)), "vague"),
+    ("The ex causing problems?", list(range(40, 50)), "vague"),
+    ("Legal stuff sorted?", list(range(40, 50)), "vague"),
+    ("How's the separation going?", list(range(40, 50)), "vague"),
+    ("Divorce stuff?", list(range(40, 50)), "vague"),
+    ("Any issues with Eduardo?", list(range(40, 50)), "vague"),
+    ("Everything civil with the ex?", list(range(40, 50)), "vague"),
+    # Social (10 phrasings)
     ("What's your social life like?", list(range(50, 60)), "vague"),
     ("Getting out much?", list(range(50, 60)), "vague"),
     ("Hanging out with anyone?", list(range(50, 60)), "vague"),
-    # Fitness (3 phrasings)
+    ("Seeing people?", list(range(50, 60)), "vague"),
+    ("Got friends around?", list(range(50, 60)), "vague"),
+    ("Socializing?", list(range(50, 60)), "vague"),
+    ("Lonely or connected?", list(range(50, 60)), "vague"),
+    ("Any fun plans with friends?", list(range(50, 60)), "vague"),
+    ("People in your life?", list(range(50, 60)), "vague"),
+    ("Community feeling good?", list(range(50, 60)), "vague"),
+    # Fitness (10 phrasings)
     ("Getting any exercise?", list(range(60, 70)), "vague"),
     ("Staying active?", list(range(60, 70)), "vague"),
     ("Moving your body?", list(range(60, 70)), "vague"),
-    # Dreams (3 phrasings)
+    ("Working out?", list(range(60, 70)), "vague"),
+    ("Being physical?", list(range(60, 70)), "vague"),
+    ("Keeping fit?", list(range(60, 70)), "vague"),
+    ("Active lifestyle?", list(range(60, 70)), "vague"),
+    ("Exercise happening?", list(range(60, 70)), "vague"),
+    ("Getting your steps in?", list(range(60, 70)), "vague"),
+    ("Body moving?", list(range(60, 70)), "vague"),
+    # Dreams (10 phrasings)
     ("Sleep well lately?", list(range(70, 80)), "vague"),
     ("Any weird dreams?", list(range(70, 80)), "vague"),
     ("How's sleep?", list(range(70, 80)), "vague"),
-    # Errands (3 phrasings)
+    ("Sleeping okay?", list(range(70, 80)), "vague"),
+    ("Rest well?", list(range(70, 80)), "vague"),
+    ("Night time okay?", list(range(70, 80)), "vague"),
+    ("Dream anything?", list(range(70, 80)), "vague"),
+    ("Getting enough rest?", list(range(70, 80)), "vague"),
+    ("Nights been peaceful?", list(range(70, 80)), "vague"),
+    ("Waking up rested?", list(range(70, 80)), "vague"),
+    # Errands (10 phrasings)
     ("Anything annoying happen?", list(range(80, 90)), "vague"),
     ("Any chores or errands?", list(range(80, 90)), "vague"),
     ("Dealing with anything tedious?", list(range(80, 90)), "vague"),
-    # Media (3 phrasings)
+    ("Life admin piling up?", list(range(80, 90)), "vague"),
+    ("Any hassles?", list(range(80, 90)), "vague"),
+    ("Boring stuff to do?", list(range(80, 90)), "vague"),
+    ("Adulting hard?", list(range(80, 90)), "vague"),
+    ("Things to take care of?", list(range(80, 90)), "vague"),
+    ("Running around doing stuff?", list(range(80, 90)), "vague"),
+    ("Logistical headaches?", list(range(80, 90)), "vague"),
+    # Media (10 phrasings)
     ("What are you into these days?", list(range(90, 100)), "vague"),
     ("Consuming any media?", list(range(90, 100)), "vague"),
     ("Anything entertaining going on?", list(range(90, 100)), "vague"),
+    ("Watching anything?", list(range(90, 100)), "vague"),
+    ("Reading stuff?", list(range(90, 100)), "vague"),
+    ("Any entertainment?", list(range(90, 100)), "vague"),
+    ("Screen time?", list(range(90, 100)), "vague"),
+    ("Bingeing anything?", list(range(90, 100)), "vague"),
+    ("Good content lately?", list(range(90, 100)), "vague"),
+    ("Finding things to watch?", list(range(90, 100)), "vague"),
 ]
 
-# Broad open-ended queries — no domain target, any relevant hit counts
 OPEN_QUERIES = [
     ("Tell me about your week", list(range(100)), "open"),
     ("What's on your mind?", list(range(100)), "open"),
