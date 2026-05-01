@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["DIM_IDX","HEADER_SENTINEL","HEADER_SIZE","N_TOKENS_IDX"],"enum":["ScoringMode"],"fn":["decode_per_token_keys","encode_per_token_keys"],"struct":["CellSummary","PerTokenConfig","PerTokenRetriever","TokenEntry"]};
+window.SIDEBAR_ITEMS = {"constant":["DIM_IDX","HEADER_SENTINEL","HEADER_SIZE","N_TOKENS_IDX"],"enum":["ScoringMode"],"fn":["decode_per_token_keys","encode_per_token_keys"],"struct":["CellSummary","PerTokenConfig","PerTokenRetriever","TokenStore"]};
