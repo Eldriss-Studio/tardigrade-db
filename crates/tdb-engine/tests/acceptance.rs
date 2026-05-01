@@ -3591,3 +3591,117 @@ fn test_maintenance_disabled_noop() {
 }
 
 use tdb_engine::maintenance::DEFAULT_EVICTION_THRESHOLD;
+
+// ── Auto-link tests ─────────────────────────────────────────────────────
+
+/// Threshold of zero: any positive score triggers a link.
+const AUTO_LINK_THRESHOLD: f32 = 0.0;
+
+/// Threshold so high no retrieval score can reach it.
+const UNREACHABLE_AUTO_LINK_THRESHOLD: f32 = 999_999.0;
+
+/// ATDD: Writing a pack with auto-link creates a trace link to a similar existing pack.
+#[test]
+fn test_mem_write_pack_with_auto_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key_a = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    let pack_a = engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key_a,
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: Some("First fact".to_owned()),
+        })
+        .unwrap();
+
+    let key_b = encode_per_token_keys(&[&[0.95f32, 0.05, 0.0, 0.0]]);
+    let pack_b = engine
+        .mem_write_pack_with_auto_link(
+            &KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key_b,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+                salience: 80.0,
+                text: Some("Related fact".to_owned()),
+            },
+            AUTO_LINK_THRESHOLD,
+        )
+        .unwrap();
+
+    assert!(engine.pack_links(pack_b.pack_id).contains(&pack_a));
+}
+
+/// ATDD: The returned `PackWriteResult` includes linked pack IDs.
+#[test]
+fn test_auto_link_returns_linked_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: None,
+        })
+        .unwrap();
+
+    let result = engine
+        .mem_write_pack_with_auto_link(
+            &KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+                salience: 80.0,
+                text: None,
+            },
+            AUTO_LINK_THRESHOLD,
+        )
+        .unwrap();
+
+    assert!(!result.linked_pack_ids.is_empty());
+}
+
+/// ATDD: A very high threshold produces no auto-links.
+#[test]
+fn test_auto_link_high_threshold_no_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: None,
+        })
+        .unwrap();
+
+    let result = engine
+        .mem_write_pack_with_auto_link(
+            &KVPack {
+                id: 0,
+                owner: 1,
+                retrieval_key: key,
+                layers: vec![KVLayerPayload { layer_idx: 0, data: vec![2.0; 16] }],
+                salience: 80.0,
+                text: None,
+            },
+            UNREACHABLE_AUTO_LINK_THRESHOLD,
+        )
+        .unwrap();
+
+    assert!(result.linked_pack_ids.is_empty());
+}

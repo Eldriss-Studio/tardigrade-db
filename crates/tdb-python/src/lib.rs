@@ -98,7 +98,6 @@ impl Engine {
     ///
     /// **Deprecated:** Use `mem_write_pack` for new code. The Pack API is
     /// the canonical interface for storing multi-layer KV caches.
-    #[expect(clippy::too_many_arguments)]
     fn mem_write(
         &self,
         py: Python<'_>,
@@ -478,6 +477,57 @@ impl Engine {
                 .mem_write_pack(&pack)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
+    }
+
+    /// Store a pack with automatic discovery and linking of similar existing packs.
+    ///
+    /// Returns a dict with `pack_id` and `linked_pack_ids`.
+    /// Threshold defaults to [`DEFAULT_AUTO_LINK_THRESHOLD`] (250.0) when omitted.
+    #[pyo3(signature = (owner, retrieval_key, layer_payloads, salience, auto_link_threshold=None, text=None))]
+    fn mem_write_pack_with_auto_link(
+        &self,
+        py: Python<'_>,
+        owner: u64,
+        retrieval_key: PyReadonlyArray1<'_, f32>,
+        layer_payloads: Vec<(u16, PyReadonlyArray1<'_, f32>)>,
+        salience: f32,
+        auto_link_threshold: Option<f32>,
+        text: Option<String>,
+    ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        use tdb_core::kv_pack::{KVLayerPayload, KVPack};
+        use tdb_engine::engine::DEFAULT_AUTO_LINK_THRESHOLD;
+
+        let threshold = auto_link_threshold.unwrap_or(DEFAULT_AUTO_LINK_THRESHOLD);
+
+        let key =
+            retrieval_key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?.to_vec();
+
+        let layers: Vec<KVLayerPayload> = layer_payloads
+            .iter()
+            .map(|(idx, data)| {
+                Ok(KVLayerPayload {
+                    layer_idx: *idx,
+                    data: data
+                        .as_slice()
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                        .to_vec(),
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+
+        let pack = KVPack { id: 0, owner, retrieval_key: key, layers, salience, text };
+
+        let engine = Arc::clone(&self.inner);
+        let result = py.detach(move || {
+            lock_engine(&engine)?
+                .mem_write_pack_with_auto_link(&pack, threshold)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("pack_id", result.pack_id)?;
+        dict.set_item("linked_pack_ids", &result.linked_pack_ids)?;
+        Ok(dict.into())
     }
 
     /// Retrieve the top-k KV Packs matching a query key.

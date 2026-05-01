@@ -119,6 +119,23 @@ pub struct ReadResult {
     pub tier: Tier,
 }
 
+/// Default similarity threshold for auto-linking packs during write.
+///
+/// Used as the Python-side default when callers omit the threshold parameter.
+pub const DEFAULT_AUTO_LINK_THRESHOLD: f32 = 250.0;
+
+/// Result of writing a pack with auto-link discovery.
+///
+/// Contains the assigned pack ID and any packs that were automatically
+/// linked based on retrieval similarity exceeding the threshold.
+#[derive(Debug, Clone)]
+pub struct PackWriteResult {
+    /// The assigned pack ID for the newly written pack.
+    pub pack_id: PackId,
+    /// IDs of existing packs that were auto-linked to the new pack.
+    pub linked_pack_ids: Vec<PackId>,
+}
+
 /// Snapshot of engine state for monitoring and diagnostics.
 #[derive(Debug, Clone)]
 pub struct EngineStatus {
@@ -895,6 +912,37 @@ impl Engine {
         self.pack_directory.insert_pack(pack_id, cell_ids);
 
         Ok(pack_id)
+    }
+
+    /// Store a pack with automatic discovery and linking of similar existing packs.
+    ///
+    /// Before writing, queries existing packs for the same owner. Any candidate
+    /// whose retrieval score meets or exceeds `auto_link_threshold` is linked to
+    /// the new pack via a trace edge. This moves the Python-side auto-link logic
+    /// into Rust for transactional safety and eliminates a Python-Rust round-trip.
+    pub fn mem_write_pack_with_auto_link(
+        &mut self,
+        pack: &KVPack,
+        auto_link_threshold: f32,
+    ) -> Result<PackWriteResult> {
+        let mut linked_pack_ids = Vec::new();
+
+        if self.pack_count() > 0 {
+            let candidates = self.mem_read_pack(&pack.retrieval_key, 1, Some(pack.owner))?;
+            for candidate in &candidates {
+                if candidate.score >= auto_link_threshold {
+                    linked_pack_ids.push(candidate.pack.id);
+                }
+            }
+        }
+
+        let pack_id = self.mem_write_pack(pack)?;
+
+        for &linked_id in &linked_pack_ids {
+            self.add_pack_link(pack_id, linked_id)?;
+        }
+
+        Ok(PackWriteResult { pack_id, linked_pack_ids })
     }
 
     /// Retrieve the top-k KV Packs matching a query key.
