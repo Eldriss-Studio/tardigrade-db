@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RefinementMode"],"fn":["apply","dot","latent_prf","mean_centered_rescore","parse_query_tokens","subtract_in_place","top_n_avg","truncate"]};
