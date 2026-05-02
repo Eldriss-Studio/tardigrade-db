@@ -87,6 +87,15 @@ impl RetrieverPipeline {
     pub fn clear_stages(&mut self) {
         self.stages.clear();
     }
+
+    /// Mutable access to the first stage that downcasts to `T`, if any.
+    ///
+    /// Used by refinement strategies that need direct access to a specific
+    /// retriever (e.g. [`PerTokenRetriever`](crate::per_token::PerTokenRetriever)
+    /// for corpus-mean access and PRF re-query).
+    pub fn first_stage_as_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        self.stages.iter_mut().find_map(|stage| stage.as_any_mut()?.downcast_mut::<T>())
+    }
 }
 
 impl std::fmt::Debug for RetrieverPipeline {

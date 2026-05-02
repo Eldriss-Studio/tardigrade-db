@@ -204,6 +204,8 @@ pub struct Engine {
     key_dim: Option<usize>,
     /// Per-token retrieval config (stored for pipeline rebuild on refresh).
     per_token_config: PerTokenConfig,
+    /// Optional vague-query refinement applied after first-stage retrieval.
+    refinement_mode: tdb_retrieval::refinement::RefinementMode,
     /// Durable text store for KV pack fact text.
     text_store: TextStore,
     /// Durable deletion log for pack deletions.
@@ -224,6 +226,19 @@ impl Engine {
     /// Open with a custom Vamana activation threshold.
     pub fn open_with_vamana_threshold(dir: &Path, threshold: usize) -> Result<Self> {
         Self::open_with_options(dir, threshold, None)
+    }
+
+    /// Configure the post-retrieval refinement strategy (vague-query rescue).
+    ///
+    /// Default is `RefinementMode::None`. See `tdb_retrieval::refinement` for
+    /// available strategies (mean-centering, latent-space PRF).
+    pub fn set_refinement_mode(&mut self, mode: tdb_retrieval::refinement::RefinementMode) {
+        self.refinement_mode = mode;
+    }
+
+    /// Currently configured refinement mode.
+    pub fn refinement_mode(&self) -> tdb_retrieval::refinement::RefinementMode {
+        self.refinement_mode
     }
 
     fn open_with_options(
@@ -264,6 +279,7 @@ impl Engine {
             next_pack_id: 0,
             key_dim: None,
             per_token_config,
+            refinement_mode: tdb_retrieval::refinement::RefinementMode::None,
             text_store,
             deletion_log,
         };
@@ -651,6 +667,23 @@ impl Engine {
                     }
                 }
             }
+        }
+
+        // Optional vague-query refinement: re-score / re-query before governance.
+        // Default RefinementMode::None is a pass-through.
+        if !matches!(self.refinement_mode, tdb_retrieval::refinement::RefinementMode::None)
+            && is_per_token_query
+            && let Some(per_token) =
+                self.pipeline.first_stage_as_mut::<tdb_retrieval::per_token::PerTokenRetriever>()
+        {
+            candidates = tdb_retrieval::refinement::apply(
+                self.refinement_mode,
+                per_token,
+                query_key,
+                candidates,
+                k * 2,
+                owner_filter,
+            );
         }
 
         // Materialize all candidates with governance-adjusted scores.

@@ -23,6 +23,7 @@ crate-type = ["cdylib"]
 [dependencies]
 tdb-core = { workspace = true }
 tdb-engine = { workspace = true }
+tdb-retrieval = { workspace = true }
 half = { workspace = true }
 pyo3 = "0.28"
 numpy = "0.28"

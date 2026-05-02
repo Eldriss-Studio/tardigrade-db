@@ -16,8 +16,16 @@ def test_version_exists():
 
 
 def test_version_matches_cargo():
-    """ATDD 2: __version__ matches Cargo.toml version (0.1.0)."""
-    assert tardigrade_db.__version__ == "0.1.0"
+    """ATDD 2: __version__ tracks the workspace Cargo.toml version, not a hardcoded value."""
+    cargo_path = Path(__file__).resolve().parents[2] / "Cargo.toml"
+    cargo_text = cargo_path.read_text()
+    # Workspace `[workspace.package] version = "x.y.z"` is the source of truth.
+    expected = next(
+        line.split('"')[1]
+        for line in cargo_text.splitlines()
+        if line.startswith("version") and '"' in line
+    )
+    assert tardigrade_db.__version__ == expected
 
 
 def test_module_has_engine():

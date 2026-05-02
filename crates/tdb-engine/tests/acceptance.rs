@@ -3850,3 +3850,88 @@ fn test_mem_read_tokens_validates_shape() {
     let ok = engine.mem_read_tokens(&data, 1, 8, 5, None).unwrap();
     let _ = ok;
 }
+
+// ---- Vague-query refinement ATDD ---------------------------------------
+
+/// `RefinementMode::None` is the default and identical to pre-refinement behavior.
+#[test]
+fn test_refinement_none_is_default_and_pass_through() {
+    use tdb_retrieval::refinement::RefinementMode;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+    let cell0 = vec![1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let cell1 = vec![0.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+    engine.mem_write(1, 0, &encode_per_token_keys(&[&cell0]), vec![0.0; dim], 50.0, None).unwrap();
+    engine.mem_write(1, 0, &encode_per_token_keys(&[&cell1]), vec![0.0; dim], 50.0, None).unwrap();
+
+    assert!(matches!(engine.refinement_mode(), RefinementMode::None));
+
+    let q = encode_per_token_keys(&[cell0.as_slice()]);
+    let baseline = engine.mem_read(&q, 2, Some(1)).unwrap();
+    let baseline_ids: Vec<u64> = baseline.iter().map(|r| r.cell.id).collect();
+
+    engine.set_refinement_mode(RefinementMode::None);
+    let again = engine.mem_read(&q, 2, Some(1)).unwrap();
+    let again_ids: Vec<u64> = again.iter().map(|r| r.cell.id).collect();
+
+    assert_eq!(baseline_ids, again_ids);
+}
+
+/// `MeanCentered` mode runs without panic and still ranks the directionally aligned cell first.
+#[test]
+fn test_refinement_mean_centered_returns_aligned_top_result() {
+    use tdb_retrieval::refinement::RefinementMode;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+    // Three orthogonal direction cells.
+    let cell0 = [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let cell1 = [0.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let cell2 = [0.0f32, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    for c in [&cell0[..], &cell1[..], &cell2[..]] {
+        engine
+            .mem_write(1, 0, &encode_per_token_keys(&[c, c]), vec![0.0; dim], 50.0, None)
+            .unwrap();
+    }
+
+    engine.set_refinement_mode(RefinementMode::MeanCentered);
+    let q = encode_per_token_keys(&[cell0.as_slice()]);
+    let results = engine.mem_read(&q, 3, Some(1)).unwrap();
+
+    assert!(!results.is_empty(), "refinement should return at least one result");
+    // Cell 0 (id=0) is the one aligned with the query direction.
+    assert_eq!(results[0].cell.id, 0);
+}
+
+/// `LatentPrf` mode runs end-to-end and returns valid results.
+#[test]
+fn test_refinement_latent_prf_returns_results() {
+    use tdb_retrieval::refinement::RefinementMode;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+    let cell0 = [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let cell1 = [0.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let cell2 = [0.0f32, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    for c in [&cell0[..], &cell1[..], &cell2[..]] {
+        engine
+            .mem_write(1, 0, &encode_per_token_keys(&[c, c]), vec![0.0; dim], 50.0, None)
+            .unwrap();
+    }
+
+    engine.set_refinement_mode(RefinementMode::LatentPrf { alpha: 0.7, beta: 0.3, k_prime: 1 });
+    let q = encode_per_token_keys(&[cell0.as_slice()]);
+    let results = engine.mem_read(&q, 3, Some(1)).unwrap();
+
+    assert!(!results.is_empty());
+    // Top-1 should still be the aligned cell.
+    assert_eq!(results[0].cell.id, 0);
+}
