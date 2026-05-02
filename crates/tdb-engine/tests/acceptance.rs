@@ -3747,7 +3747,7 @@ fn test_trace_boost_follow_links_returns_linked_packs() {
     assert!(ids.contains(&pack_b));
 }
 
-/// ATDD: mem_read_tokens produces identical results to mem_read with encoded key.
+/// ATDD: `mem_read_tokens` produces identical results to `mem_read` with encoded key.
 ///
 /// Validates the Direct Token Query API (Facade Simplification): callers
 /// passing a raw token matrix get the same retrieval as callers building
@@ -3777,14 +3777,7 @@ fn test_mem_read_tokens_matches_encoded_mem_read() {
         )
         .unwrap();
     engine
-        .mem_write(
-            1,
-            0,
-            &encode_per_token_keys(&[&travel, &france]),
-            vec![0.0; dim],
-            50.0,
-            None,
-        )
+        .mem_write(1, 0, &encode_per_token_keys(&[&travel, &france]), vec![0.0; dim], 50.0, None)
         .unwrap();
 
     // Query "risotto" through both APIs.
@@ -3802,7 +3795,7 @@ fn test_mem_read_tokens_matches_encoded_mem_read() {
     }
 }
 
-/// ATDD: mem_read_tokens with multi-token query (matches the realistic hook flow).
+/// ATDD: `mem_read_tokens` with multi-token query (matches the realistic hook flow).
 #[test]
 fn test_mem_read_tokens_multi_token_query() {
     let dir = tempfile::tempdir().unwrap();
@@ -3816,17 +3809,10 @@ fn test_mem_read_tokens_multi_token_query() {
             v
         })
         .collect();
-    let stored_refs: Vec<&[f32]> = stored.iter().map(|v| v.as_slice()).collect();
+    let stored_refs: Vec<&[f32]> = stored.iter().map(<[f32; 8]>::as_slice).collect();
 
     engine
-        .mem_write(
-            1,
-            0,
-            &encode_per_token_keys(&stored_refs),
-            vec![0.0; dim],
-            50.0,
-            None,
-        )
+        .mem_write(1, 0, &encode_per_token_keys(&stored_refs), vec![0.0; dim], 50.0, None)
         .unwrap();
 
     // 5-token query — matches typical hook output shape.
@@ -3842,7 +3828,7 @@ fn test_mem_read_tokens_multi_token_query() {
     assert_eq!(via_tokens[0].cell.id, 0);
 }
 
-/// ATDD: mem_read_tokens rejects malformed input shapes.
+/// ATDD: `mem_read_tokens` rejects malformed input shapes.
 #[test]
 fn test_mem_read_tokens_validates_shape() {
     let dir = tempfile::tempdir().unwrap();
@@ -3850,9 +3836,7 @@ fn test_mem_read_tokens_validates_shape() {
 
     // Insert a placeholder cell with dim=8 to match the queries below.
     let token = [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    engine
-        .mem_write(1, 0, &encode_per_token_keys(&[&token]), vec![0.0; 8], 50.0, None)
-        .unwrap();
+    engine.mem_write(1, 0, &encode_per_token_keys(&[&token]), vec![0.0; 8], 50.0, None).unwrap();
 
     let data = vec![1.0f32; 8];
 
