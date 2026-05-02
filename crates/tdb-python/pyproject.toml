@@ -32,4 +32,6 @@ Documentation = "https://eldriss-studio.github.io/tardigrade-db"
 [tool.maturin]
 features = ["pyo3/extension-module"]
 manifest-path = "Cargo.toml"
-module-name = "tardigrade_db"
+module-name = "tardigrade_db.tardigrade_db"
+python-source = "../../python"
+python-packages = ["tardigrade_db", "tardigrade_hooks", "tardigrade_vllm", "tardigrade_mcp"]
