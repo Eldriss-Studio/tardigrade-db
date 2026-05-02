@@ -35,3 +35,36 @@ Source: official-data sample run (`25 + 25`, both systems `ok=50`, `failed=0`, `
 - The full matrix run is compute-heavy and may not finish reliably on constrained local machines.
 - Sample results are useful and transparent, but they are not a substitute for full-matrix publication.
 - We always keep failed/skipped outcomes visible; we do not silently drop them.
+- **Pre-2026-05-02 Tardigrade scores were inflated by a stub adapter** that returned `item.ground_truth` after lexical word-overlap on the question. From 2026-05-02 the `tardigrade` adapter actually invokes Qwen3-0.6B and the engine retrieval pipeline (see "Tardigrade adapter rewrite" below). All earlier `1.0000` scores should be interpreted as reflecting the lexical fallback, not engine quality.
+
+---
+
+## Tardigrade adapter rewrite (2026-05-02)
+
+The `tardigrade` adapter in `python/tdb_bench/adapters/tardigrade.py` now has two execution modes:
+
+- **native** (default when CUDA + transformers available): loads Qwen3-0.6B, captures per-token hidden states for each ingested item via `HuggingFaceKVHook`, writes to the engine, retrieves at query time via `engine.mem_read_tokens`, maps the top-1 cell back to its source item, returns that item's `ground_truth` as the answer.
+- **in_memory** (fallback for CPU-only CI runners): honest lexical word-overlap. Surfaced via `metadata.mode = "in_memory"` so it can never be confused with engine results.
+
+`TDB_REFINEMENT_MODE=none|centered|prf` env var selects the engine refinement mode. Defaults to `none`.
+
+### Smoke fixture (6 items, native mode, RTX 3070 Ti, deterministic_fallback evaluator)
+
+| Refinement | avg score | passed |
+|---|---:|---|
+| none | 0.833 | 5/6 |
+| centered | **1.000** | **6/6** |
+
+The single miss at `none` (`How was ticket #8842 resolved?` retrieved the maintenance-window cell instead of the ticket-resolution cell) is recovered by mean-centering — consistent with the +31pp moderate-tier gain measured on the 100-memory vague-query corpus (`docs/experiments/vague_queries/results.md`).
+
+This is a **6-item fixture**, too small to be statistically meaningful on its own, but it confirms the mechanism transfers from the synthetic vague-query corpus to the LoCoMo/LongMemEval question shape.
+
+### Mem0 / Letta head-to-head — pending operator setup
+
+To run the 3-way comparison the operator needs:
+1. Docker stack up: `docker compose -f benchmarks/docker-compose.external.yml up -d`
+2. `OPENAI_API_KEY` exported (Mem0 uses OpenAI for extraction + embeddings)
+3. `LETTA_BASE_URL=http://localhost:8283 MEM0_BASE_URL=http://localhost:8888`
+4. Run: `PYTHONPATH=python TDB_REFINEMENT_MODE=centered python -m tdb_bench run --mode smoke --config python/tdb_bench/config/default.json --output target/bench-v2/three-way.json`
+
+The previous Tardigrade-vs-Letta numbers in this file should be re-run before being cited, since the adapter has changed.
