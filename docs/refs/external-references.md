@@ -2,8 +2,8 @@
 
 Complete catalog of every paper, blog post, algorithm, system, and benchmark that
 influenced TardigradeDB's architecture or implementation. Sources: codebase, docs,
-plans, `.remember/` buffer, `.claude/plans/`, and Codex sessions (2026-01 through
-2026-04).
+plans, `.claude/plans/`, Codex/Resumancer sessions (2026-01 through 2026-05), and
+experiment docs.
 
 ---
 
@@ -29,8 +29,21 @@ contradicted, the corresponding subsystem would require redesign.
 |---|---|---|---|
 | **RoFormer** (Su et al., 2021) | arXiv:2104.09864 | Rotary Position Embeddings (RoPE); rotation applied to Q and K; critical for cross-context KV reuse and position remapping via `RoPEPositionEncoder.remap_keys()` | `docs/learning-roadmap.md`, `docs/experiments/kv-cache-validation.md` |
 | **"Attention Is All You Need"** (Vaswani et al., 2017) | arXiv:1706.03762 | Transformer fundamentals; Q/K/V projections; scaled dot-product attention formula `score(q,k) = (q·k)/√d_k` | `docs/learning-roadmap.md`, `crates/tdb-retrieval/src/lib.rs` |
+| **FIER** | arXiv ID not confirmed in codebase docs | Confirms Q*K (not K*K) as the correct retrieval scoring: all use Q for queries; K*K produces symmetric attention that can't capture directional relationships | `docs/experiments/kv-cache-validation.md` |
+| **ShadowKV** | arXiv ID not confirmed in codebase docs | Same confirmation of Q*K over K*K; cited alongside FIER and "From QKV to K/KV" as literature consensus | `docs/experiments/kv-cache-validation.md` |
+| **"From QKV to K/KV"** | arXiv ID not confirmed in codebase docs | Explains why K*K retrieval fails: symmetric attention cannot represent directional query-to-memory relationships; the correct design uses Q for queries and K for stored memories | `docs/experiments/kv-cache-validation.md` |
+| **ColBERT** (Khattab & Zaharia, 2020) | arXiv:2004.12832 | Late interaction scoring via cosine sum-of-max; **tested and rejected** — `cosine_sum_max` scored 53.3% R@5 vs Top5Avg's 100% on 100-memory corpus | `docs/experiments/kv-cache-validation.md` |
+| **GPTQ** (Frantar et al., 2022) | arXiv:2210.17323 | Post-training quantization intuition for weight quantization; same principles apply to KV cache Q4 quantization in `tdb-storage` | `docs/learning-roadmap.md` |
+| **AWQ** (Lin et al., 2023) | arXiv:2306.00978 | Activation-aware weight quantization; cited alongside GPTQ for KV quantization background | `docs/learning-roadmap.md` |
+| **Orthogonal Procrustes** (classical linear algebra; Schönemann 1966) | — | Cross-model space alignment; used for same-family retrieval via linear projection; empirically shown to plateau at ~47% R@5 for cross-family (Qwen→GPT-2), motivating the MLP adapter instead | `docs/experiments/README.md` |
 | **Orca** (Yu et al., 2022) | OSDI 2022 | Iteration-level scheduling for LLM inference; concurrent prefill/decode scheduling relevant to multi-agent session management | `docs/learning-roadmap.md` |
 | **Pancake** | arXiv:2602.21477 | Multi-tier memory for multi-agent serving; ANN indices + cache tier + GPU/CPU placement optimization | `docs/competitors/competitors-search-2.md` |
+| **Rocchio Algorithm** (Rocchio, 1971) | Salton, *The SMART Retrieval System*, Prentice-Hall 1971 | Classical pseudo-relevance feedback (PRF): `q' = α·q_orig + β·avg(relevant) − γ·avg(non_rel)`. Foundation for the latent-space PRF refinement designed for vague-query retrieval. The query gets pulled toward the centroid of plausible top-k results, closing the vocabulary mismatch that produces the 48% R@5 cliff on vague queries | `crates/tdb-retrieval/src/refinement.rs` (planned), `docs/experiments/vague_queries/` (planned) |
+| **Improving Query Representations for Dense Retrieval with PRF** (Yu et al., CIKM 2021) | arXiv:2108.13454 | Vector-based PRF for dense retrievers: Rocchio adapted to embedding space using pre-generated passage embeddings; both Average and Rocchio fusion variants. Justifies pure latent-space PRF over text-based query expansion for TardigradeDB's tensor-native architecture | `crates/tdb-retrieval/src/refinement.rs` (planned) |
+| **ColBERT-PRF** (Wang et al., TWeb 2022) | arXiv:2106.11251 | Late-interaction PRF with ColBERT-style per-token MaxSim scoring. Closest existing analogue to TardigradeDB's per-token Top5Avg + PRF design. Confirms PRF works with late-interaction scoring (not just bi-encoders) | `docs/experiments/vague_queries/` (planned) |
+| **PRF with Deep LMs and Dense Retrievers: Successes and Pitfalls** (Li et al., TOIS 2023) | doi:10.1145/3570724 | Survey of dense PRF; documents the drift failure mode (when first-stage top-1 is wrong, PRF amplifies the error) and motivates conservative α/β values (α≥0.7) and small k_prime (≤5). Informs the LatentPrfRefinement default hyperparameters | `crates/tdb-retrieval/src/refinement.rs` (planned) |
+| **Reciprocal Rank Fusion** (Cormack, Clarke, Büttcher, SIGIR 2009) | doi:10.1145/1571941.1572114 | Fusion formula `score(d) = Σ 1/(k+rank_i(d))`, k=60 default. Combines first-stage and PRF-stage rankings without score normalization. Designated as the safer alternative to pure replacement when PRF drifts; potential Stage-3 fusion if hybrid sparse retrieval is added later | `crates/tdb-retrieval/src/refinement.rs` (planned) |
+| **Decoding a Neural Retriever's Latent Space for Query Suggestion** (Adolphs et al., EMNLP 2022) | arXiv:2210.12084 | Demonstrates that meaningful semantics are decodable from neural retrieval latent spaces and that moving in the right direction in latent space retrieves the relevant passage. Supports the premise that PRF in K-space carries usable signal | `docs/experiments/vague_queries/` (planned) |
 
 ### A3. Adapters & Weights-as-Memory
 
@@ -48,7 +61,7 @@ contradicted, the corresponding subsystem would require redesign.
 | Paper | arXiv / DOI | What it justifies | Where cited |
 |---|---|---|---|
 | **MemoryOS** (BAI-LAB) | arXiv:2506.06326 | Hierarchical memory (short/mid/long-term); FIFO paging, dynamic information movement; 49.1% F1 improvement on LoCoMo | `docs/refs/AI Agentic Memory System Efficiency.md`, `docs/refs/AI-db-discussion.md` |
-| **A-Mem** | NeurIPS 2025 virtual/2025/poster/119020 | Zettelkasten-inspired agentic memory; dynamic node organization; shows SOTA still doesn't beat simple RAG on MemoryBench consistently | `docs/refs/AI Agentic Memory System Efficiency.md`, `docs/refs/AI-db-discussion.md` |
+| **A-Mem** | NeurIPS 2025 virtual/2025/poster/119020 | Zettelkasten-inspired agentic memory; dynamic node organization; shows SOTA still doesn't beat simple RAG on MemoryBench consistently | `docs/refs/AI Agentic Memory System Efficiency.md`, `docs/refs/AI-db-discussion.md`, `docs/experiments/multi-memory-injection.md` |
 | **Mem0 2025** | arXiv:2504.19413 | Production memory system: 26% better than OpenAI memory, 91% lower p95 latency, 90% token savings on LoCoMo; multi-scope model (user/agent/session/app); actor-aware memory for hallucination contagion prevention | `docs/refs/AI Agentic Memory System Efficiency.md` |
 | **"From Prompt-Response to Goal-Directed Systems"** | arXiv:2602.10479 | Agentic AI architecture framework; context for evolution toward stateful memory-equipped systems | `docs/refs/AI Agentic Memory System Efficiency.md` |
 | **Cost and accuracy of long-term graph memory in distributed LLM-based multi-agent systems** | arXiv:2601.07978 | Trade-offs in distributed graph memory; cost/accuracy analysis for graph-based approaches | `docs/refs/AI Agentic Memory System Efficiency.md` |
@@ -66,9 +79,9 @@ completeness.
 - arXiv:2602.16313v1 — Memory evaluation metrics
 - arXiv:2312.11970v1 — Multi-session memory architecture
 - arXiv:2408.04948 — Retrieval or composition related
-- arXiv:2506.07398 — Agentic memory design
+- arXiv:2506.07398 — H-MEM: agentic memory design (cited in `docs/refs/AI-db-discussion.md` design evolution)
 - arXiv:2507.03608v1 — Graph-based memory systems
-- arXiv:2507.22925 — Memory system architecture
+- arXiv:2507.22925 — G-Memory: memory system architecture (cited in `docs/refs/AI-db-discussion.md`)
 - arXiv:2511.16131v1 — Advanced memory architectures
 - arXiv:2402.01763v3 — Transformer memory architecture papers
 
@@ -86,7 +99,7 @@ completeness.
 
 | System | Version tested | Architectural decision it informed |
 |---|---|---|
-| **vLLM** | 0.19.1 | KV Connector v1 API integration; prefix-cache architecture; `build_connector_meta` DTO pattern; fingerprint lifecycle verified against `kv_transfer_utils.py:56`, `example_connector.py:332`, `scheduler.py:1823` |
+| **vLLM** | 0.19.1 | KV Connector v1 API integration; prefix-cache architecture; `build_connector_meta` DTO pattern; fingerprint lifecycle verified against `kv_transfer_utils.py:56`, `example_connector.py:332`, `scheduler.py:1823`; **critical discovery**: `base.py:451-480` confirms v1 API is prefix-cache-only — no mechanism for cross-prompt KV injection |
 | **SGLang** | — | RadixAttention investigated; ruled out — prefix-cache only, no cross-prompt KV injection possible. Closed Path 3 deployment option |
 | **llama.cpp** | — | Q4_0 quantization scheme (`crates/tdb-storage/src/quantization.rs`); GGUF model file format for `GGUFModelResolver` |
 | **HuggingFace Transformers** | — | `past_key_values` API for KV cache capture and injection; `generate()` auto-handles position ID offsetting for RoPE; zero-copy PyO3 NumPy interop |
@@ -96,12 +109,15 @@ completeness.
 | System | LoCoMo score | What TardigradeDB takes / rejects |
 |---|---|---|
 | **ByteRover 2.0** | 92.2% | AKL algorithm (taken, adapted to tensors instead of text files); 5-tier progressive retrieval |
+| **MemOS 2.0 (Stardust)** | ~75.8 | Commercial "Memory OS" with +43.7% accuracy over OpenAI Memory, ~35% token savings; graph-structured memory store; explicit OpenClaw plugin. pypi.org/project/MemoryOS/ — confirmed competitor, tensor-native approach is TardigradeDB's differentiation |
 | **Zep (Graphiti)** | 75.14% | Temporal knowledge graph concept (noted); ~104% higher CPU than Mem0 — cost concern |
 | **Letta (MemGPT)** | 74.0% | Tiered memory concept (Core/Recall/Archival); architectural lock-in via MemFS rejected |
 | **Mem0** | 66.9% / 68.4% (graph) | Multi-scope identity model (user/agent/session/app); 21 framework integrations; production baseline |
+| **LangMem** (LangChain) | — | Native LangChain orchestration integration; **rejected for real-time use** — independent evaluations record 59.82s p95 search latency; restricted to offline/batch-mode operations only (`docs/refs/AI Agentic Memory System Efficiency.md`) |
+| **AgentCore** (AWS) | — | AWS long-term memory deep dive; commercial managed memory layer for agents; confirms enterprise demand but cloud lock-in (`docs/refs/AI Agentic Memory System Efficiency.md`, footnote 4) |
 | **OpenClaw** | 100K+ GitHub stars | File-based memory validated at scale; rejected Redis/Pinecone in favor of local optimization |
 | **Genesys-Memory** | — | Causal graph with pruning (text-based); Trace graph in TardigradeDB is the tensor-native equivalent |
-| **SpaceTimeDB** | — | Database-as-execution-runtime pattern; WASM reducers inside kernel; informed embedded logic design |
+| **SpaceTimeDB** | — | Database-as-execution-runtime pattern; WASM reducers inside kernel; specific lessons from local code exploration (commit `d5c1738c1`, 2026-04-21): durability boundary trait, commitlog actor pattern (bounded async queue + batched writes), confirmed-reads contract, incremental subscription engine |
 | **LMCache** | — | Persistent cross-request KV reuse; infrastructure-level, not cognitive — confirms TardigradeDB's differentiated position |
 | **RelayCaching** | — | Cross-agent decode-to-prefill KV reuse (~4.7× TTFT reduction); different problem domain |
 | **HiAgent** | — | Hierarchical working-memory manager; subgoal-level summarization (text-based) |
@@ -119,6 +135,11 @@ completeness.
 | **SafeTensors** | Import/export format; rejected as primary storage (100MB header cap, no append, O(n) parse) |
 | **Criterion** | Rust benchmarking framework for all Criterion bench suites |
 | **PyTorch** | Model inference in experiments; RTX 3070 Ti, CUDA 12.8 |
+| **llama-cpp-python** | Python bindings for llama.cpp; used by `LlamaCppHook` to extract final-layer embeddings from GGUF models. Retrieval-only path (llama.cpp does not expose KV cache externally); informed the dual-store split between HF (full KV) and GGUF (embedding-only) paths | `.claude/plans/llama-cpp-hook-plan.md` |
+| **Ollama** | GGUF blob manifest resolution; `GGUFModelResolver` resolves `"llama3.2:3b"` → `/path/to/blob` via Ollama manifest files; used alongside LM Studio as the two primary GGUF distribution formats | `.claude/plans/llama-cpp-hook-plan.md` |
+| **LM Studio** | Alternative GGUF model path format; supported in `GGUFModelResolver` alongside Ollama manifest paths | `.claude/plans/llama-cpp-hook-plan.md` |
+| **BGE-Reranker** (BAAI, 2024) | Cross-encoder reranker (`BAAI/bge-reranker-v2-m3`, ~278M params). Documented as **future optional Stage-3** for vague-query retrieval when memo text is available in `text_store`. Architecture: query+document concatenated as `[CLS] query [SEP] doc [SEP]`, single scalar relevance score. Fast enough for CPU on small batches, single-GPU for larger. arXiv:2402.03216 | `crates/tdb-retrieval/src/refinement.rs` (future) |
+| **intfloat/e5-small-v2** | Traditional embedding RAG comparison baseline throughout all scale experiments; `passage: ...` / `query: ...` encoding convention; achieved 100% recall@1-5 on 100-memory corpus and 5/10 multi-hop retrieval (vs TardigradeDB 0/10) — key calibration point for retrieval quality assessment | `docs/experiments/kv-cache-validation.md`, `docs/experiments/multi-memory-injection.md` |
 
 ### B4. Vector & Graph Databases (Compared, Not Used)
 
@@ -140,6 +161,8 @@ completeness.
 | **Apache Cassandra** | Distributed state management at scale |
 | **PostgreSQL** | Reference architecture: Postgres + vector DB = what TardigradeDB replaces |
 | **Model Context Protocol (MCP)** | Open standard for LLM tool communication; TardigradeDB exposes 7 MCP tools |
+| **Obsidian (PKM tool)** | Backlink-density concept: notes with more backlinks are more important/interconnected. Cited in `docs/experiments/multi-memory-injection.md` as direct inspiration for Trace-Boosted Retrieval alongside PageRank |
+| **AGENTS.db** | Layered context system for AI agents; cited in `docs/refs/AI-db-discussion.md` as part of the design evolution toward KV-native memory; different architectural approach (context layering) vs TardigradeDB's tensor-native memory |
 
 ---
 
@@ -150,9 +173,11 @@ completeness.
 | Algorithm / Structure | Crate / File | Source |
 |---|---|---|
 | **Vamana graph** (single-layer small-world, angular diversity pruning) | `crates/tdb-index/src/vamana/` | DiskANN paper (Subramanya et al., 2019) |
+| **Medoid seeding** (entry point = centroid-nearest node, updated incrementally) | `crates/tdb-index/src/vamana/mod.rs:229` | DiskANN paper; standard graph index entry point strategy for small-world graphs |
 | **Q4_0 quantization** (4-bit INT, scale+zero-point per block) | `crates/tdb-storage/src/quantization.rs` | llama.cpp (`ggerganov/llama.cpp`) |
 | **INT8 symmetric quantization** (SLB hot path) | `crates/tdb-retrieval/src/slb.rs` | Standard; NEON SDOT intrinsics |
 | **NEON SIMD dot product** (vmull_s8, vpadalq_s16, vaddvq_s32) | `crates/tdb-retrieval/src/simd_distance.rs` | ARM NEON intrinsics |
+| **AVX2 INT8 dot product** (_mm256_maddubs_epi16 / _mm256_madd_epi16) | `crates/tdb-retrieval/src/simd_distance.rs` | x86_64 AVX2 intrinsics; 16x throughput over scalar path on x86_64; complementary to NEON path |
 | **Top5Avg scoring** (mean of top-5 per-token dot products) | `crates/tdb-retrieval/` | Custom — TardigradeDB-native, no external citation |
 | **Semantic Lookaside Buffer (SLB)** (INT8 hot cache, CPU TLB analogy) | `crates/tdb-retrieval/src/slb.rs` | TLB concept from CPU architecture |
 | **LRU eviction** (OrderedDict with domain-invariant capacity = max_num_seqs) | `python/tardigrade_vllm/connector.py` | Classic; capacity bound from vLLM `scheduler_config.max_num_seqs` |
@@ -163,6 +188,8 @@ completeness.
 | **RoPE position remapping** | `python/tardigrade_hooks/` | RoFormer (Su et al., 2021) |
 | **GQA (Grouped Query Attention) head expansion** | `crates/tdb-retrieval/src/` | Qwen3-0.6B model spec; K head expansion vs Q averaging |
 | **Attention sink skip** (position-0 token causes recall cliff) | `crates/tdb-retrieval/src/` | Discovered empirically; 96.7% → 3.3% recall without skip |
+| **Trace-Boosted Retrieval** (link-count score boost: `final_score = retrieval_score * (1 + link_count * 0.3)`) | `python/tardigrade_hooks/` | PageRank-inspired (linked pages rank higher) + Obsidian (backlink-dense notes are more important); hard plateau at boost_factor=0.3 — any non-zero value fixes the same 3 queries |
+| **PageANN** (page-node Vamana, disk-aligned cold storage) | `README.md` (future roadmap) | PageANN research; designed as disk-aware extension of Vamana for billion-scale cold storage; not yet implemented |
 
 ### C2. Evaluated but Rejected
 
@@ -172,6 +199,12 @@ completeness.
 | **IVF** (Inverted File Index) | Not chosen; Vamana preferred for disk-locality and small-world navigation |
 | **BM25** (lexical search) | Noted as hybrid retrieval option; not implemented |
 | **Mean-pooled hidden states for injection** | Catastrophically broken: hidden states live in d_model space, KV cache in head_dim space — category error. Recall: 26× to 829× improvement when switching to full per-token KV |
+| **ColBERT-style cosine sum-of-max** (`cosine_sum_max` scorer) | Tested on 100-memory corpus: 53.3% R@5 — **worse** than per_head_max (63.3%) and far below Top5Avg (100%). Late interaction over stored hidden states does not improve on simpler max-sim aggregation for this retrieval task (`docs/experiments/kv-cache-validation.md`) |
+| **Zettelkasten auto-linking on store** (A-MEM pattern, NeurIPS 2025) | Phase 33 experiment: latent hidden-state similarity measures topic similarity, not event identity. Auto-linking at threshold=200-250 produced 99 within-domain noise links and only 8/20 correct cross-reference pairs; final accuracy 30% — *worse* than explicit `store_linked()` at 70%. Architecture decision: the agent provides intelligence about what to link; the engine stores the decision. (`docs/experiments/multi-memory-injection.md`) |
+| **K\*K retrieval** (query with K, store K) | K vectors share a massive common component across all sequences (~4000 cross-sentence dot product at non-sink positions vs ~200 content-specific signal difference). Confirmed bad by FIER, ShadowKV, "From QKV to K/KV" — symmetric attention cannot represent directional query-to-memory relationships |
+| **HyDE** (Hypothetical Document Embeddings; Gao et al., ACL 2023, arXiv:2212.10496) | Generate a hypothetical answer with an LLM, embed it, retrieve. Effective for vocabulary-mismatched/vague queries in text-based RAG, but **rejected for TardigradeDB's retrieval path**: requires an extra LLM forward pass per query (500–2000ms per the dev community, e.g., dev.to/aarjay_singh "Why I stopped putting LLMs in my agent memory retrieval path"). The agent IS the LLM — having it generate a hypothetical inside its own retrieval loop is architecturally backwards and breaks the agent-step latency budget. Latent-space PRF (Rocchio in K-space) achieves the same vocabulary-bridging effect with no LLM call |
+| **Cross-encoder reranking on stored text** (BGE-Reranker, MiniLM as a primary stage) | Operates on text. TardigradeDB's primary stored unit is KV tensors, not text. Memo text in `text_store` is optional and often absent. Making vague-query handling depend on memo text would split the retrieval contract. Kept as a **future optional Stage-3** when memos are present (see B1 BGE-Reranker entry); rejected as the primary fix |
+| **Text-based BM25 + RRF hybrid** (as primary stage) | Same text dependency as cross-encoder reranking. Adds value only when memos exist and are descriptive. RRF (Cormack 2009) is still adopted as a fusion mechanism for the latent-space PRF stage in case PRF drifts (see A2) — we use the rank-fusion math without the BM25 sparse signal |
 
 ### C3. Architectural Patterns Named in Plans & Docs
 
@@ -193,6 +226,7 @@ completeness.
 | **Schmitt Trigger (Hysteresis)** | Tier promotion/demotion thresholds to prevent oscillation (from control theory) |
 | **Monitor Object** | Python Engine wrapped in `Arc<Mutex<>>` with GIL release via `py.detach()` |
 | **Observer** | Hook lifecycle (on_generate, on_prefill) |
+| **PageRank** (Brin & Page, 1998) | Cited as direct inspiration for Trace-Boosted Retrieval: memories with more trace links rank higher, analogous to pages with more inbound links. `docs/experiments/multi-memory-injection.md` (Phase 32) |
 
 ---
 
@@ -202,8 +236,8 @@ completeness.
 
 | Benchmark | Origin | What was measured | TardigradeDB status |
 |---|---|---|---|
-| **LoCoMo** (Long-term Conversational Memory) | ACL 2024 | Ultra-long conversations (300-600 turns, 9K-26K tokens); BLEU/F1/LLM Score | Not yet evaluated; used as competitor comparison point |
-| **LongMemEval** | — | Long-term memory retention across thousands of documents | Not yet evaluated |
+| **LoCoMo** (Long-term Conversational Memory) | ACL 2024 | Ultra-long conversations (300-600 turns, 9K-26K tokens); BLEU/F1/LLM Score | Internal 25-item sample run (2026-04-22): Tardigrade 1.0000 vs Letta 0.2002 |
+| **LongMemEval** | — | Long-term memory retention across thousands of documents | Internal 25-item sample run (2026-04-22): Tardigrade 1.0000 avg score |
 | **MemoryBench** | — | Long-horizon continual learning; shows SOTA doesn't consistently beat simple RAG | Used to calibrate synthetic fact test methodology |
 | **MemoryArena** | — | Memory evaluation framework | Mentioned in refs |
 | **MemoryAgentBench** | — | Agent memory benchmark | Mentioned in refs |
@@ -218,10 +252,14 @@ completeness.
 | **100-memory corpus** | 100% R@5 with Top5Avg + hidden states; 97ms latency | `docs/experiments/kv-cache-validation.md` |
 | **5000-memory scale** | 100% R@1-R@5; 3.2s GPU latency (model inference dominates from 2K→5K) | `docs/experiments/README.md` |
 | **Vague query retrieval** | Specific: 100% R@5; moderate/vague: ~46% R@5 (100 queries/tier); cliff = vocabulary overlap not vagueness | `docs/experiments/README.md` |
-| **Cross-model retrieval** | Same-family (Qwen 0.6B→1.7B): 90% R@5 via linear projection; cross-family (Qwen→GPT-2): 76.7% via MLP adapter (~400K params) | `docs/experiments/README.md` |
+| **Cross-model retrieval** | Same-family (Qwen 0.6B→1.7B): 90% R@5 via linear projection; cross-family (Qwen→GPT-2): 76.7% via MLP adapter (~400K params); Orthogonal Procrustes ceiling ~47% cross-family | `docs/experiments/README.md` |
 | **Synthetic gibberish facts** | 9/10 recall on Qwen3-0.6B (100% ratio vs text RAG); novel knowledge transfer proven | `docs/experiments/kv-cache-validation.md` |
 | **Multi-memory injection** | Sequential (Knowledge Packs paper) works; naive concatenation fails; RoPE position corruption not the primary cause | `docs/experiments/multi-memory-injection.md` |
 | **SGLang investigation** | Confirmed prefix-cache only; no cross-prompt KV injection path | `docs/experiments/sglang-investigation.md` |
+| **Tardigrade vs Letta benchmark** (internal, 2026-04-22) | 50-item sample (25 LoCoMo + 25 LongMemEval), deterministic lexical evaluator: Tardigrade `1.0000` vs Letta `0.2002`; latency 7.44ms vs 81.10ms. Smoke fixture also validated (3 repeats, quality tie). Full matrix invalid (Letta ingest failures 2042/2042). | `docs/bench/v1-results.md` |
+| **Scorer comparison** | ColBERT cosine_sum_max: 53.3%; per_head_max Q*K: 63.3%; hidden states + Top5Avg: 100%. K*K causes gravity well (cross-sentence dot product ~4000, content signal ~200) | `docs/experiments/kv-cache-validation.md` |
+| **RAG baseline comparison** | intfloat/e5-small-v2 achieves 100% recall@1-5 on 100 memories (30 positive queries); multi-hop: RAG 5/10, TardigradeDB 0/10 (latent hidden states miss second-hop entity names) | `docs/experiments/kv-cache-validation.md`, `docs/experiments/multi-memory-injection.md` |
+| **Trace-Boosted Retrieval sweep** | Hard plateau: any boost_factor > 0 fixes the same 3/9 failures; optimal = 0.3; 5 failures immune to boosting (background memories scored higher) | `docs/experiments/multi-memory-injection.md` |
 
 ---
 
@@ -252,6 +290,7 @@ completeness.
 | **"Memory in Agents: What, Why, and How"** | mem0.ai/blog |
 | **"Agentic RAG vs Traditional RAG"** | mem0.ai/blog |
 | **"Build Persistent Memory for Agentic AI" (Mem0 + ElastiCache + Neptune)** | aws.amazon.com/blogs/database |
+| **"Building Smarter AI Agents: AgentCore Long-Term Memory Deep Dive"** | aws.amazon.com/blogs/machine-learning |
 | **"Letta v1 Agent Release"** | letta.com/blog |
 | **"Benchmarking AI Agent Memory"** | byterover.dev/blog |
 | **"AI Memory Tools Evaluation"** | cognee.ai/blog |
@@ -292,13 +331,14 @@ completeness.
 | Repository | Cited for |
 |---|---|
 | `github.com/ggerganov/llama.cpp` | Q4_0 quantization scheme; GGUF format spec |
-| `github.com/vllm-project/vllm` | KV Connector v1 API; `ExampleConnector` reference implementation |
+| `github.com/vllm-project/vllm` | KV Connector v1 API; `ExampleConnector` reference implementation; `base.py:451-480` prefix-cache-only contract |
 | `github.com/mem0ai/mem0` | Production memory orchestration reference |
 | `github.com/letta-ai/letta` | Tiered memory architecture; MemFS design |
 | `github.com/HiAgent2024/HiAgent` | Hierarchical working-memory for agents |
 | `github.com/IAAR-Shanghai/Awesome-AI-Memory` | Curated AI memory resources list |
 | `github.com/punkpeye/awesome-mcp-servers` | MCP server collection |
 | `byterover.dev/blog` (assumed repo) | AKL algorithm reference |
+| `github.com/MemTensor/MemOS` | MemOS 2.0 source; OpenClaw plugin and memory OS architecture |
 
 ---
 
@@ -316,11 +356,16 @@ This section maps each major TardigradeDB design decision to its external valida
 | Sequential multi-memory injection (not concatenation) | Knowledge Packs (arXiv:2604.03270) | High |
 | Per-token hidden states (not mean-pooled) for retrieval key | Empirical discovery (96.7%→100% recall); MemArt supports | Medium — empirical + literature |
 | Attention sink skip (position 0) | Empirical discovery (96.7%→3.3% recall without skip) | High — empirical, not from paper |
-| Top5Avg scoring over Q\*K per-token | Empirical discovery; no external paper | Low — **no external citation** — internal heuristic |
+| **Q\*K over K\*K for retrieval** | Empirically discovered (K*K gravity well, ~4000 common component); confirmed by FIER, ShadowKV, "From QKV to K/KV" — all use Q for queries because K*K produces symmetric attention that can't capture directional relationships | High — empirical + literature consensus |
+| Top5Avg scoring over other aggregations | Empirical discovery: Hidden states + top5_pair_avg = 100%; no external paper validates the specific heuristic | Low — **no external citation** — internal heuristic |
 | Episodic (KV bank) + Semantic (synaptic bank) split | PRIME (arXiv:2507.04607) + Nature neuroscience paper | Medium |
 | GQA head expansion for Qwen3 | Qwen3 model spec + empirical observation | High |
 | vLLM connector fingerprint identity via block_indices[0] | vLLM source verification: `kv_transfer_utils.py:56`, `example_connector.py:332`, `scheduler.py:1823` | High — verified against framework source |
 | Bounded LRU at max_num_seqs | vLLM `scheduler_config.max_num_seqs` invariant + domain reasoning | High |
+| **vLLM KV Connector v1 is prefix-cache only** (no cross-prompt injection possible) | vLLM source `base.py:451-480`: contract documentation + `scheduler.py` tracing + synthetic-fact A/B test (cold and primed byte-identical) | High — verified against source + experiment |
+| MLP adapter over Orthogonal Procrustes for cross-family retrieval | Procrustes empirically plateaus at ~47% R@5; MLP achieves 76.7% on same Qwen→GPT-2 corpus | High — empirical ablation |
+| Agent provides link intelligence; engine stores the decision | Phase 33 experiment: auto-linking via hidden-state similarity failed (30% accuracy vs 70% with explicit links); confirmed by field (Mem0, Cognee, Hindsight all require LLM extraction or trained probes for entity linking) | High — empirical + competitive validation |
+| **Latent-space PRF (Rocchio in K-space) over HyDE/cross-encoder for vague-query refinement** | Three-way constraint analysis: (1) HyDE adds 500–2000ms LLM call per query, breaks agent-loop budget; (2) cross-encoder/BM25 require memo text which is optional in TardigradeDB; (3) Rocchio (1971) generalized to dense vectors by Yu et al. CIKM 2021 (arXiv:2108.13454) and validated for late-interaction by ColBERT-PRF (arXiv:2106.11251) — pure latent-space, no LLM, no text dependency, operates on K vectors already stored. Empirical validation pending the refinement implementation | Medium — strong literature foundation; empirical confirmation pending |
 
 ---
 
@@ -353,7 +398,18 @@ reviewed:
    76.7% R@5 (Qwen→GPT-2). No literature on optimal adapter size for KV-space
    projection between model families.
 
+7. **arXiv IDs for FIER, ShadowKV, and "From QKV to K/KV"** — These three papers
+   are cited in `docs/experiments/kv-cache-validation.md` as confirming the Q*K > K*K
+   decision, but their full citations and arXiv IDs do not appear in any codebase doc.
+   If TardigradeDB is published or peer-reviewed, these need to be tracked down and
+   formally cited.
+
+8. **PageANN paper citation** — CLAUDE.md and README.md both reference
+   "PageANN-inspired" page-node Vamana as the cold-path design target, but the
+   specific PageANN paper/authors are not cited anywhere in the codebase.
+
 ---
 
-*Generated: 2026-05-01. Sources: codebase + docs + `.claude/plans/` +
-`.remember/` buffer + Codex sessions 2026-01 through 2026-04.*
+*Generated: 2026-05-01. Updated: 2026-05-02. Sources: codebase + docs + `.claude/plans/` +
+Resumancer session journal (40 entries, 2026-04 tardigrade-db branch) + Codex/Claude sessions
+2026-01 through 2026-05.*
