@@ -266,7 +266,19 @@ impl PerTokenRetriever {
         let store_dim = self.store.dim;
         let qt_dim = query_tokens[0].values.len();
 
-        let mut cell_scores: HashMap<CellId, (Vec<f32>, OwnerId)> = HashMap::new();
+        if store_dim != qt_dim {
+            return Vec::new();
+        }
+
+        // Score all stored tokens against all query tokens.
+        // Accumulate dot products per cell using a HashMap, but with
+        // inline top-K tracking to avoid growing Vecs.
+        let top_n = self.config.top_n_avg_match_count;
+        let n_qt = query_tokens.len();
+
+        // Pre-compute capacity hint from cell count
+        let mut cell_scores: HashMap<CellId, (Vec<f32>, OwnerId)> =
+            HashMap::with_capacity(self.cell_token_count.len());
 
         for i in 0..self.store.len() {
             let owner = self.store.owners[i];
@@ -279,10 +291,6 @@ impl PerTokenRetriever {
                 continue;
             }
 
-            if store_dim != qt_dim {
-                continue;
-            }
-
             let token_data = self.store.token_data(i);
             let token_scale = self.store.scales[i];
 
@@ -290,27 +298,28 @@ impl PerTokenRetriever {
                 let raw = DotProduct::int8_dot_raw_slice(&qt.values, token_data);
                 let dot = raw as f32 * qt.scale * token_scale * inv_sqrt_dk;
 
-                let entry = cell_scores
+                cell_scores
                     .entry(cell_id)
-                    .or_insert_with(|| (Vec::new(), owner));
-
-                entry.0.push(dot);
+                    .or_insert_with(|| (Vec::with_capacity(n_qt * 8), owner))
+                    .0
+                    .push(dot);
             }
         }
         self.last_scored_cell_count = cell_scores.len();
 
-        // Aggregate per-cell scores based on scoring mode.
         let mut results: Vec<RetrievalResult> = cell_scores
             .into_iter()
             .map(|(cell_id, (mut dots, owner))| {
                 let score = match self.scoring_mode {
                     ScoringMode::MaxSim => dots.iter().copied().fold(f32::NEG_INFINITY, f32::max),
                     ScoringMode::Top5Avg => {
-                        dots.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-                        let take = dots.len().min(self.config.top_n_avg_match_count);
+                        let take = dots.len().min(top_n);
                         if take == 0 {
                             f32::NEG_INFINITY
                         } else {
+                            dots.select_nth_unstable_by(take - 1, |a, b| {
+                                b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
+                            });
                             dots[..take].iter().sum::<f32>() / take as f32
                         }
                     }
