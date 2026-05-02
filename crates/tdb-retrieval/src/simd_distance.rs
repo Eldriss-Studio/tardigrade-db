@@ -116,9 +116,9 @@ impl DotProduct {
     #[expect(clippy::cast_ptr_alignment)]
     unsafe fn int8_dot_avx2(a: &[i8], b: &[i8]) -> i32 {
         use std::arch::x86_64::{
-            __m256i, _mm256_add_epi32, _mm256_castsi256_si128, _mm256_cvtepi8_epi16,
-            _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_madd_epi16,
-            _mm256_setzero_si256, _mm_add_epi32, _mm_cvtsi128_si32, _mm_srli_si128,
+            __m256i, _mm_add_epi32, _mm_cvtsi128_si32, _mm_srli_si128, _mm256_add_epi32,
+            _mm256_castsi256_si128, _mm256_cvtepi8_epi16, _mm256_extracti128_si256,
+            _mm256_loadu_si256, _mm256_madd_epi16, _mm256_setzero_si256,
         };
 
         let len = a.len();
@@ -164,6 +164,7 @@ impl DotProduct {
         Self::int8_dot_scalar(a, b)
     }
 
+    #[cfg(not(target_arch = "aarch64"))]
     #[inline]
     fn int8_dot_scalar(a: &[i8], b: &[i8]) -> i32 {
         a.iter().zip(b.iter()).map(|(&x, &y)| x as i32 * y as i32).sum()
