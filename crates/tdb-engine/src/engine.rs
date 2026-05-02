@@ -699,7 +699,7 @@ impl Engine {
     ///
     /// Bypasses the Python-side `encode_per_token` round-trip: the caller passes
     /// the flat `n_tokens × dim` query matrix directly, and the engine builds the
-    /// per-token encoded key in Rust before delegating to [`mem_read`]. This
+    /// per-token encoded key in Rust before delegating to [`Self::mem_read`]. This
     /// eliminates a redundant Python encoding + Rust parsing cycle in the hot path.
     ///
     /// `query_tokens` length must equal `n_tokens * dim`.

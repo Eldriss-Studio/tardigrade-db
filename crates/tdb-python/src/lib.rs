@@ -212,9 +212,9 @@ impl Engine {
 
     /// Read top-k cells using a raw per-token query matrix (Direct Token Query API).
     ///
-    /// Accepts a 2D NumPy array of shape `(n_tokens, dim)` directly, avoiding
+    /// Accepts a 2D `NumPy` array of shape `(n_tokens, dim)` directly, avoiding
     /// the Python-side `encode_per_token` round-trip (header build + flatten +
-    /// PyO3 copy + Rust header parse). The Rust engine builds the encoded key
+    /// `PyO3` copy + Rust header parse). The Rust engine builds the encoded key
     /// in one allocation and delegates to `mem_read`.
     fn mem_read_tokens(
         &self,
