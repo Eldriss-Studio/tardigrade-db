@@ -88,7 +88,13 @@ struct TokenStore {
 
 impl TokenStore {
     fn new() -> Self {
-        Self { data: Vec::new(), scales: Vec::new(), cell_ids: Vec::new(), owners: Vec::new(), dim: 0 }
+        Self {
+            data: Vec::new(),
+            scales: Vec::new(),
+            cell_ids: Vec::new(),
+            owners: Vec::new(),
+            dim: 0,
+        }
     }
 
     fn len(&self) -> usize {
@@ -112,7 +118,9 @@ impl TokenStore {
 
     fn retain_by_cell(&mut self, keep: impl Fn(CellId) -> bool) {
         let dim = self.dim;
-        if dim == 0 { return; }
+        if dim == 0 {
+            return;
+        }
         let mut write = 0;
         for read in 0..self.len() {
             if keep(self.cell_ids[read]) {
