@@ -3746,3 +3746,123 @@ fn test_trace_boost_follow_links_returns_linked_packs() {
     assert!(ids.contains(&pack_a));
     assert!(ids.contains(&pack_b));
 }
+
+/// ATDD: mem_read_tokens produces identical results to mem_read with encoded key.
+///
+/// Validates the Direct Token Query API (Facade Simplification): callers
+/// passing a raw token matrix get the same retrieval as callers building
+/// the per-token encoded key in Python.
+#[test]
+fn test_mem_read_tokens_matches_encoded_mem_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+
+    // Store cells with distinctive per-token encoded keys.
+    let food = [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let italian = [0.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let risotto = [0.0f32, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let travel = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+    let france = [0.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+
+    engine
+        .mem_write(
+            1,
+            0,
+            &encode_per_token_keys(&[&food, &italian, &risotto]),
+            vec![0.0; dim],
+            50.0,
+            None,
+        )
+        .unwrap();
+    engine
+        .mem_write(
+            1,
+            0,
+            &encode_per_token_keys(&[&travel, &france]),
+            vec![0.0; dim],
+            50.0,
+            None,
+        )
+        .unwrap();
+
+    // Query "risotto" through both APIs.
+    let query_tokens: Vec<f32> = risotto.to_vec();
+    let encoded_query = encode_per_token_keys(&[&risotto]);
+
+    let via_encoded = engine.mem_read(&encoded_query, 2, None).unwrap();
+    let via_tokens = engine.mem_read_tokens(&query_tokens, 1, dim, 2, None).unwrap();
+
+    // Same number of results, same ordering, identical scores.
+    assert_eq!(via_encoded.len(), via_tokens.len());
+    for (a, b) in via_encoded.iter().zip(via_tokens.iter()) {
+        assert_eq!(a.cell.id, b.cell.id);
+        assert!((a.score - b.score).abs() < 1e-5, "scores differ: {} vs {}", a.score, b.score);
+    }
+}
+
+/// ATDD: mem_read_tokens with multi-token query (matches the realistic hook flow).
+#[test]
+fn test_mem_read_tokens_multi_token_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+    let stored: Vec<[f32; 8]> = (0..3)
+        .map(|i| {
+            let mut v = [0.0f32; 8];
+            v[i] = 1.0;
+            v
+        })
+        .collect();
+    let stored_refs: Vec<&[f32]> = stored.iter().map(|v| v.as_slice()).collect();
+
+    engine
+        .mem_write(
+            1,
+            0,
+            &encode_per_token_keys(&stored_refs),
+            vec![0.0; dim],
+            50.0,
+            None,
+        )
+        .unwrap();
+
+    // 5-token query — matches typical hook output shape.
+    let mut q_flat = Vec::with_capacity(5 * dim);
+    for v in &stored {
+        q_flat.extend_from_slice(v);
+    }
+    q_flat.extend_from_slice(&stored[0]);
+    q_flat.extend_from_slice(&stored[1]);
+
+    let via_tokens = engine.mem_read_tokens(&q_flat, 5, dim, 1, None).unwrap();
+    assert_eq!(via_tokens.len(), 1);
+    assert_eq!(via_tokens[0].cell.id, 0);
+}
+
+/// ATDD: mem_read_tokens rejects malformed input shapes.
+#[test]
+fn test_mem_read_tokens_validates_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    // Insert a placeholder cell with dim=8 to match the queries below.
+    let token = [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    engine
+        .mem_write(1, 0, &encode_per_token_keys(&[&token]), vec![0.0; 8], 50.0, None)
+        .unwrap();
+
+    let data = vec![1.0f32; 8];
+
+    // Empty inputs should return empty (not panic).
+    assert!(engine.mem_read_tokens(&[], 0, 0, 5, None).unwrap().is_empty());
+
+    // Mismatched length: 8 floats but n=2, dim=8 needs 16. Should return empty.
+    assert!(engine.mem_read_tokens(&data, 2, 8, 5, None).unwrap().is_empty());
+
+    // Correct shape: 8 floats = 1 token × dim 8. Should succeed without panic.
+    let ok = engine.mem_read_tokens(&data, 1, 8, 5, None).unwrap();
+    let _ = ok;
+}

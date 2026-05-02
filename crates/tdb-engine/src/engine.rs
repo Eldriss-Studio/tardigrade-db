@@ -29,7 +29,9 @@ use tdb_index::vamana::VamanaIndex;
 use tdb_index::wal::{Wal, WalEntry};
 use tdb_retrieval::attention::RetrievalResult;
 use tdb_retrieval::key_view::{fixed_dim_key, is_encoded_per_token_key};
-use tdb_retrieval::per_token::{PerTokenConfig, ScoringMode};
+use tdb_retrieval::per_token::{
+    HEADER_SENTINEL, HEADER_SIZE, N_TOKENS_IDX, PerTokenConfig, ScoringMode,
+};
 use tdb_retrieval::pipeline::RetrieverPipeline;
 use tdb_retrieval::retriever::Retriever;
 use tdb_retrieval::slb::SemanticLookasideBuffer;
@@ -691,6 +693,38 @@ impl Engine {
         }
 
         Ok(results)
+    }
+
+    /// Read top-k cells using a raw per-token query matrix (Facade Simplification).
+    ///
+    /// Bypasses the Python-side `encode_per_token` round-trip: the caller passes
+    /// the flat `n_tokens × dim` query matrix directly, and the engine builds the
+    /// per-token encoded key in Rust before delegating to [`mem_read`]. This
+    /// eliminates a redundant Python encoding + Rust parsing cycle in the hot path.
+    ///
+    /// `query_tokens` length must equal `n_tokens * dim`.
+    pub fn mem_read_tokens(
+        &mut self,
+        query_tokens: &[f32],
+        n_tokens: usize,
+        dim: usize,
+        k: usize,
+        owner_filter: Option<OwnerId>,
+    ) -> Result<Vec<ReadResult>> {
+        if n_tokens == 0 || dim == 0 || query_tokens.len() != n_tokens * dim {
+            return Ok(Vec::new());
+        }
+
+        // Build the encoded key in-place: header + flattened tokens (one allocation).
+        let mut encoded = Vec::with_capacity(HEADER_SIZE + query_tokens.len());
+        encoded.push(HEADER_SENTINEL);
+        encoded.resize(N_TOKENS_IDX, 0.0);
+        encoded.push(n_tokens as f32);
+        encoded.push(dim as f32);
+        encoded.resize(HEADER_SIZE, 0.0);
+        encoded.extend_from_slice(query_tokens);
+
+        self.mem_read(&encoded, k, owner_filter)
     }
 
     /// Get transitive ancestors of a cell following `CausedBy` edges.
