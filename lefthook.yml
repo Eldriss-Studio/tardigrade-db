@@ -5,6 +5,8 @@ pre-commit:
       run: cargo fmt --all -- --check
     clippy:
       run: just lint
+    doc:
+      run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --exclude tdb-python
     typos:
       run: typos
       skip:
@@ -12,6 +14,9 @@ pre-commit:
         - rebase
 
 pre-push:
+  parallel: false
   commands:
-    ci:
-      run: just ci
+    test:
+      run: just test-ci
+    deny:
+      run: cargo deny check
