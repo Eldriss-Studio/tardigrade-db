@@ -9,7 +9,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use numpy::PyReadonlyArray1;
+use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
@@ -185,6 +185,61 @@ impl Engine {
             let mut eng = lock_engine(&engine)?;
             let results = eng
                 .mem_read(&query_vec, k, owner)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            Ok(results
+                .into_iter()
+                .map(|r| {
+                    let importance = eng.cell_importance(r.cell.id).unwrap_or(0.0);
+                    (r, importance)
+                })
+                .collect())
+        })?;
+
+        Ok(raw_results
+            .into_iter()
+            .map(|(r, importance)| ReadResult {
+                cell_id: r.cell.id,
+                owner: r.cell.owner,
+                layer: r.cell.layer,
+                score: r.score,
+                tier: r.tier as u8,
+                importance,
+                key_data: r.cell.key,
+                value_data: r.cell.value,
+            })
+            .collect())
+    }
+
+    /// Read top-k cells using a raw per-token query matrix (Direct Token Query API).
+    ///
+    /// Accepts a 2D NumPy array of shape `(n_tokens, dim)` directly, avoiding
+    /// the Python-side `encode_per_token` round-trip (header build + flatten +
+    /// PyO3 copy + Rust header parse). The Rust engine builds the encoded key
+    /// in one allocation and delegates to `mem_read`.
+    fn mem_read_tokens(
+        &self,
+        py: Python<'_>,
+        query_tokens: PyReadonlyArray2<'_, f32>,
+        k: usize,
+        owner: Option<u64>,
+    ) -> PyResult<Vec<ReadResult>> {
+        let query_arr = query_tokens.as_array();
+        let shape = query_arr.shape();
+        let n_tokens = shape[0];
+        let dim = shape[1];
+
+        // numpy may give a non-contiguous view; ensure C-order before passing on.
+        let flat: Vec<f32> = if let Some(slice) = query_arr.as_slice() {
+            slice.to_vec()
+        } else {
+            query_arr.iter().copied().collect()
+        };
+
+        let engine = Arc::clone(&self.inner);
+        let raw_results = py.detach(move || -> PyResult<Vec<_>> {
+            let mut eng = lock_engine(&engine)?;
+            let results = eng
+                .mem_read_tokens(&flat, n_tokens, dim, k, owner)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
             Ok(results
                 .into_iter()

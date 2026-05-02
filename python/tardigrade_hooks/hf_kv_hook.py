@@ -202,20 +202,26 @@ class HuggingFaceKVHook(TardigradeHook):
                 tokens = self._project_q(h, layer)
 
         if tokens is not None and len(tokens) > 0:
-            query_key = self._encode_per_token(tokens, tokens.shape[1])
+            query_tokens_2d = tokens
         elif past_key_values is not None:
-            # Fallback: use K from cache
             lc = past_key_values.layers[layer]
             k = lc.keys[0]
             h_heads, s, d = k.shape
             kv_dim = h_heads * d
             k_flat = k.permute(1, 0, 2).reshape(s, kv_dim)[1:].detach().cpu().numpy().astype(np.float32)
-            k_flat = self._expand_k_tokens_for_gqa(k_flat)
-            query_key = self._encode_per_token(k_flat, k_flat.shape[1])
+            query_tokens_2d = self._expand_k_tokens_for_gqa(k_flat)
         else:
             return []
 
-        results = self.engine.mem_read(query_key, self.k, self.owner)
+        # Direct Token Query API: skip Python-side encode_per_token round-trip.
+        # Engine builds the per-token encoded key in Rust (one allocation).
+        # Falls back to encoded path only if mem_read_tokens is unavailable
+        # (older engine builds).
+        if hasattr(self.engine, "mem_read_tokens"):
+            results = self.engine.mem_read_tokens(query_tokens_2d, self.k, self.owner)
+        else:
+            query_key = self._encode_per_token(query_tokens_2d, query_tokens_2d.shape[1])
+            results = self.engine.mem_read(query_key, self.k, self.owner)
 
         return [
             MemoryCellHandle(
