@@ -14,11 +14,17 @@
 | Mode | Specific R@5 | Moderate R@5 | Vague R@5 | Open R@5 | Vague p95 |
 |---|---|---|---|---|---|
 | **none** (baseline) | 100.0% | 28.0% | 46.0% | 100.0% | 67ms |
-| **centered** (mean-centering) | **100.0%** | **59.0%** | **50.0%** | **100.0%** | 58ms |
+| **centered** (mean-centering) | 100.0% | 59.0% | 50.0% | 100.0% | 58ms |
 | **prf** (α=0.7, β=0.3, k'=3) | 30.0% ⚠️ | 43.0% | 55.0% | 100.0% | 53ms |
+| **none + rerank** (cross-encoder Stage-2) | 100.0% | 57.0% | 62.0% | 100.0% | 77ms |
+| **centered + rerank** (recommended) | **100.0%** | **68.0%** | **64.0%** | **100.0%** | **86ms** |
+
+Reranker model: `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, ~10ms/query on RTX 3070 Ti for top-10 candidates).
 
 **Verdict:**
-- **Mean-centering is the clear winner.** +31pp on moderate, +4pp on vague, **zero regression on specific** (still 100%). Even slightly faster (mean-subtract is one f32 vector op; the rescore replaces the original score for the same K candidates).
+- **`centered + rerank` is the recommended production mode.** +40pp on moderate, +18pp on vague vs baseline, **zero regression on specific**. ~30% latency overhead (86ms vs 67ms p95) is acceptable for the quality lift.
+- **Mean-centering alone** is still the right call when memo text isn't available — it captures most of the moderate-tier gain (+31pp) for free, no extra model.
+- **Cross-encoder reranking alone (no centering)** is also strong (+29pp moderate, +16pp vague) and equally cheap to operate — the two strategies stack, but each is independently useful.
 - **PRF as initially configured (α=0.7) drifts catastrophically on specific queries** (100% → 30%), confirming the failure mode the dense-PRF survey (Li et al. TOIS 2023) warns about.
 - **Open queries hit 100% trivially** — the dataset definition treats any of the 100 memories as "correct" for an open query, so this column is a sanity check, not a discriminator.
 
@@ -73,9 +79,46 @@ Both are improvements worth trying. They were out of scope for the v1 implementa
 
 ---
 
+## Cross-encoder reranking (Stage-2): closes most of the vague-cliff gap
+
+`python/tardigrade_hooks/reranker.py::CrossEncoderReranker` wraps a small
+cross-encoder (default `cross-encoder/ms-marco-MiniLM-L-6-v2`, 22M params,
+MiniLM architecture (arXiv:2002.10957) trained on MS MARCO
+(arXiv:1611.09268), via sentence-transformers (arXiv:1908.10084)).
+
+After the engine returns top-10 candidates, the reranker computes a full
+query+document attention score for each `(question, memo_text)` pair and
+re-sorts. Candidates without text fall back to first-stage rank.
+
+**Why it works where PRF didn't:** the cross-encoder lets every query
+token attend to every document token jointly, which is strictly more
+expressive than the bi-encoder dot product. PRF tried to get there
+indirectly by perturbing the query; the cross-encoder gets there
+directly with a tiny dedicated model.
+
+**Caveat — training distribution mismatch.** The MS MARCO dataset is
+short web passages, not first-person diary text. The reranker still
+helps a lot, but a fine-tuned variant on agent-memory-style data would
+likely give another 5-10pp. Tracked as future work.
+
+**Stacking is additive, not redundant.** `centered+rerank` consistently
+beats both `centered` alone and `none+rerank` alone:
+
+| metric | centered | none+rerank | centered+rerank | best-component delta |
+|---|---|---|---|---|
+| moderate R@5 | 59% | 57% | **68%** | +9pp over either alone |
+| vague R@5 | 50% | 62% | **64%** | +2pp over rerank-alone |
+
+Mean-centering improves the candidates that reach the reranker; the
+reranker then picks the right one out of a better candidate set.
+
+---
+
 ## What this means
 
-**Default to `RefinementMode::MeanCentered` for any non-specific query workload.** It's the only mode that improves moderate retrieval substantially (+31pp) without regressing specific retrieval. Current settings:
+**Default to `RefinementMode::MeanCentered` + `CrossEncoderReranker` whenever memo text is available.** Together they push moderate retrieval from 28% → 68% (+40pp) and vague retrieval from 46% → 64% (+18pp), with **zero regression on specific (still 100%)** and only ~30% latency overhead.
+
+When memo text is not available, fall back to mean-centering alone — most of the moderate-tier win comes for free without any extra model. Current settings:
 
 ```python
 engine.set_refinement_mode("centered")
@@ -85,8 +128,8 @@ engine.set_refinement_mode("centered")
 
 **`RefinementMode::LatentPrf` ships but is not yet useful** for this corpus geometry. It will become useful once we add (a) peak-token centroids and (b) RRF fusion. Both are tracked in the plan file.
 
-The 50% vague R@5 ceiling that mean-centering hits is the **real** open problem — bridging the vocabulary gap to reach 70-80% will need either:
-- **Cross-encoder reranking on stored memo text** (where text exists), or
+The previous 50% vague R@5 ceiling has been pushed to **64% with centered+rerank**. Reaching 80%+ now likely requires:
+- **Fine-tuning the cross-encoder on agent-memory-style data** (MS MARCO is web passages, mismatch). Estimated +5-10pp.
 - **A trained per-agent re-ranker** (LoRA adapter on top of stored hidden states), or
 - **Query rewriting via a cheap model** (NOT a HyDE-style LLM call — something like a 30M-parameter encoder fine-tuned on agent queries).
 
