@@ -361,7 +361,7 @@ cargo build --workspace
 # Set up Python environment
 python3 -m venv .venv && source .venv/bin/activate
 pip install maturin numpy pytest
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop
 
 # Run tests
 cargo nextest run --workspace --exclude tdb-python
@@ -417,7 +417,7 @@ just test-crate tdb-storage                           # single crate
 
 ```bash
 source .venv/bin/activate
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop
 
 # All CPU tests (skips GPU vLLM tests if vLLM/CUDA missing)
 pytest tests/python/ -v -m "not gpu"
