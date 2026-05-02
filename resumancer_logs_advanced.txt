@@ -1,0 +1,27 @@
+# Resumancer Log Entries for TardigradeDB (Advanced)
+
+# Setup Branch
+resumancer branch create tardigrade-db
+
+# 2026-04-26: Finalizing vLLM and Hygiene
+resumancer build "Implemented semantic matching via embedding table for the vLLM load path." --commit 69deec9
+resumancer build "Added model-agnostic generation hygiene in KnowledgePackStore." --commit 7580cd6
+resumancer build "Developed the TardigradeDB KV Connector for vLLM serving." --commit 381ead5
+resumancer impact "Achieved zero-copy memory injection into vLLM KV-cache, reducing generation latency."
+
+# 2026-04-25: MCP and Scale Testing
+resumancer build "Launched TardigradeDB MCP server with 5 specialized tools for LLM agents." --commit ce02fde
+resumancer build "Implemented trace-boosted retrieval, improving accuracy from 55% to 70%." --commit 5dca0e8
+resumancer reflection "Found that latent similarity alone fails to distinguish event identity; causal grounding via TraceGraph is essential." --commit b85d4a5
+resumancer impact "Extended LLM agent capabilities with persistent, high-accuracy episodic memory."
+
+# 2026-04-24: Multi-Memory Injection and Rust Engine Refactor
+resumancer build "Implemented multi-memory KV injection with NaiveConcatComposer." --commit 525c04d
+resumancer build "Refactored engine to extract pack-read materialization into private phases for better profiling." --commit ba586ac
+resumancer reflection "Determined that multi-memory failure at scale is primarily a retrieval problem, not an injection problem." --commit 4229b1e
+resumancer goal "Standardized engine materialization phases to enable sub-5μs performance profiling."
+
+# 2026-04-23 and earlier (Phase 11: DX & Repo Quality)
+resumancer goal "Established 'Tokio-level' documentation standards and automated CI/CD via justfile and lefthook."
+resumancer impact "Reduced development friction by unifying local and remote CI environments."
+resumancer reflection "Early investment in repository quality and documentation standards (CLAUDE.md/AGENTS.md) significantly accelerated Phase 11 delivery."
