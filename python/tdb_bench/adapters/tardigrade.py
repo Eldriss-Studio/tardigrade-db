@@ -42,6 +42,7 @@ from tdb_bench.models import AdapterQueryResult, BenchmarkItem
 _MODEL_NAME = os.getenv("TDB_BENCH_MODEL", "Qwen/Qwen3-0.6B")
 _DEVICE = os.getenv("TDB_BENCH_DEVICE", "cuda")
 _REFINEMENT = os.getenv("TDB_REFINEMENT_MODE", "none")
+_RERANK_MODEL = os.getenv("TDB_BENCH_RERANK_MODEL", "")  # empty disables reranker
 
 # Module-level model cache so repeated ``adapter = TardigradeAdapter()``
 # calls (one per repeat in BenchmarkRunner) don't re-download/re-load
@@ -104,6 +105,16 @@ class TardigradeAdapter(BenchmarkAdapter):
         self._hook = None
         self._mode = "in_memory"
         self._refinement = _REFINEMENT
+        self._reranker = None
+        if _RERANK_MODEL:
+            try:
+                from tardigrade_hooks.reranker import CrossEncoderReranker  # type: ignore
+
+                self._reranker = CrossEncoderReranker(model_name=_RERANK_MODEL, device=_DEVICE)
+            except Exception:
+                # Fall back silently (metadata records the absence) — reranker
+                # is an optional second-stage, not a blocker.
+                self._reranker = None
 
         force_fallback = os.getenv("TDB_BENCH_FORCE_FALLBACK", "").lower() in ("1", "true", "yes")
         if force_fallback:
@@ -193,6 +204,19 @@ class TardigradeAdapter(BenchmarkAdapter):
             past_key_values=out.past_key_values,
             model_hidden_states=out.hidden_states[query_layer],
         )
+
+        # Optional Stage-2 cross-encoder reranking when memo text is available.
+        if self._reranker is not None and handles:
+            handles = self._reranker.rerank(
+                query_text=item.question,
+                candidates=handles,
+                get_text=lambda h: (
+                    self._cell_to_item[int(h.cell_id)].context
+                    if int(h.cell_id) in self._cell_to_item
+                    else None
+                ),
+            )
+
         latency_ms = (time.perf_counter() - start) * 1000.0
 
         evidence: list[str] = []
@@ -254,6 +278,7 @@ class TardigradeAdapter(BenchmarkAdapter):
             "mode": self._mode,
             "refinement_mode": self._refinement,
             "model": _MODEL_NAME if self._mode == "native" else "lexical",
+            "reranker_model": _RERANK_MODEL if self._reranker is not None else "",
         }
         if self._mode != "native" and hasattr(self, "_fallback_reason"):
             meta["fallback_reason"] = self._fallback_reason

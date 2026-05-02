@@ -32,6 +32,7 @@ from tardigrade_hooks.hf_kv_hook import HuggingFaceKVHook
 from vague_query_test import MODERATE_QUERIES, OPEN_QUERIES, VAGUE_QUERIES
 
 MODEL_NAME = "Qwen/Qwen3-0.6B"
+DEFAULT_RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 
 def configure_refinement(engine, mode, alpha, beta, kprime):
@@ -45,8 +46,14 @@ def configure_refinement(engine, mode, alpha, beta, kprime):
         raise ValueError(f"unknown mode: {mode}")
 
 
-def run_tier(engine, hook, tokenizer, model, queries, query_layer, k=10):
-    """Return (R@1, R@5, R@10, p95_latency_ms) for a tier."""
+def run_tier(engine, hook, tokenizer, model, queries, query_layer, k=10,
+             reranker=None, cell_to_text=None):
+    """Return (R@1, R@5, R@10, p95_latency_ms) for a tier.
+
+    When ``reranker`` and ``cell_to_text`` are provided, applies
+    cross-encoder reranking over the engine's first-stage handles using
+    the original memory text as the document.
+    """
     import torch  # local import: only needed when running benchmark
 
     hits1 = hits5 = hits10 = 0
@@ -64,6 +71,14 @@ def run_tier(engine, hook, tokenizer, model, queries, query_layer, k=10):
             past_key_values=out.past_key_values,
             model_hidden_states=out.hidden_states[query_layer],
         )
+
+        if reranker is not None and cell_to_text is not None and handles:
+            handles = reranker.rerank(
+                query_text=query_text,
+                candidates=handles,
+                get_text=lambda h: cell_to_text.get(int(h.cell_id)),
+            )
+
         latencies_ms.append((time.perf_counter() - t0) * 1000.0)
 
         retrieved = [h.cell_id for h in handles[:k]]
@@ -85,8 +100,10 @@ def run_tier(engine, hook, tokenizer, model, queries, query_layer, k=10):
 
 
 def populate(engine, hook, tokenizer, model, query_layer):
+    """Returns dict[cell_id -> memory_text] for the reranker text lookup."""
     import torch
 
+    cell_to_text: dict[int, str] = {}
     for memory in MEMORIES:
         inputs = tokenizer(memory, return_tensors="pt", truncation=True, max_length=256)
         inputs = {k_: v.to(model.device) for k_, v in inputs.items()}
@@ -98,7 +115,11 @@ def populate(engine, hook, tokenizer, model, query_layer):
             model_hidden_states=out.hidden_states[query_layer],
         )
         if decision.should_write:
-            engine.mem_write(1, query_layer, decision.key, decision.value, decision.salience, None)
+            cell_id = engine.mem_write(
+                1, query_layer, decision.key, decision.value, decision.salience, None,
+            )
+            cell_to_text[int(cell_id)] = memory
+    return cell_to_text
 
 
 def main():
@@ -112,6 +133,10 @@ def main():
                         help="hyperparameter sweep")
     parser.add_argument("--device", default="cuda",
                         help="cuda or cpu (cpu is very slow)")
+    parser.add_argument("--rerank", action="store_true",
+                        help="Apply cross-encoder reranker on top of selected refinement modes")
+    parser.add_argument("--rerank-model", default=DEFAULT_RERANK_MODEL,
+                        help=f"Cross-encoder model name (default: {DEFAULT_RERANK_MODEL})")
     args = parser.parse_args()
 
     import torch  # noqa: F401  (defer import so --help works without torch installed)
@@ -135,8 +160,15 @@ def main():
             model=model, use_hidden_states=True,
         )
         print(f"\nStoring {len(MEMORIES)} memories...")
-        populate(engine, hook, tokenizer, model, query_layer)
+        cell_to_text = populate(engine, hook, tokenizer, model, query_layer)
         print(f"  {engine.cell_count()} cells")
+
+        reranker = None
+        if args.rerank:
+            from tardigrade_hooks.reranker import CrossEncoderReranker
+            print(f"  Loading reranker {args.rerank_model}...")
+            reranker = CrossEncoderReranker(model_name=args.rerank_model, device=args.device)
+            print(f"  reranker loaded")
 
         specific = [(q, e, "specific") for q, e, t in ALL_QUERIES if t != "negative"]
         tiers = [
@@ -165,11 +197,14 @@ def main():
         for mode, alpha, beta, kprime in configurations:
             configure_refinement(engine, mode, alpha or 0.7, beta or 0.3, kprime or 3)
             label = mode if mode != "prf" else f"prf(a={alpha},b={beta},k'={kprime})"
+            if args.rerank:
+                label = f"{label}+rerank"
             print(f"\n=== {label} ===")
             row = [label]
             for tier_name, tier_queries in tiers:
                 r1, r5, r10, p95 = run_tier(
-                    engine, hook, tokenizer, model, tier_queries, query_layer
+                    engine, hook, tokenizer, model, tier_queries, query_layer,
+                    reranker=reranker, cell_to_text=cell_to_text if reranker else None,
                 )
                 print(f"  {tier_name:<10} R@1={r1:5.1f}%  R@5={r5:5.1f}%  R@10={r10:5.1f}%  p95={p95:6.1f}ms")
                 row.append((r5, p95))
