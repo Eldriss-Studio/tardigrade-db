@@ -264,6 +264,10 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | **Per-token Top5Avg retrieval works at scale** | 100% R@5 at 5,000 memories, no gravity well, no degradation (100→500→1K→2K→5K all 100%) | High — 30 queries per scale point, clean scaling curve |
 | **Vamana acceleration works on CPU** | 1.44x latency speedup at 1K memories (CPU) with zero recall loss. On GPU, only 1.05x at 5K — model inference dominates, engine scan is no longer the bottleneck. | High — Criterion + end-to-end benchmarks |
 | **Engine retrieval is the real bottleneck (not model inference)** | Per-query breakdown on GPU: model forward 27ms, hook+engine 73ms (after AVX2+SoA+buffer optimizations, was 143ms). The engine's per-token scoring at dim=1024 dominates. Criterion benchmarks at dim=128 show 140µs for 100 cells — the gap is the 8x dimension scaling plus engine overhead (SLB, pipeline, governance). | High — measured per-component on GPU, before/after optimization |
+| **AVX2 INT8 dot product (16x throughput)** | x86_64 path uses i8→i16 widening + `vpmaddwd` for 32 elements/iteration. INT8 dot at 1024-dim: 27ns. NEON path unchanged for aarch64. Runtime detection via `is_x86_feature_detected!`. | High — Criterion benchmarks across dim=64..512 |
+| **SoA token store layout** | Replaced `Vec<TokenEntry>` (heap-allocated `Vec<i8>` per token) with contiguous `TokenStore` arena (one `Vec<i8>` for all data). Eliminates pointer-chasing during scoring. 10K cells: 3.2ms → 2.4ms (25% improvement). At 100 cells both fit in L2, no measurable change. | High — Criterion benchmarks at 100/1K/10K cells |
+| **Pre-allocated score buffer + select_nth_unstable** | HashMap::with_capacity from cell count, Vec::with_capacity per entry, select_nth_unstable (O(n)) instead of full sort (O(n log n)) for Top5Avg. 100 cells: 189µs → 140µs (1.35x). | High — Criterion measured |
+| **Direct Token Query API (mem_read_tokens)** | Engine method accepting (n_tokens × dim) flat matrix instead of pre-encoded f32 array. PyO3 binding takes `PyReadonlyArray2<f32>` directly. Eliminates Python `encode_per_token` round-trip. Bitwise-identical results to encoded path. End-to-end latency at 100 cells: 173ms → 100ms total (1.73x improvement, accumulated with prior optimizations). | High — 6 ATDD tests (3 Rust + 3 Python), parity verified |
 | **Q4 quantization preserves retrieval** | 89% of injection quality preserved through Q4 pipeline | High — measured in injection results |
 | **Mean-pooling is broken for retrieval** | 10% same-model recall (vs 100% per-token) | High — repeated across models |
 | **Position 0 must be skipped** | Including attention sink drops recall from 96.7% to 3.3% | High — immediate, reproducible |
@@ -282,29 +286,35 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 
 ### Not Yet Tested (roads untravelled)
 
-#### Highest priority — determines real-world viability
+#### Highest priority — turns "research prototype" into "usable product"
 
 | Experiment | Why it matters | Risk if untested |
 |-----------|---------------|-----------------|
-| ~~**Vague queries**~~ | **TESTED** — see Proven table above. 46% R@5 for non-specific queries. The cliff is vocabulary overlap, not vagueness. Retrieval needs augmentation (context signals, domain priors, re-ranking) for vague queries. | — |
-| ~~**RoPE injection**~~ | **TESTED** — 5/5 synthetic gibberish facts on Qwen3-0.6B (RoPE model) with current KnowledgePackStore pipeline. Bare model: 0/5. KV injection: 5/5. RoPE is handled correctly by HuggingFace's `generate()` auto-position-ID offsetting. See Proven table. | — |
-| **Scale beyond 5K** | Proven at 5K memories (100% R@5). Untested at 10K, 100K. On GPU, latency plateaus at ~3.2s regardless of memory count (model inference dominates). Engine scan is not the bottleneck. | Lower risk than expected — engine scales, model inference is the ceiling. |
+| **Vague query improvement** | Vague queries get 46% R@5 (vocabulary cliff). Engine is now fast enough (140µs Rust scoring) to support a two-stage pipeline: coarse per-token retrieval → fine re-ranking via cross-encoder or context-aware scoring. Could lift usable recall from ~46% to 70-80%. | Without this, real agents using non-specific queries get half the memories they should. Biggest practical limitation. |
+| **Head-to-head benchmark vs Mem0/Letta/Zep** | The project claims differentiation from these systems but has no measured comparison. Same corpus, same queries, three systems running side-by-side. | Without data, all architectural advantages are theoretical. "Why use TardigradeDB?" has no concrete answer. |
+| **Scale beyond 5K** | Proven at 5K memories (100% R@5). Untested at 10K, 100K. Engine retrieval scales linearly (Vamana 1.4x speedup); the question is whether the per-token pipeline holds 100% recall at 50K-100K memories. | Lower technical risk than expected, but the "database" claim still needs 10K+ validation. |
 
-#### Medium priority — improves quality and trust
+#### Medium priority — production hardening + quality
 
 | Experiment | Why it matters |
 |-----------|---------------|
+| **WAL checksums + corruption detection** | WAL replay currently silently discards partial records (no checksums). For data integrity guarantees, records need CRC and replay should fail-fast on corruption. |
+| **Real observability** | No structured logs, no metrics, no traces. A startup running this in production would have no way to diagnose issues. Need request/response logs, query latency histograms, cache hit rates. |
+| **Concurrent agent load test** | Engine is thread-safe (Arc<Mutex>) but never load-tested with multiple agents hammering it simultaneously. Need to characterize behavior under contention. |
 | **Adversarial retrieval** | What happens with contradictory memories? ("Meeting at 3pm" vs "Meeting moved to 5pm"). Does governance (recency decay, importance) surface the right one? |
-| **Confidence thresholding** | When should the engine say "I don't remember"? 10% false positive rate was measured but never addressed. No calibrated threshold exists. |
+| **Confidence thresholding** | When should the engine say "I don't remember"? 10% false positive rate measured but never addressed. No calibrated threshold exists. |
 | **Multi-session memory** | "What happened last week?" requires temporal awareness. Engine stores timestamps but scoring ignores time entirely. |
 | **Cross-model KV injection** | We proved cross-model *retrieval* (finding memories). Never tested cross-model *injection* (putting Qwen's K/V tensors into GPT-2's attention). Retrieval uses hidden states; injection uses K/V projections — different tensors. |
 | **Governance under load** | AKL promotion/demotion/decay is unit-tested. Never tested at scale. With 10K memories and continuous access, does importance scoring create its own gravity wells? |
 | **Storage cost at scale** | How much disk per memory with Q4? Is 100K memories practical on a consumer SSD? Nobody measured. |
 
-#### Lower priority — research directions
+#### Lower priority — performance and research
 
 | Experiment | Why it matters |
 |-----------|---------------|
+| **Rust-side INT8 quantization** | Direct Token API (`mem_read_tokens`) opens this door. Move query token f32→INT8 quantization out of Python and into Rust to cut ~30µs (small absolute win, but cleaner). |
+| **AVX-512 VNNI dot product** | Current AVX2 path: 32 i8 elements/cycle. AVX-512 VNNI's `vpdpbusd`: 64 elements/cycle (~2x). Only matters on CPUs with AVX-512 (recent Xeon, AMD Zen 4+). |
+| **Rayon intra-query parallelism** | Per-token scoring is embarrassingly parallel across stored cells. At 10K+ cells the engine could use multiple cores within a single query. |
 | **Per-head scoring** | Current approach concatenates all attention heads. Per-head scoring might capture different relevance types (syntactic vs semantic). |
 | **False positive calibration** | Score thresholding to reduce 10% negFP rate. |
 | **Model version regression** | Same architecture, different training checkpoint (Qwen3-0.6B v1 vs v2). Do stored memories survive weight updates? Different from cross-model. |
@@ -326,7 +336,8 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | [P2+P3: Production & Differentiators](p2-p3-production-and-differentiators.md) | Complete |
 | [SGLang Investigation](sglang-investigation.md) | Complete — NOT VIABLE |
 | Scale recall benchmark (100→5K memories) | Complete — 100% R@5 at 5K, no degradation |
-| Latency benchmark (Vamana vs brute-force) | Complete — CPU: 1.44x speedup. GPU: 1.05x (model inference dominates) |
+| Latency benchmark (Vamana vs brute-force) | Complete — CPU: 1.44x speedup. GPU: 1.05x (engine no longer the bottleneck) |
+| Retrieval pipeline optimization (AVX2 + SoA + buffers + Direct Token API) | Complete — engine 100 cells: 140µs (Criterion). End-to-end GPU: 173ms → 100ms per query (1.73x). |
 | Cross-model retrieval (same-family + cross-family) | Complete — 90% same-family, 77% cross-family with MLP |
 | vLLM connector — semantic save | Complete |
 | vLLM cross-session retrieval | Complete |

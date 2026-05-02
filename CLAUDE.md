@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** All phases complete through P4. 527 tests (271 Rust + 256 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies with unified save/load via `compute_for_save` (Template Method). **vLLM connector hardened:** metadata DTO bridge (scheduler→worker), bounded fingerprint cache (LRU eviction at `max_num_seqs`), safetensors-first embedding weight loading, **save-side retrieval key asymmetry resolved** (token IDs flow scheduler→DTO→worker, both sides use `compute_for_save` in the same retrieval-key space, raw K fallback for graceful degradation). WAL checkpointing. **Segment compaction** (Mark-Sweep GC: rewrites segments below 50% live ratio, crash-safe). Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
+**Status:** All phases complete through P4. 551 tests (288 Rust + 263 Python). **Active governance:** tier-based retrieval boost (Core 1.25×, Validated 1.1×), `evict_draft_packs()` with owner scoping. **Semantic edges:** `add_pack_edge` with Supports/Contradicts; `pack_supports`/`pack_contradicts` queries. **SynapticBank** exposed to Python (LoRA adapter persistence, f32↔f16). **Multi-agent** isolation validated (3 agents × 5 packs, 12 tests). `Engine::status()` for monitoring. Configurable engine from Python. 3 pluggable retrieval key strategies with unified save/load via `compute_for_save` (Template Method). **vLLM connector hardened:** metadata DTO bridge (scheduler→worker), bounded fingerprint cache (LRU eviction at `max_num_seqs`), safetensors-first embedding weight loading, **save-side retrieval key asymmetry resolved** (token IDs flow scheduler→DTO→worker, both sides use `compute_for_save` in the same retrieval-key space, raw K fallback for graceful degradation). WAL checkpointing. **Segment compaction** (Mark-Sweep GC: rewrites segments below 50% live ratio, crash-safe). Text storage unified in Rust `TextStore`. KV injection verified with fully synthetic gibberish facts (9/10 recall on Qwen3-0.6B). Docs match implementation.
+
+**Retrieval performance:** AVX2 INT8 dot product (27ns at 1024-dim). SoA token store (contiguous arena, eliminates pointer chasing). Pre-allocated score buffers + `select_nth_unstable` for Top5Avg. Direct Token Query API (`mem_read_tokens`) skips Python encode/parse round-trip. End-to-end GPU latency at 100 cells: 100ms/query (was 173ms, 1.73x). Rust engine alone: 140µs at 100 cells (Criterion).
 
 **Scale validated:** 100% recall at 5K memories (Top5Avg, Q4 pipeline, 100→5K clean scaling). Vamana gives 1.4x speedup on CPU; on GPU, model inference dominates and engine scan is no longer the bottleneck (~3.2s latency at 5K, stable from 2K→5K). **Thread-safe:** Python Engine wrapped in `Arc<Mutex<>>` with GIL release via `py.detach()`. **Cross-model:** Same-family 90% R@5 via linear projection (Qwen3-0.6B→1.7B); cross-family 76.7% via MLP adapter (Qwen3→GPT-2, ~400K params). **Vague queries:** specific 100% R@5, moderate/vague ~46% R@5 (100 queries per tier). The cliff is vocabulary overlap, not vagueness — retrieval needs augmentation for non-specific queries.
 
@@ -27,7 +29,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install transformers
 ```
 
-### Rust tests (271 tests)
+### Rust tests (288 tests)
 
 ```bash
 cargo build --workspace                              # build all crates
@@ -41,7 +43,7 @@ cargo test test_rebuild_retriever                     # run a single test by nam
 
 Note: `tdb-python` is excluded from `cargo test/clippy` because PyO3 needs `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` on Python 3.14.
 
-### Python tests (256 tests)
+### Python tests (263 tests)
 
 ```bash
 source .venv/bin/activate
@@ -77,10 +79,10 @@ Captures KV cache from GPT-2 inference on *"The capital of France is"*, then ret
 | Retrieval | tdb-retrieval | 51 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig |
 | Organization | tdb-index | 25 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
 | Governance | tdb-governance | 26 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | tdb-engine | 130 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation, refresh + WAL checkpoint, active governance (tier boost + eviction), semantic edges (Supports/Contradicts), multi-agent isolation (3 agents × 5 packs), status API, crash recovery (segment + WAL truncation), multi-component atomicity (text store, deletion log, flush) |
-| Python | pytest | 256 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, diagnostics, RAG baseline, vLLM connector/prefix client, synthetic-fact KV injection, prefix builder, retrieval key strategies (17), semantic edges (4), SynapticBank (6), multi-agent (5), connector hardening: metadata bridge (5), fingerprint bounds (3), save-side key unification (5), lifecycle regression (1), thread safety: GIL release (2) + concurrent access (2) |
+| Engine | tdb-engine | 141 | Write/read, pack API, text storage, delete, state rebuild, SLB chain, Vamana activation, refresh + WAL checkpoint, active governance (tier boost + eviction), semantic edges (Supports/Contradicts), multi-agent isolation (3 agents × 5 packs), status API, crash recovery (segment + WAL truncation), multi-component atomicity (text store, deletion log, flush), `mem_read_tokens` direct token API (3) |
+| Python | pytest | 263 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, MCP tools, diagnostics, RAG baseline, vLLM connector/prefix client, synthetic-fact KV injection, prefix builder, retrieval key strategies (17), semantic edges (4), SynapticBank (6), multi-agent (5), connector hardening: metadata bridge (5), fingerprint bounds (3), save-side key unification (5), lifecycle regression (1), thread safety: GIL release (2) + concurrent access (2), `mem_read_tokens` parity (3) |
 
-Per-crate counts include unit + acceptance + doctest tests. Sum: 6+39+51+25+26+130+245 = 522.
+Per-crate counts include unit + acceptance + doctest tests. Sum: 6+39+51+25+26+141+263 = 551.
 
 ## Crate Structure
 
