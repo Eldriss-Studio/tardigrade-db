@@ -17,7 +17,7 @@ print_stdout = "deny"
 print_stderr = "deny"
 
 [lib]
-name = "tardigrade_db"
+name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]

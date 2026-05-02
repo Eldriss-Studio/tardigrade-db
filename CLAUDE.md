@@ -45,7 +45,7 @@ Note: `tdb-python` is excluded from `cargo test/clippy` because PyO3 needs `PYO3
 
 ```bash
 source .venv/bin/activate
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop -m crates/tdb-python/Cargo.toml
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop
 pytest tests/python/ -v -m "not gpu"        # CPU-only (safe everywhere)
 pytest tests/python/ -v -m gpu              # vLLM round-trip (Linux + GPU + vLLM ≥ 0.19)
 ```
