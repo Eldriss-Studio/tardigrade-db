@@ -87,6 +87,7 @@ pub mod int8_quant;
 pub mod key_view;
 pub mod per_token;
 pub mod pipeline;
+pub mod refinement;
 pub mod retriever;
 pub mod simd_distance;
 pub mod slb;

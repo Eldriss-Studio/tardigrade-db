@@ -167,6 +167,14 @@ pub struct PerTokenRetriever {
     config: PerTokenConfig,
     /// Number of distinct cells fully reranked during the previous query.
     last_scored_cell_count: usize,
+    /// Running sum of stored f32 token vectors, per dimension. Used by
+    /// mean-centered refinement to subtract the corpus's shared high-energy
+    /// direction. Updated on insert; not decremented on remove (the bias is
+    /// small in practice and is fully refreshed when the engine rebuilds the
+    /// retriever by replaying inserts from durable storage).
+    corpus_sum: Vec<f32>,
+    /// Number of f32 token vectors that have contributed to `corpus_sum`.
+    corpus_token_count: usize,
 }
 
 impl PerTokenRetriever {
@@ -190,7 +198,49 @@ impl PerTokenRetriever {
             scoring_mode: mode,
             config,
             last_scored_cell_count: 0,
+            corpus_sum: Vec::new(),
+            corpus_token_count: 0,
         }
+    }
+
+    /// Iterate stored f32-dequantized tokens for a single cell, paired with owner.
+    ///
+    /// Yields `(token_f32, owner)` for each token of `cell_id`. Returns an empty
+    /// iterator if the cell is not present. Used by refinement strategies that
+    /// need to re-score a small set of candidates outside the INT8 fast path.
+    pub fn dequantized_tokens_for_cell(
+        &self,
+        cell_id: CellId,
+    ) -> impl Iterator<Item = (Vec<f32>, OwnerId)> + '_ {
+        (0..self.store.len()).filter(move |&i| self.store.cell_ids[i] == cell_id).map(|i| {
+            let scale = self.store.scales[i];
+            let tokens = self.store.token_data(i);
+            let f32_tokens: Vec<f32> = tokens.iter().map(|&v| v as f32 * scale).collect();
+            (f32_tokens, self.store.owners[i])
+        })
+    }
+
+    /// Per-token vector dimension, or `None` if no tokens have been inserted.
+    pub fn token_dim(&self) -> Option<usize> {
+        self.dim
+    }
+
+    /// Aggregated number of dot products averaged in `Top5Avg` scoring.
+    pub fn top_n(&self) -> usize {
+        self.config.top_n_avg_match_count
+    }
+
+    /// Mean f32 token vector across the entire corpus, or `None` if empty.
+    ///
+    /// Used by mean-centered refinement to subtract the dominant shared
+    /// direction from query and stored tokens before scoring — the same
+    /// "skip position 0" insight applied at corpus scope.
+    pub fn corpus_mean(&self) -> Option<Vec<f32>> {
+        if self.corpus_token_count == 0 || self.corpus_sum.is_empty() {
+            return None;
+        }
+        let inv = 1.0 / self.corpus_token_count as f32;
+        Some(self.corpus_sum.iter().map(|s| s * inv).collect())
     }
 
     /// Number of individual token entries stored.
@@ -201,6 +251,25 @@ impl PerTokenRetriever {
     /// Number of distinct cells indexed.
     pub fn cell_count(&self) -> usize {
         self.cell_token_count.len()
+    }
+
+    fn ensure_corpus_sum_dim(&mut self, dim: usize) {
+        if self.corpus_sum.len() != dim {
+            // First insert (or unexpected dim change) — size the running sum.
+            // Mismatched dim resets it; corpus_token_count is reset to keep mean valid.
+            self.corpus_sum = vec![0.0; dim];
+            self.corpus_token_count = 0;
+        }
+    }
+
+    fn accumulate_corpus(&mut self, token: &[f32]) {
+        if token.len() != self.corpus_sum.len() {
+            return;
+        }
+        for (sum, value) in self.corpus_sum.iter_mut().zip(token.iter()) {
+            *sum += *value;
+        }
+        self.corpus_token_count += 1;
     }
 
     fn candidate_limit(&self, k: usize) -> usize {
@@ -458,9 +527,11 @@ impl Retriever for PerTokenRetriever {
             if self.dim.is_none() {
                 self.dim = Some(d);
             }
+            self.ensure_corpus_sum_dim(d);
 
             for i in 0..n {
                 let token_key = &data[i * d..(i + 1) * d];
+                self.accumulate_corpus(token_key);
                 let quantized = Int8Quantizer::quantize(token_key);
                 self.store.push(cell_id, owner, &quantized);
             }
@@ -470,6 +541,8 @@ impl Retriever for PerTokenRetriever {
             if self.dim.is_none() {
                 self.dim = Some(key.len());
             }
+            self.ensure_corpus_sum_dim(key.len());
+            self.accumulate_corpus(key);
 
             let quantized = Int8Quantizer::quantize(key);
             self.store.push(cell_id, owner, &quantized);
@@ -488,6 +561,10 @@ impl Retriever for PerTokenRetriever {
 
     fn len(&self) -> usize {
         self.store.len()
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }
 
@@ -692,6 +769,44 @@ mod tests {
             retriever.last_scored_cell_count,
             retriever.cell_count(),
         );
+    }
+
+    #[test]
+    fn test_corpus_mean_is_none_when_empty() {
+        let retriever = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
+        assert!(retriever.corpus_mean().is_none());
+    }
+
+    #[test]
+    fn test_corpus_mean_averages_per_dim_across_inserted_tokens() {
+        let mut retriever = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
+        let a = [1.0f32, 2.0, 3.0, 4.0];
+        let b = [3.0f32, 4.0, 5.0, 6.0];
+        let c = [5.0f32, 6.0, 7.0, 8.0];
+
+        retriever.insert(0, OWNER_ONE, &encode_per_token_keys(&[&a, &b, &c]));
+
+        let mean = retriever.corpus_mean().expect("mean exists after insert");
+        assert_eq!(mean.len(), 4);
+        // Mean of (1,3,5)=3, (2,4,6)=4, (3,5,7)=5, (4,6,8)=6.
+        let expected = [3.0f32, 4.0, 5.0, 6.0];
+        for (got, want) in mean.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-5, "expected {want}, got {got}");
+        }
+    }
+
+    #[test]
+    fn test_corpus_mean_accumulates_across_multiple_cells() {
+        let mut retriever = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
+        let cell0 = [2.0f32, 0.0];
+        let cell1 = [0.0f32, 4.0];
+
+        retriever.insert(0, OWNER_ONE, &encode_per_token_keys(&[&cell0]));
+        retriever.insert(1, OWNER_ONE, &encode_per_token_keys(&[&cell1]));
+
+        let mean = retriever.corpus_mean().expect("mean exists");
+        assert!((mean[0] - 1.0).abs() < 1e-5);
+        assert!((mean[1] - 2.0).abs() < 1e-5);
     }
 
     #[test]

@@ -9,6 +9,8 @@
 //! support internal owner filtering (SLB, Vamana) ignore it — the pipeline
 //! handles post-filtering when needed.
 
+use std::any::Any;
+
 use tdb_core::{CellId, OwnerId};
 
 use crate::attention::RetrievalResult;
@@ -49,5 +51,12 @@ pub trait Retriever: Send + Sync {
     /// Whether this retriever has no entries.
     fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Mutable downcast access for stage-specific operations (e.g. refinement
+    /// hooks reaching into [`PerTokenRetriever`](crate::per_token::PerTokenRetriever)).
+    /// Default returns `None`; impls override to expose their concrete type.
+    fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
+        None
     }
 }
