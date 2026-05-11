@@ -33,6 +33,138 @@ use tdb_core::OwnerId;
 use crate::attention::RetrievalResult;
 use crate::per_token::{PerTokenRetriever, encode_per_token_keys};
 
+// ── Strategy pattern: trait + concrete strategies ───────────────────────
+
+/// Object-safe trait for post-retrieval refinement strategies.
+///
+/// Each implementation encapsulates the algorithm and its parameters.
+/// The engine holds a `Box<dyn RefinementStrategy>` and delegates to it,
+/// replacing the previous `match` on [`RefinementMode`].
+pub trait RefinementStrategy: Send + Sync + std::fmt::Debug {
+    /// Apply refinement to first-stage candidates.
+    ///
+    /// Semantics are identical to [`apply`]: re-score or re-query the
+    /// candidates, returning at most `k` results.
+    fn refine(
+        &self,
+        retriever: &mut PerTokenRetriever,
+        query_key: &[f32],
+        first_stage: Vec<RetrievalResult>,
+        k: usize,
+        owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult>;
+
+    /// Human-readable name used by Python bindings and diagnostics.
+    fn name(&self) -> &'static str;
+
+    /// Whether this strategy is a no-op (allows short-circuit in the engine).
+    fn is_noop(&self) -> bool {
+        false
+    }
+}
+
+/// Pass-through: first-stage results returned unchanged.
+#[derive(Debug)]
+pub struct NoOpStrategy;
+
+impl RefinementStrategy for NoOpStrategy {
+    fn refine(
+        &self,
+        _retriever: &mut PerTokenRetriever,
+        _query_key: &[f32],
+        first_stage: Vec<RetrievalResult>,
+        _k: usize,
+        _owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        first_stage
+    }
+
+    fn name(&self) -> &'static str {
+        "none"
+    }
+
+    fn is_noop(&self) -> bool {
+        true
+    }
+}
+
+/// Subtract corpus mean from query + stored tokens, re-score top candidates.
+#[derive(Debug)]
+pub struct MeanCenteredStrategy;
+
+impl RefinementStrategy for MeanCenteredStrategy {
+    fn refine(
+        &self,
+        retriever: &mut PerTokenRetriever,
+        query_key: &[f32],
+        first_stage: Vec<RetrievalResult>,
+        k: usize,
+        _owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        mean_centered_rescore(retriever, query_key, first_stage, k)
+    }
+
+    fn name(&self) -> &'static str {
+        "centered"
+    }
+}
+
+/// Rocchio expansion in latent K-space, then re-retrieve.
+#[derive(Debug)]
+pub struct LatentPrfStrategy {
+    pub alpha: f32,
+    pub beta: f32,
+    pub k_prime: usize,
+}
+
+impl RefinementStrategy for LatentPrfStrategy {
+    fn refine(
+        &self,
+        retriever: &mut PerTokenRetriever,
+        query_key: &[f32],
+        first_stage: Vec<RetrievalResult>,
+        k: usize,
+        owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        latent_prf(
+            retriever,
+            query_key,
+            first_stage,
+            self.alpha,
+            self.beta,
+            self.k_prime,
+            k,
+            owner_filter,
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "prf"
+    }
+}
+
+/// Factory: create a boxed strategy from a name string (for Python bindings).
+///
+/// Accepted names: `"none"`, `"centered"` / `"mean_centered"`, `"prf"` / `"latent_prf"`.
+/// Returns `None` for unrecognized names.
+pub fn strategy_from_name(
+    name: &str,
+    alpha: Option<f32>,
+    beta: Option<f32>,
+    k_prime: Option<usize>,
+) -> Option<Box<dyn RefinementStrategy>> {
+    match name {
+        "none" => Some(Box::new(NoOpStrategy)),
+        "centered" | "mean_centered" => Some(Box::new(MeanCenteredStrategy)),
+        "prf" | "latent_prf" => Some(Box::new(LatentPrfStrategy {
+            alpha: alpha.unwrap_or(0.7),
+            beta: beta.unwrap_or(0.3),
+            k_prime: k_prime.unwrap_or(3),
+        })),
+        _ => None,
+    }
+}
+
 /// Refinement strategy applied after the first-stage retrieval pipeline.
 ///
 /// Default is [`RefinementMode::None`] — existing engine behavior is
@@ -311,6 +443,36 @@ mod tests {
             Some(OWNER),
         );
         assert!(refined.is_empty());
+    }
+
+    /// Strategy trait objects produce the same results as the enum dispatch.
+    #[test]
+    fn strategy_trait_produces_same_results_as_enum() {
+        let mut r = populated_retriever();
+        let q = encode_per_token_keys(&[&[1.0_f32, 0.0, 0.0, 0.0][..]]);
+        let first_stage = r.query(&q, 3, Some(OWNER));
+
+        // Enum dispatch (existing).
+        let enum_result =
+            apply(RefinementMode::None, &mut r, &q, first_stage.clone(), 3, Some(OWNER));
+
+        // Trait dispatch (new).
+        let strategy = strategy_from_name("none", None, None, None).unwrap();
+        let trait_result = strategy.refine(&mut r, &q, first_stage.clone(), 3, Some(OWNER));
+
+        let enum_ids: Vec<_> = enum_result.iter().map(|r| r.cell_id).collect();
+        let trait_ids: Vec<_> = trait_result.iter().map(|r| r.cell_id).collect();
+        assert_eq!(enum_ids, trait_ids);
+
+        // MeanCentered via trait.
+        let first_stage2 = r.query(&q, 3, Some(OWNER));
+        let enum_mc =
+            apply(RefinementMode::MeanCentered, &mut r, &q, first_stage2.clone(), 3, Some(OWNER));
+        let strategy_mc = strategy_from_name("centered", None, None, None).unwrap();
+        let trait_mc = strategy_mc.refine(&mut r, &q, first_stage2, 3, Some(OWNER));
+        let enum_mc_ids: Vec<_> = enum_mc.iter().map(|r| r.cell_id).collect();
+        let trait_mc_ids: Vec<_> = trait_mc.iter().map(|r| r.cell_id).collect();
+        assert_eq!(enum_mc_ids, trait_mc_ids);
     }
 
     #[test]
