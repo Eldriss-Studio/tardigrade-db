@@ -278,34 +278,19 @@ impl Engine {
         beta: Option<f32>,
         k_prime: Option<usize>,
     ) -> PyResult<()> {
-        use tdb_retrieval::refinement::RefinementMode;
-        let resolved = match mode {
-            "none" => RefinementMode::None,
-            "centered" | "mean_centered" => RefinementMode::MeanCentered,
-            "prf" | "latent_prf" => RefinementMode::LatentPrf {
-                alpha: alpha.unwrap_or(0.7),
-                beta: beta.unwrap_or(0.3),
-                k_prime: k_prime.unwrap_or(3),
-            },
-            other => {
-                return Err(PyRuntimeError::new_err(format!(
-                    "unknown refinement mode '{other}' (expected 'none', 'centered', or 'prf')"
-                )));
-            }
-        };
-        lock_engine(&self.inner)?.set_refinement_mode(resolved);
+        let strategy = tdb_retrieval::refinement::strategy_from_name(mode, alpha, beta, k_prime)
+            .ok_or_else(|| {
+                PyRuntimeError::new_err(format!(
+                    "unknown refinement mode '{mode}' (expected 'none', 'centered', or 'prf')"
+                ))
+            })?;
+        lock_engine(&self.inner)?.set_refinement_strategy(strategy);
         Ok(())
     }
 
     /// Currently configured refinement mode as `"none" | "centered" | "prf"`.
     fn refinement_mode(&self) -> PyResult<String> {
-        use tdb_retrieval::refinement::RefinementMode;
-        let s = match lock_engine(&self.inner)?.refinement_mode() {
-            RefinementMode::None => "none",
-            RefinementMode::MeanCentered => "centered",
-            RefinementMode::LatentPrf { .. } => "prf",
-        };
-        Ok(s.to_string())
+        Ok(lock_engine(&self.inner)?.refinement_mode_name().to_string())
     }
 
     /// Get the current importance score of a cell.

@@ -209,8 +209,8 @@ pub struct Engine {
     key_dim: Option<usize>,
     /// Per-token retrieval config (stored for pipeline rebuild on refresh).
     per_token_config: PerTokenConfig,
-    /// Optional vague-query refinement applied after first-stage retrieval.
-    refinement_mode: tdb_retrieval::refinement::RefinementMode,
+    /// Optional vague-query refinement applied after first-stage retrieval (Strategy pattern).
+    refinement_strategy: Box<dyn tdb_retrieval::refinement::RefinementStrategy>,
     /// Durable text store for KV pack fact text.
     text_store: TextStore,
     /// Durable deletion log for pack deletions.
@@ -238,12 +238,44 @@ impl Engine {
     /// Default is `RefinementMode::None`. See `tdb_retrieval::refinement` for
     /// available strategies (mean-centering, latent-space PRF).
     pub fn set_refinement_mode(&mut self, mode: tdb_retrieval::refinement::RefinementMode) {
-        self.refinement_mode = mode;
+        use tdb_retrieval::refinement::RefinementMode;
+        let strategy: Box<dyn tdb_retrieval::refinement::RefinementStrategy> = match mode {
+            RefinementMode::None => Box::new(tdb_retrieval::refinement::NoOpStrategy),
+            RefinementMode::MeanCentered => {
+                Box::new(tdb_retrieval::refinement::MeanCenteredStrategy)
+            }
+            RefinementMode::LatentPrf { alpha, beta, k_prime } => {
+                Box::new(tdb_retrieval::refinement::LatentPrfStrategy { alpha, beta, k_prime })
+            }
+        };
+        self.refinement_strategy = strategy;
     }
 
-    /// Currently configured refinement mode.
+    /// Replace the refinement strategy with a trait object directly (Strategy pattern).
+    pub fn set_refinement_strategy(
+        &mut self,
+        strategy: Box<dyn tdb_retrieval::refinement::RefinementStrategy>,
+    ) {
+        self.refinement_strategy = strategy;
+    }
+
+    /// Currently configured refinement mode as an enum (backwards compat).
     pub fn refinement_mode(&self) -> tdb_retrieval::refinement::RefinementMode {
-        self.refinement_mode
+        match self.refinement_strategy.name() {
+            "none" => tdb_retrieval::refinement::RefinementMode::None,
+            "centered" => tdb_retrieval::refinement::RefinementMode::MeanCentered,
+            // For PRF we return defaults — the exact params aren't recoverable from the trait.
+            _ => tdb_retrieval::refinement::RefinementMode::LatentPrf {
+                alpha: 0.7,
+                beta: 0.3,
+                k_prime: 3,
+            },
+        }
+    }
+
+    /// Currently configured refinement mode name (for Python bindings).
+    pub fn refinement_mode_name(&self) -> &'static str {
+        self.refinement_strategy.name()
     }
 
     fn open_with_options(
@@ -284,7 +316,7 @@ impl Engine {
             next_pack_id: 0,
             key_dim: None,
             per_token_config,
-            refinement_mode: tdb_retrieval::refinement::RefinementMode::None,
+            refinement_strategy: Box::new(tdb_retrieval::refinement::NoOpStrategy),
             text_store,
             deletion_log,
         };
@@ -675,14 +707,13 @@ impl Engine {
         }
 
         // Optional vague-query refinement: re-score / re-query before governance.
-        // Default RefinementMode::None is a pass-through.
-        if !matches!(self.refinement_mode, tdb_retrieval::refinement::RefinementMode::None)
+        // NoOpStrategy short-circuits via is_noop() — zero overhead on the default path.
+        if !self.refinement_strategy.is_noop()
             && is_per_token_query
             && let Some(per_token) =
                 self.pipeline.first_stage_as_mut::<tdb_retrieval::per_token::PerTokenRetriever>()
         {
-            candidates = tdb_retrieval::refinement::apply(
-                self.refinement_mode,
+            candidates = self.refinement_strategy.refine(
                 per_token,
                 query_key,
                 candidates,
