@@ -577,6 +577,37 @@ impl Engine {
         })
     }
 
+    /// Register one or more view keys for an existing pack.
+    ///
+    /// View keys are additional retrieval keys — queries matching any view key
+    /// will surface this pack during `mem_read_pack`. Returns the total number
+    /// of view keys registered for this pack after the call.
+    #[pyo3(signature = (pack_id, view_keys))]
+    fn add_view_keys(
+        &self,
+        py: Python<'_>,
+        pack_id: u64,
+        view_keys: Vec<PyReadonlyArray1<'_, f32>>,
+    ) -> PyResult<usize> {
+        let keys: Vec<Vec<f32>> =
+            view_keys.iter().map(|k| k.as_slice().map(|s| s.to_vec())).collect::<Result<_, _>>()?;
+        let engine = Arc::clone(&self.inner);
+        py.detach(move || {
+            lock_engine(&engine)?
+                .add_view_keys(pack_id, &keys)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Return the number of view keys registered for a pack.
+    ///
+    /// Raises `RuntimeError` if the pack does not exist.
+    fn view_count(&self, pack_id: u64) -> PyResult<usize> {
+        lock_engine(&self.inner)?
+            .view_count(pack_id)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Store a pack with automatic discovery and linking of similar existing packs.
     ///
     /// Returns a dict with `pack_id` and `linked_pack_ids`.
