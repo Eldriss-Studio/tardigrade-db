@@ -91,5 +91,6 @@ pub mod refinement;
 pub mod retriever;
 pub mod simd_distance;
 pub mod slb;
+pub mod token_weighter;
 
 pub use per_token::{DIM_IDX, HEADER_SENTINEL, HEADER_SIZE, N_TOKENS_IDX};

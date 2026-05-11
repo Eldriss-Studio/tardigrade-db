@@ -215,6 +215,12 @@ pub struct Engine {
     text_store: TextStore,
     /// Durable deletion log for pack deletions.
     deletion_log: DeletionLog,
+    /// Enable corpus-mean distance reweighting of per-token scores (Decorator pattern).
+    ///
+    /// When `true`, each token's contribution is scaled by
+    /// `1 - cosine(token, corpus_mean)` before aggregation — distinctive tokens
+    /// carry more weight than tokens aligned with the mean activation.
+    token_reweighting: bool,
 }
 
 impl Engine {
@@ -278,6 +284,21 @@ impl Engine {
         self.refinement_strategy.name()
     }
 
+    /// Enable or disable corpus-mean distance token importance reweighting.
+    ///
+    /// When enabled, each per-token score is multiplied by
+    /// `1 - cosine(token, corpus_mean)` before aggregation. Tokens that are
+    /// close to the mean activation are downweighted; distinctive tokens carry
+    /// more retrieval signal. See `tdb_retrieval::token_weighter`.
+    pub fn set_token_reweighting(&mut self, enabled: bool) {
+        self.token_reweighting = enabled;
+    }
+
+    /// Whether corpus-mean distance token importance reweighting is enabled.
+    pub fn token_reweighting(&self) -> bool {
+        self.token_reweighting
+    }
+
     fn open_with_options(
         dir: &Path,
         vamana_threshold: usize,
@@ -319,6 +340,7 @@ impl Engine {
             refinement_strategy: Box::new(tdb_retrieval::refinement::NoOpStrategy),
             text_store,
             deletion_log,
+            token_reweighting: false,
         };
 
         engine.refresh()?;
