@@ -31,11 +31,15 @@ Parent-document pattern (B) + LLM-generated views with diversity filter (C):
 - Moderate >= 80%: **PASS** — no regression (v1 degraded to 20%, v2 holds at 80%)
 - Vague > 60%: **FAIL** — no improvement
 
-## Key Finding: Parent-Document Pattern Fixes Degradation
+## Key Finding: Parent-Document Pattern Prevents Catastrophic Degradation
 
-The v1 approach (views as separate packs) degraded moderate R@5 from 80% → 20%.
+The v1 approach (views as separate packs) **destroyed** moderate R@5: 80% → 20%.
+Four out of five queries that previously worked started returning wrong memories.
 The v2 approach (views as retrieval cells on canonical pack) holds moderate at 80%.
-The architectural fix works — views no longer compete with canonicals.
+
+However: holding at 80% means **zero net improvement**. The architecture prevents
+the catastrophe but doesn't advance vague-query recall. We are back where we
+started. The multi-view effort has not yet delivered measurable retrieval value.
 
 ## Why No Vague Improvement
 
@@ -64,12 +68,46 @@ The filter reduced views from 3→1 for 4 out of 10 facts (facts 3, 5, 7, 9). Wh
 | Generation | Rule-based (no model) | LLM (Qwen3-0.6B) |
 | Failure mode | Index dilution | Low-quality generation |
 
+## Follow-Up: Prompt Variations and Larger Model (Same Session)
+
+Tested 3 prompt strategies with Qwen3-0.6B (original, vague-memory, structured-list)
+and one paraphrase strategy. All failed: the model produces blank underscores,
+repetitive narrow questions ("What was the percentage..."), or light rewording.
+The 0.6B model lacks generative capacity for any text rewriting task.
+
+Qwen2.5-3B (cached locally) was tested but takes >5 minutes per question on MPS
+float32 — too slow for iterative experimentation.
+
+### Root Cause: Wrong Model for the Job
+
+The KV capture model (Qwen3-0.6B) runs forward passes to produce hidden states.
+It never needs to *generate* text. Multi-view consolidation needs a model that
+can produce diverse, specific questions — a fundamentally harder task that requires
+a larger model or a specialized question-generation model.
+
+The capture model and the generation model should be decoupled. The architecture
+already supports this (ViewGenerator takes its own model/tokenizer).
+
 ## Next Steps
 
-1. **Try a larger model for view generation** — Qwen3-1.7B or Llama-3.2-3B should produce higher-quality, more diverse questions. The architecture is model-agnostic; only the generation step changes.
-2. **Measure with the 100-cell corpus** — The 10-fact corpus has thin margins. The 100-cell corpus (from `experiments/corpus_100.py`) would give more statistical power.
-3. **Consider external question generation** — Use a dedicated question-generation model (e.g., `mrm8488/t5-base-finetuned-question-generation-ap`) instead of the same model used for KV capture.
+1. **Decouple capture and generation models** — Use Qwen3-0.6B for KV capture,
+   a dedicated question-generation model (e.g., `mrm8488/t5-base-finetuned-question-generation-ap`,
+   ~220M params, fast on CPU) for view text generation.
+2. **Try Qwen2.5-3B in float16** — Halving precision would cut generation time
+   and memory. MPS supports float16.
+3. **Measure with the 100-cell corpus** — The 10-fact corpus has thin margins.
+4. **Run LongMemEval/LoCoMo baseline** — The research memo recommended this
+   before shipping features. We still don't know where TardigradeDB lands
+   relative to the field.
 
 ## Honest Assessment
 
-The parent-document architecture (B) is validated — it eliminates the v1 degradation. The LLM generation quality (C) is the bottleneck. The 0.6B model is too small for reliable question generation. The infrastructure is ready; the improvement will come from a better generator, not a better architecture.
+The parent-document architecture (B) is validated — it prevents the v1 catastrophe.
+But the net result is zero improvement on vague recall. We spent significant effort
+(Rust engine changes, PyO3 bindings, consolidator refactor, LLM view generation,
+diversity filter) and the retrieval numbers are identical to before any of this work.
+
+The bottleneck is now the generator: Qwen3-0.6B is too small for question generation.
+The architecture is model-agnostic, so testing with a larger model (Qwen2.5-3B,
+Qwen3-1.7B) requires no code changes. But until a better generator produces
+measurable R@5 improvement, this feature has no proven value.
