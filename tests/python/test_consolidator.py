@@ -195,3 +195,39 @@ class TestConsolidationPolicy:
         assert policy.view_count(tier=0) == 0
         assert policy.view_count(tier=1) == len(DEFAULT_VIEW_FRAMINGS)
         assert policy.view_count(tier=2) == len(DEFAULT_VIEW_FRAMINGS)
+
+
+class TestEngineViewKeys:
+    def test_add_view_keys_returns_count(self, tmp_path):
+        engine = tardigrade_db.Engine(str(tmp_path), vamana_threshold=9999)
+        key = np.random.randn(8).astype(np.float32)
+        val = np.random.randn(8).astype(np.float32)
+        pid = engine.mem_write_pack(OWNER, key, [(0, val)], 80.0, text="Test")
+        v1 = np.random.randn(8).astype(np.float32)
+        v2 = np.random.randn(8).astype(np.float32)
+        assert engine.add_view_keys(pid, [v1, v2]) == 2
+
+    def test_view_count(self, tmp_path):
+        engine = tardigrade_db.Engine(str(tmp_path), vamana_threshold=9999)
+        key = np.random.randn(8).astype(np.float32)
+        val = np.random.randn(8).astype(np.float32)
+        pid = engine.mem_write_pack(OWNER, key, [(0, val)], 80.0, text="Test")
+        assert engine.view_count(pid) == 0
+        engine.add_view_keys(pid, [np.random.randn(8).astype(np.float32)])
+        assert engine.view_count(pid) == 1
+
+    def test_view_count_errors_on_missing(self, tmp_path):
+        engine = tardigrade_db.Engine(str(tmp_path), vamana_threshold=9999)
+        with pytest.raises(RuntimeError):
+            engine.view_count(9999)
+
+    def test_view_match_returns_canonical(self, tmp_path):
+        engine = tardigrade_db.Engine(str(tmp_path), vamana_threshold=9999)
+        ckey = np.array([1,0,0,0,0,0,0,0], dtype=np.float32)
+        pid = engine.mem_write_pack(OWNER, ckey, [(0, np.zeros(8, dtype=np.float32))], 80.0, text="Fact")
+        vkey = np.array([0,1,0,0,0,0,0,0], dtype=np.float32)
+        engine.add_view_keys(pid, [vkey])
+        results = engine.mem_read_pack(vkey, 5, OWNER)
+        pids = [r["pack_id"] for r in results]
+        assert pid in pids
+        assert pids.count(pid) == 1
