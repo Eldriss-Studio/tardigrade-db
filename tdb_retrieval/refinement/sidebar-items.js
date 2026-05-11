@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["RefinementMode"],"fn":["apply","dot","latent_prf","mean_centered_rescore","parse_query_tokens","subtract_in_place","top_n_avg","truncate"]};
+window.SIDEBAR_ITEMS = {"enum":["RefinementMode"],"fn":["apply","dot","latent_prf","mat_vec_mul","mean_centered_rescore","parse_query_tokens","strategy_from_name","subtract_in_place","top_n_avg","truncate","whitened_rescore"],"struct":["LatentPrfStrategy","MeanCenteredStrategy","NoOpStrategy","WhiteningStrategy"],"trait":["RefinementStrategy"]};
