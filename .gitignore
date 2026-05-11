@@ -29,3 +29,4 @@ benchmarks/datasets/**/*.jsonl
 
 # Remember plugin (Claude Code)
 .remember/
+.env.bench
