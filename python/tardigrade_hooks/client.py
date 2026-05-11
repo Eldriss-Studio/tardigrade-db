@@ -106,12 +106,12 @@ class TardigradeClient:
 
     # -- Consolidate ---------------------------------------------------------
 
-    def consolidate(self, pack_id: int) -> list[int]:
-        """Create multi-view packs for a canonical memory.  Returns view pack_ids."""
+    def consolidate(self, pack_id: int) -> int:
+        """Attach multi-view retrieval keys to a canonical memory. Returns views attached."""
         return self._consolidator.consolidate(pack_id)
 
-    def consolidate_all(self) -> dict[int, list[int]]:
-        """Consolidate all eligible packs.  Returns ``{pack_id: [view_ids]}``."""
+    def consolidate_all(self) -> dict[int, int]:
+        """Consolidate all eligible packs. Returns {pack_id: views_attached}."""
         return self._consolidator.consolidate_all(owner=self._owner)
 
     # -- Query ---------------------------------------------------------------

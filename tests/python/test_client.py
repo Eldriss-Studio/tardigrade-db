@@ -10,7 +10,6 @@ import pytest
 import tardigrade_db
 
 from tardigrade_hooks.client import TardigradeClient
-from tardigrade_hooks.constants import DEFAULT_VIEW_FRAMINGS
 
 DIM = 8
 OWNER = 1
@@ -69,16 +68,18 @@ class TestClientIngest:
 
 
 class TestClientConsolidate:
-    def test_consolidate_creates_views(self, client):
+    def test_consolidate_attaches_views(self, client):
         pid = client.store(FACT, salience=70.0)
-        views = client.consolidate(pid)
-        assert len(views) == len(DEFAULT_VIEW_FRAMINGS)
+        count = client.consolidate(pid)
+        assert count >= 1
+        assert client.engine.view_count(pid) >= 1
 
     def test_consolidate_all_processes_stored(self, client):
         client.store("Fact about Alice.", salience=70.0)
         client.store("Fact about Bob.", salience=70.0)
         result = client.consolidate_all()
         assert len(result) == 2
+        assert all(v > 0 for v in result.values())
 
 
 class TestClientQuery:

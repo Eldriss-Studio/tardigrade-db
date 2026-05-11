@@ -51,7 +51,7 @@ class ConsolidationSweepThread:
             target=self._run, daemon=True, name="tdb-consolidation-sweep",
         )
         self._packs_consolidated = 0
-        self._views_created = 0
+        self._views_attached = 0
         self._last_run_epoch: float = 0.0
 
     def start(self):
@@ -72,7 +72,7 @@ class ConsolidationSweepThread:
     def status(self) -> dict:
         return {
             "packs_consolidated": self._packs_consolidated,
-            "views_created": self._views_created,
+            "views_attached": self._views_attached,
             "last_run_epoch": self._last_run_epoch,
         }
 
@@ -80,5 +80,5 @@ class ConsolidationSweepThread:
         while not self._stop_event.wait(self._interval):
             result = self._consolidator.consolidate_all(owner=self._owner)
             self._packs_consolidated += len(result)
-            self._views_created += sum(len(v) for v in result.values())
+            self._views_attached += sum(result.values())
             self._last_run_epoch = time.time()
