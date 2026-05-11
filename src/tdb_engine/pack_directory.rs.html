@@ -132,7 +132,7 @@
 <a href=#97 id=97 data-nosnippet>97</a>            .map_or(FIRST_ASSIGNED_PACK_ID, |pack_id| pack_id + <span class="number">1</span>)
 <a href=#98 id=98 data-nosnippet>98</a>    }
 <a href=#99 id=99 data-nosnippet>99</a>
-<a href=#100 id=100 data-nosnippet>100</a>    <span class="kw">fn </span>add_cell(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pack_id: PackId, cell_id: CellId) {
+<a href=#100 id=100 data-nosnippet>100</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>add_cell(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pack_id: PackId, cell_id: CellId) {
 <a href=#101 id=101 data-nosnippet>101</a>        <span class="self">self</span>.cells_by_pack.entry(pack_id).or_default().push(cell_id);
 <a href=#102 id=102 data-nosnippet>102</a>        <span class="self">self</span>.pack_by_cell.insert(cell_id, pack_id);
 <a href=#103 id=103 data-nosnippet>103</a>    }
