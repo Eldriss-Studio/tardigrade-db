@@ -97,7 +97,7 @@ impl PackDirectory {
             .map_or(FIRST_ASSIGNED_PACK_ID, |pack_id| pack_id + 1)
     }
 
-    fn add_cell(&mut self, pack_id: PackId, cell_id: CellId) {
+    pub(crate) fn add_cell(&mut self, pack_id: PackId, cell_id: CellId) {
         self.cells_by_pack.entry(pack_id).or_default().push(cell_id);
         self.pack_by_cell.insert(cell_id, pack_id);
     }

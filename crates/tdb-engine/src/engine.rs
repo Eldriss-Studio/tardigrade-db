@@ -64,7 +64,12 @@ fn should_index_for_retrieval(cell: &MemoryCell) -> bool {
 const DEFAULT_VAMANA_MAX_DEGREE: usize = 16;
 /// Default cell count threshold before activating Vamana.
 const DEFAULT_VAMANA_THRESHOLD: usize = 10_000;
-const PACK_RETRIEVAL_CELL_COUNT: usize = 1;
+/// Sentinel token position marking a cell as a view key (not the canonical retrieval key).
+///
+/// View keys are additional retrieval vectors attached to a pack after initial write.
+/// They share the same `PACK_RETRIEVAL_LAYER` but use this marker in `token_span.1`
+/// to distinguish them from the canonical key (which uses `token_span.1 = 0`).
+const VIEW_CELL_MARKER: u64 = u64::MAX;
 
 /// Adapter: wraps `VamanaIndex` (from `tdb-index`) to implement `Retriever` (from `tdb-retrieval`).
 ///
@@ -981,6 +986,76 @@ impl Engine {
         Ok(pack_id)
     }
 
+    /// Attach additional retrieval keys ("views") to an existing pack.
+    ///
+    /// Each view key creates a new cell at `PACK_RETRIEVAL_LAYER` with the
+    /// `VIEW_CELL_MARKER` sentinel in `token_span.1`. These cells are indexed
+    /// in the retrieval pipeline and SLB, so the pack becomes discoverable
+    /// via any of its view keys in addition to the canonical retrieval key.
+    ///
+    /// Returns the number of view keys successfully added.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TardigradeError::PackNotFound`] if `pack_id` does not exist
+    /// in the pack directory.
+    pub fn add_view_keys(&mut self, pack_id: PackId, view_keys: &[Vec<f32>]) -> Result<usize> {
+        let cell_ids =
+            self.pack_directory.cell_ids(pack_id).ok_or(TardigradeError::PackNotFound(pack_id))?;
+
+        let canonical_cell_id = *cell_ids.first().ok_or(TardigradeError::PackNotFound(pack_id))?;
+        let canonical = self.pool.get(canonical_cell_id)?;
+        let owner = canonical.owner;
+
+        let now_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+
+        let mut count = 0;
+        for vk in view_keys {
+            let cell_id = self.next_id;
+            self.next_id += 1;
+
+            let cell =
+                MemoryCellBuilder::new(cell_id, owner, PACK_RETRIEVAL_LAYER, vk.clone(), vec![])
+                    .token_span(pack_id, VIEW_CELL_MARKER)
+                    .created_at(now_nanos)
+                    .updated_at(now_nanos)
+                    .build();
+
+            self.pool.append(&cell)?;
+            self.pipeline.insert(cell_id, owner, vk);
+
+            let slb_key = mean_pool_key(vk);
+            self.slb.insert(cell_id, owner, &slb_key);
+
+            self.pack_directory.add_cell(pack_id, cell_id);
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Count the number of view keys attached to a pack.
+    ///
+    /// Returns 0 for a pack with only its canonical retrieval key.
+    /// The count excludes the canonical retrieval cell — only additional
+    /// view keys are counted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TardigradeError::PackNotFound`] if `pack_id` does not exist.
+    pub fn view_count(&self, pack_id: PackId) -> Result<usize> {
+        let cell_ids =
+            self.pack_directory.cell_ids(pack_id).ok_or(TardigradeError::PackNotFound(pack_id))?;
+
+        let retrieval_cells = cell_ids
+            .iter()
+            .filter(|&&cid| self.pool.get(cid).is_ok_and(|c| c.layer == PACK_RETRIEVAL_LAYER))
+            .count();
+
+        Ok(retrieval_cells.saturating_sub(1))
+    }
+
     /// Store a pack with automatic discovery and linking of similar existing packs.
     ///
     /// Before writing, queries existing packs for the same owner. Any candidate
@@ -1175,17 +1250,16 @@ impl Engine {
     }
 
     fn hydrate_pack_layers(&self, cell_ids: &[CellId]) -> Result<Vec<KVLayerPayload>> {
-        let layer_cell_count = cell_ids.len().saturating_sub(PACK_RETRIEVAL_CELL_COUNT);
-        let mut layers = Vec::with_capacity(layer_cell_count);
-
-        for &cell_id in cell_ids.iter().skip(PACK_RETRIEVAL_CELL_COUNT) {
+        let mut layers = Vec::with_capacity(cell_ids.len());
+        for &cell_id in cell_ids {
             match self.pool.get(cell_id) {
-                Ok(cell) => layers.push(KVLayerPayload { layer_idx: cell.layer, data: cell.value }),
-                Err(TardigradeError::CellNotFound(_)) => {}
+                Ok(cell) if cell.layer != PACK_RETRIEVAL_LAYER => {
+                    layers.push(KVLayerPayload { layer_idx: cell.layer, data: cell.value });
+                }
+                Ok(_) | Err(TardigradeError::CellNotFound(_)) => {}
                 Err(e) => return Err(e),
             }
         }
-
         layers.sort_by_key(|layer| layer.layer_idx);
         Ok(layers)
     }

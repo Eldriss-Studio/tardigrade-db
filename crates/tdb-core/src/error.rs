@@ -1,11 +1,15 @@
 use thiserror::Error;
 
+use crate::kv_pack::PackId;
 use crate::types::CellId;
 
 #[derive(Debug, Error)]
 pub enum TardigradeError {
     #[error("cell not found: {0}")]
     CellNotFound(CellId),
+
+    #[error("pack not found: {0}")]
+    PackNotFound(PackId),
 
     #[error("segment full: cannot append to segment at {path}")]
     SegmentFull { path: String },
