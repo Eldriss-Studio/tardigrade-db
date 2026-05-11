@@ -293,6 +293,21 @@ impl Engine {
         Ok(lock_engine(&self.inner)?.refinement_mode_name().to_string())
     }
 
+    /// Enable or disable corpus-mean distance token importance reweighting.
+    ///
+    /// When enabled, each per-token score is scaled by
+    /// `1 - cosine(token, corpus_mean)` before aggregation — distinctive tokens
+    /// carry more retrieval signal than tokens aligned with the mean activation.
+    fn set_token_reweighting(&self, enabled: bool) -> PyResult<()> {
+        lock_engine(&self.inner)?.set_token_reweighting(enabled);
+        Ok(())
+    }
+
+    /// Whether corpus-mean distance token importance reweighting is enabled.
+    fn token_reweighting(&self) -> PyResult<bool> {
+        Ok(lock_engine(&self.inner)?.token_reweighting())
+    }
+
     /// Get the current importance score of a cell.
     fn cell_importance(&self, cell_id: u64) -> PyResult<Option<f32>> {
         Ok(lock_engine(&self.inner)?.cell_importance(cell_id))
