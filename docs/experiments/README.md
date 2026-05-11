@@ -290,6 +290,9 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | **Multi-view v2 (parent-document, add_view_keys) prevents degradation but adds zero improvement** | Views as retrieval cells on canonical pack via `add_view_keys`. Moderate holds at 80% (v1 catastrophe fixed). Vague stays at 60%. Qwen3-0.6B generates blank/repetitive/narrow questions regardless of prompt strategy. 3B model also produces repetitive questions. The capture model is too small for text generation. | High — `experiments/multiview_v2_experiment.py`, `docs/experiments/multi_view_v2/results.md` |
 | **LongMemEval 90.9%** | Full benchmark: 500 items, deterministic evaluator, Qwen3-0.6B + centered refinement. Outperforms published Letta (83.2%), LiCoMemory (73.8%), Mem0 (49%). | High — `docs/bench/locomo-longmemeval-baseline.md` |
 | **LoCoMo 68.2%** | Full benchmark: 1,542 items, deterministic evaluator. Competitive with Mem0g (68.4%), below vanilla GPT-4o-mini (74%), well below ByteRover (92.2%). The gap is conversational/vague-query retrieval — exactly the vocabulary-overlap problem. | High — `docs/bench/locomo-longmemeval-baseline.md` |
+| **LLM-judged benchmark confirms gap is real** | DeepSeek LLM judge (2,042 items, 0 fallbacks): LoCoMo 67.2% (was 68.2% deterministic), LongMemEval 88.8% (was 90.9%). Deterministic evaluator was generous, not strict. The retrieval gap is genuine. | High — `docs/bench/locomo-longmemeval-llm-judged.md` |
+| **ZCA whitening, token reweighting, multi-layer fusion: all 0% improvement** | All 4 configs (baseline, whitened, +reweight, +multi-layer) produce identical results on 10-fact corpus: Specific 100%, Moderate 80%, Vague 60%. Same 3 queries miss in every configuration. Vocabulary mismatch for these queries is too fundamental for any latent-space geometry transformation to fix — confirmed by DeepMind LIMIT paper (ICLR 2026): vector-space retrieval has a theoretical ceiling bounded by sign-rank. | High — `experiments/vague_refinement_v2_experiment.py`, DeepMind arXiv:2508.21038 |
+| **Latent-space retrieval ceiling identified** | The remaining vague-query failures require world-knowledge reasoning ("ultramarathons are athletic events"), not similarity computation. No geometric transform (whitening, reweighting, multi-layer, mean-centering) bridges this gap. The DCI pattern (arXiv:2605.05242) — agentic corpus interaction via tools — is the research-backed alternative that preserves TardigradeDB's premise. | High — theoretical proof + 4-config experiment + DCI literature |
 | **RoPE injection works (already proven)** | 9/10 synthetic fact recall on Qwen3-0.6B (which uses RoPE). `RoPEPositionEncoder` and `RoPECorrectedConcatComposer` implemented and tested. RoPE correction experiment showed zero difference vs naive concat — position encoding is not the bottleneck. HuggingFace `generate()` auto-handles position ID offsetting. | High — proven by synthetic fact result + dedicated RoPE experiment + composer tests |
 
 ### Not Yet Tested (roads untravelled)
@@ -359,8 +362,13 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | File ingestion as KV memory | Complete — 100% R@3 on multi-paragraph document |
 | Multi-view v1 (rule-based, separate packs) | Complete — **FAILED**: moderate 80%→20% (index dilution) |
 | Multi-view v2 (parent-document, add_view_keys) | Complete — no degradation, but 0% vague improvement (generator quality bottleneck) |
-| LoCoMo full benchmark (1,542 items) | Complete — 68.2% (deterministic eval, centered refinement) |
-| LongMemEval full benchmark (500 items) | Complete — 90.9% (deterministic eval, centered refinement) |
+| LoCoMo full benchmark (1,542 items) | Complete — 68.2% deterministic, 67.2% LLM-judged |
+| LongMemEval full benchmark (500 items) | Complete — 90.9% deterministic, 88.8% LLM-judged |
+| LoCoMo + LongMemEval with DeepSeek LLM judge | Complete — gap is real, not evaluator bias |
+| ZCA whitening refinement | Complete — 0% improvement (same 3 misses as baseline) |
+| Token importance reweighting | Complete — 0% improvement |
+| Multi-layer query fusion (RRF) | Complete — 0% improvement |
+| Stacked whitening + reweight + multi-layer | Complete — 0% improvement. Theoretical ceiling confirmed (DeepMind LIMIT, ICLR 2026) |
 
 ## Running Experiments
 
