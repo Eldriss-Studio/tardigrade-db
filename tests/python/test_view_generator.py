@@ -4,6 +4,7 @@ Each framing strategy produces a reworded version of a memory's text,
 creating an alternative retrieval surface for the same underlying fact.
 """
 
+import numpy as np
 import pytest
 
 from tardigrade_hooks.constants import (
@@ -150,3 +151,26 @@ class TestFramingRegistry:
         gen = ViewGenerator()
         for name in DEFAULT_VIEW_FRAMINGS:
             assert name in gen._framings, f"Framing '{name}' not registered"
+
+
+class TestDiversityFilter:
+    def test_filters_near_duplicates(self):
+        from tardigrade_hooks.view_generator import filter_diverse
+        rng = np.random.default_rng(42)
+        v1 = rng.standard_normal(64).astype(np.float32)
+        v2 = rng.standard_normal(64).astype(np.float32)
+        v3 = rng.standard_normal(64).astype(np.float32)
+        v4 = v1 + rng.standard_normal(64).astype(np.float32) * 0.01
+        v5 = v2 + rng.standard_normal(64).astype(np.float32) * 0.01
+        kept = filter_diverse([v1, v2, v3, v4, v5], threshold=0.92, max_kept=3)
+        assert 2 <= len(kept) <= 3
+
+    def test_keeps_all_if_diverse(self):
+        from tardigrade_hooks.view_generator import filter_diverse
+        rng = np.random.default_rng(42)
+        candidates = [rng.standard_normal(64).astype(np.float32) for _ in range(3)]
+        assert len(filter_diverse(candidates, threshold=0.92, max_kept=3)) == 3
+
+    def test_empty_input(self):
+        from tardigrade_hooks.view_generator import filter_diverse
+        assert filter_diverse([], threshold=0.92, max_kept=3) == []
