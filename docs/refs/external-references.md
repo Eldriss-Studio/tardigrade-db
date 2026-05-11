@@ -72,6 +72,15 @@ contradicted, the corresponding subsystem would require redesign.
 | **Query Expansion Survey** (2025) | [arXiv:2509.07794](https://arxiv.org/abs/2509.07794) | Comprehensive survey organizing QE along four dimensions: injection point, grounding/interaction, learning/alignment, and KG integration. Covers encoder-only through instruction-tuned variants | vague-query research (2026-05-11) |
 | **vstash** (April 2026) | [arXiv:2604.15484](https://arxiv.org/abs/2604.15484) | Local-first hybrid retrieval (BM25 + dense vector + adaptive RRF) in a single SQLite file. 33M-param pipeline matches ColBERTv2 on 3/5 BEIR datasets. Self-supervised embedding refinement via vector/FTS disagreement. Production-grade with schema versioning + integrity checks | vague-query research (2026-05-11) |
 
+### A3c. Latent-Space Query Transformation (Pure Latent, No Text)
+
+| Paper | arXiv / DOI | What it justifies | Where cited |
+|---|---|---|---|
+| **LaSER** (March 2026) | [arXiv:2603.01425](https://arxiv.org/abs/2603.01425) | Self-distillation framework: internalizes explicit CoT reasoning into latent space of dense retrievers. Multi-grained alignment (output + trajectory). At inference, latent reasoning only — no text generation. Directly applicable: train a small adapter to map vague query hidden states toward correct memory regions in K-space | vague-query research (2026-05-11) |
+| **DEBATER** (February 2025, SIGIR Asia Pacific 2025) | [arXiv:2502.12974](https://arxiv.org/abs/2502.12974) | Chain-of-Deliberation: iteratively refines document embeddings through multiple reasoning steps. Self-distillation fuses most informative steps. Shows deliberation in latent space improves retrieval without text round-trip. Applicable at write-time consolidation | vague-query research (2026-05-11) |
+| **KV Packet** (April 2026) | [arXiv:2604.13226](https://arxiv.org/abs/2604.13226) | Trainable soft-token adapters wrap cached KV blocks to bridge context discontinuity. Zero recomputation, near-zero FLOPs. Directly relevant: adapters could make stored memories' hidden states more universally retrievable regardless of query phrasing. Fits SynapticBank | vague-query research (2026-05-11) |
+| **AdaQR / Dense Retriever as Reasoner** (October 2025) | [arXiv:2510.21727](https://arxiv.org/abs/2510.21727) | Adaptive Query Reasoning: router directs queries to fast dense reasoning or deep LLM reasoning. Shows query transformation can happen in embedding space without LLM calls for most queries | vague-query research (2026-05-11) |
+
 ### A4. Agent Memory Systems
 
 | Paper | arXiv / DOI | What it justifies | Where cited |
