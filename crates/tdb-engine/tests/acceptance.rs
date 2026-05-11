@@ -3935,3 +3935,148 @@ fn test_refinement_latent_prf_returns_results() {
     // Top-1 should still be the aligned cell.
     assert_eq!(results[0].cell.id, 0);
 }
+
+// ── View Keys (multi-view retrieval for packs) ──────────────────────────
+
+/// View keys create additional retrieval cells that make a pack discoverable
+/// via alternative query directions. `add_view_keys` returns the count added,
+/// and `view_count` reflects the new total.
+#[test]
+fn test_add_view_keys_creates_retrieval_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+    let canonical_key = vec![1.0f32; dim];
+    let pack = test_pack(&[10.0, 10.1], canonical_key);
+    let pack_id = engine.mem_write_pack(&pack).unwrap();
+
+    // Fresh pack — no view keys yet.
+    assert_eq!(engine.view_count(pack_id).unwrap(), 0);
+
+    let view_a = vec![0.5f32; dim];
+    let view_b = vec![0.3f32; dim];
+    let added = engine.add_view_keys(pack_id, &[view_a, view_b]).unwrap();
+
+    assert_eq!(added, 2);
+    assert_eq!(engine.view_count(pack_id).unwrap(), 2);
+}
+
+/// Adding a view key aligned with a different direction causes the pack to
+/// appear in queries for that direction. Both the canonical and view-boosted
+/// pack should appear without duplicates.
+#[test]
+fn test_view_key_boosts_pack_in_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+    let key_a = {
+        let mut k = vec![0.0f32; dim];
+        k[0] = 1.0;
+        k
+    };
+    let key_b = {
+        let mut k = vec![0.0f32; dim];
+        k[1] = 1.0;
+        k
+    };
+
+    // Pack "first": canonical key in direction 0.
+    let first_pack = test_pack(&[1.0], key_a.clone());
+    let first_id = engine.mem_write_pack(&first_pack).unwrap();
+
+    // Pack "second": canonical key in direction 1.
+    let second_pack = test_pack(&[2.0], key_b.clone());
+    let second_id = engine.mem_write_pack(&second_pack).unwrap();
+
+    // Add a view key to the first pack in direction 1 (same as second pack's canonical key).
+    engine.add_view_keys(first_id, std::slice::from_ref(&key_b)).unwrap();
+
+    // Query in direction 1 — both packs should appear.
+    let results = engine.mem_read_pack(&key_b, 5, None).unwrap();
+    let returned_pack_ids: Vec<u64> = results.iter().map(|r| r.pack.id).collect();
+
+    assert!(
+        returned_pack_ids.contains(&first_id),
+        "First pack should appear via its view key. Got: {returned_pack_ids:?}"
+    );
+    assert!(
+        returned_pack_ids.contains(&second_id),
+        "Second pack should appear via its canonical key. Got: {returned_pack_ids:?}"
+    );
+
+    // No duplicates: each pack ID appears exactly once.
+    let unique_count = {
+        let mut ids = returned_pack_ids.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.len()
+    };
+    assert_eq!(
+        unique_count,
+        returned_pack_ids.len(),
+        "Duplicate pack IDs in results: {returned_pack_ids:?}"
+    );
+}
+
+/// A freshly written pack has zero view keys. Querying a nonexistent pack
+/// returns an error.
+#[test]
+fn test_view_count_zero_for_fresh_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let dim = 8;
+    let pack = test_pack(&[10.0], vec![1.0f32; dim]);
+    let pack_id = engine.mem_write_pack(&pack).unwrap();
+
+    assert_eq!(engine.view_count(pack_id).unwrap(), 0);
+
+    let nonexistent_pack_id = 9999;
+    assert!(
+        engine.view_count(nonexistent_pack_id).is_err(),
+        "view_count on nonexistent pack should return an error"
+    );
+}
+
+/// View keys survive an engine drop + reopen cycle. After reopening,
+/// `view_count` reflects the persisted view keys and the pack is
+/// discoverable via the view key direction.
+#[test]
+fn test_view_keys_survive_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let dim = 8;
+    let canonical_key = {
+        let mut k = vec![0.0f32; dim];
+        k[0] = 1.0;
+        k
+    };
+    let view_key = {
+        let mut k = vec![0.0f32; dim];
+        k[1] = 1.0;
+        k
+    };
+
+    let pack_id = {
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let pack = test_pack(&[10.0], canonical_key.clone());
+        let pid = engine.mem_write_pack(&pack).unwrap();
+        engine.add_view_keys(pid, std::slice::from_ref(&view_key)).unwrap();
+        pid
+    }; // engine dropped here
+
+    // Reopen from same directory.
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    assert_eq!(engine.view_count(pack_id).unwrap(), 1, "View count should be 1 after reopen");
+
+    // Query in the view key direction — pack should be found.
+    let results = engine.mem_read_pack(&view_key, 3, None).unwrap();
+    let found_ids: Vec<u64> = results.iter().map(|r| r.pack.id).collect();
+    assert!(
+        found_ids.contains(&pack_id),
+        "Pack should be discoverable via view key after reopen. Got: {found_ids:?}"
+    );
+}
