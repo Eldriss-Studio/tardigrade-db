@@ -81,6 +81,13 @@ contradicted, the corresponding subsystem would require redesign.
 | **KV Packet** (April 2026) | [arXiv:2604.13226](https://arxiv.org/abs/2604.13226) | Trainable soft-token adapters wrap cached KV blocks to bridge context discontinuity. Zero recomputation, near-zero FLOPs. Directly relevant: adapters could make stored memories' hidden states more universally retrievable regardless of query phrasing. Fits SynapticBank | vague-query research (2026-05-11) |
 | **AdaQR / Dense Retriever as Reasoner** (October 2025) | [arXiv:2510.21727](https://arxiv.org/abs/2510.21727) | Adaptive Query Reasoning: router directs queries to fast dense reasoning or deep LLM reasoning. Shows query transformation can happen in embedding space without LLM calls for most queries | vague-query research (2026-05-11) |
 
+### A3d. Fundamental Limitations of Vector-Space Retrieval
+
+| Paper | arXiv / DOI | What it justifies | Where cited |
+|---|---|---|---|
+| **On the Theoretical Limitations of Embedding-Based Retrieval** (Google DeepMind, ICLR 2026) | [arXiv:2508.21038](https://arxiv.org/abs/2508.21038) | Proves mathematically that single-vector retrieval has a dimensional ceiling: the number of distinct top-k outcomes is upper-bounded by embedding dimension via sign-rank. Even SOTA models fail <20% recall@100 on the LIMIT stress dataset. Explains why TardigradeDB's vague-query ceiling (60% R@5) cannot be broken by geometric transforms alone — the remaining misses require world-knowledge reasoning, not similarity | vague-query research (2026-05-11) |
+| **Beyond Semantic Similarity: Rethinking Retrieval for Agentic Search via Direct Corpus Interaction** (May 2026) | [arXiv:2605.05242](https://arxiv.org/abs/2605.05242) | Direct Corpus Interaction (DCI): agent searches raw corpus with tools (grep, file reads, scripts) — no embeddings, no vector index. +11% agentic search, +30.7% multi-hop QA, +21.5% IR ranking over embedding baselines. Key insight: retrieval quality depends on interface resolution, not similarity metric. More aligned with TardigradeDB's thesis than BM25 — the agent reasons about what to retrieve | vague-query research (2026-05-11) |
+
 ### A4. Agent Memory Systems
 
 | Paper | arXiv / DOI | What it justifies | Where cited |
@@ -247,6 +254,7 @@ completeness.
 | **K\*K retrieval** (query with K, store K) | K vectors share a massive common component across all sequences (~4000 cross-sentence dot product at non-sink positions vs ~200 content-specific signal difference). Confirmed bad by FIER, ShadowKV, "From QKV to K/KV" — symmetric attention cannot represent directional query-to-memory relationships |
 | **HyDE** (Hypothetical Document Embeddings; Gao et al., ACL 2023, arXiv:2212.10496) | Generate a hypothetical answer with an LLM, embed it, retrieve. Effective for vocabulary-mismatched/vague queries in text-based RAG, but **rejected for TardigradeDB's retrieval path**: requires an extra LLM forward pass per query (500–2000ms per the dev community, e.g., dev.to/aarjay_singh "Why I stopped putting LLMs in my agent memory retrieval path"). The agent IS the LLM — having it generate a hypothetical inside its own retrieval loop is architecturally backwards and breaks the agent-step latency budget. Latent-space PRF (Rocchio in K-space) achieves the same vocabulary-bridging effect with no LLM call |
 | **Cross-encoder reranking on stored text** (BGE-Reranker, MiniLM as a primary stage) | Operates on text. TardigradeDB's primary stored unit is KV tensors, not text. Memo text in `text_store` is optional and often absent. Making vague-query handling depend on memo text would split the retrieval contract. Kept as a **future optional Stage-3** when memos are present (see B1 BGE-Reranker entry); rejected as the primary fix |
+| **ZCA whitening, token reweighting, multi-layer fusion** (latent-space geometric transforms) | All three tested 2026-05-11 on 10-fact Sonia corpus: 0% improvement on any vague query in any configuration or combination. Same 3 queries miss in every config. The vocabulary-mismatch failures require world-knowledge reasoning that no geometric transform can provide — confirmed by DeepMind's LIMIT theoretical proof (ICLR 2026). Architecture preserved (RefinementStrategy trait, TokenWeighter, MultiLayerQuery) but does not improve recall |
 | **Rule-based multi-view consolidation** (views as competing packs in same index) | Tested 2026-05-11: 3 rule-based framings (summary/question/paraphrase) stored as separate packs. Moderate R@5 dropped from 80%→20% — views dilute top-k. Question views near-identical across facts (cos~0.75), crowd out canonicals. Doc2Query-- predicted this: uncontrolled/low-diversity expansions harm retrieval. Fix requires either (a) dual-index fusion (Doc2Query++), (b) parent-document pattern (HyPE), or (c) LLM-powered views + quality filter |
 | **Text-based BM25 + RRF hybrid** (as primary stage) | Same text dependency as cross-encoder reranking. Adds value only when memos exist and are descriptive. RRF (Cormack 2009) is still adopted as a fusion mechanism for the latent-space PRF stage in case PRF drifts (see A2) — we use the rank-fusion math without the BM25 sparse signal |
 
@@ -256,7 +264,9 @@ completeness.
 |---|---|
 | **Adapter** | `RetrievalKeyView`/`RetrievalKeyAdapter` (Rust retrieval key plan); `LlamaCppHook` translating llama-cpp-python API; `HuggingFaceHook` |
 | **Data Transfer Object (DTO)** | `_TardigradeConnectorMetadata` crossing scheduler→worker IPC boundary in vLLM connector |
-| **Strategy** | `RetrievalKeyStrategy` ABC (embedding table, last token, raw K); `Quantizer` trait (Q4/Q8/FP16) |
+| **Strategy** | `RetrievalKeyStrategy` ABC (embedding table, last token, raw K); `Quantizer` trait (Q4/Q8/FP16); `RefinementStrategy` trait (NoOp, MeanCentered, Whitening, LatentPrf) |
+| **Decorator** | `TokenWeighter` (per-token importance weighting wraps scoring function) |
+| **Composite** | `MultiLayerQuery` (fuses N engine queries via RRF) |
 | **Template Method** | `TardigradeHook` ABC; retrieval key `compute_for_save` unified interface |
 | **Factory Method with Fallback Chain** | `_get_embed_weights`: safetensors → hf_hub_download → AutoModel.from_pretrained |
 | **Bounded Cache (LRU with domain invariant)** | `_pack_id_by_fingerprint` map bounded by `max_num_seqs` |
@@ -390,6 +400,8 @@ completeness.
 | `github.com/BAI-LAB/MemoryOS` | MemoryOS (EMNLP 2025 Oral): three-level storage for personalized AI agents |
 | `github.com/parthsarthi03/raptor` | RAPTOR: recursive abstractive processing for tree-organized retrieval |
 | `github.com/NirDiamant/RAG_Techniques` | RAG techniques collection including HyPE implementation notebook |
+| `github.com/google-deepmind/limit` | LIMIT dataset: stress test for embedding-based retrieval (ICLR 2026) |
+| `github.com/DCI-Agent/DCI-Agent-Lite` | Direct Corpus Interaction agent: retrieval via grep/file reads instead of embeddings |
 
 ---
 
@@ -417,6 +429,7 @@ This section maps each major TardigradeDB design decision to its external valida
 | MLP adapter over Orthogonal Procrustes for cross-family retrieval | Procrustes empirically plateaus at ~47% R@5; MLP achieves 76.7% on same Qwen→GPT-2 corpus | High — empirical ablation |
 | Agent provides link intelligence; engine stores the decision | Phase 33 experiment: auto-linking via hidden-state similarity failed (30% accuracy vs 70% with explicit links); confirmed by field (Mem0, Cognee, Hindsight all require LLM extraction or trained probes for entity linking) | High — empirical + competitive validation |
 | **Multi-view consolidation: views as retrieval keys, not competing results** | Doc2Query-- (arXiv:2301.03266) documents saturation/dilution failure; Doc2Query++ (arXiv:2510.09557) proposes dual-index fusion; HyPE (SSRN:5139335) shows LLM-generated questions as retrieval-only keys with parent resolution; ENGRAM (arXiv:2511.12960) shows typed partitioning prevents cross-type competition; multi-view diagnosis experiment (2026-05-11) confirmed rule-based views degrade moderate R@5 from 80%→20% via index dilution | High — empirical + strong literature consensus |
+| **Latent-space retrieval has a theoretical ceiling for vocabulary-mismatched queries** | DeepMind LIMIT paper (ICLR 2026, arXiv:2508.21038) proves vector-space retrieval is bounded by sign-rank of the relevance matrix. Experimentally confirmed: whitening, token reweighting, multi-layer fusion all 0% improvement on the 3 persistently-missed vague queries. The remaining failures require world-knowledge reasoning ("ultramarathons are athletic events"), not geometric transformation. DCI (arXiv:2605.05242) shows agentic corpus interaction bypasses this ceiling. | High — theoretical proof + empirical confirmation on TardigradeDB |
 | **Latent-space PRF (Rocchio in K-space) over HyDE/cross-encoder for vague-query refinement** | Three-way constraint analysis: (1) HyDE adds 500–2000ms LLM call per query, breaks agent-loop budget; (2) cross-encoder/BM25 require memo text which is optional in TardigradeDB; (3) Rocchio (1971) generalized to dense vectors by Yu et al. CIKM 2021 (arXiv:2108.13454) and validated for late-interaction by ColBERT-PRF (arXiv:2106.11251) — pure latent-space, no LLM, no text dependency, operates on K vectors already stored. Empirical validation pending the refinement implementation | Medium — strong literature foundation; empirical confirmation pending |
 
 ---
@@ -464,6 +477,7 @@ reviewed:
 
 *Generated: 2026-05-01. Updated: 2026-05-11. Sources: codebase + docs + `.claude/plans/` +
 Resumancer session journal (40 entries, 2026-04 tardigrade-db branch) + Codex/Claude sessions
-2026-01 through 2026-05. May 2026 update: multi-view consolidation diagnosis + 20 new references
-(HyPE, Doc2Query--/++, RAPTOR, SimpleMem, ENGRAM, LiCoMemory, MemOS, Deliberation in Latent Space,
-parent-document retriever pattern, query drift literature).*
+2026-01 through 2026-05. May 2026 updates: multi-view consolidation diagnosis (20 refs);
+vague-query research (ExpandR, SoftQE, vstash, Hindsight, ByteRover architecture); latent-space
+transforms (LaSER, DEBATER, KV Packet, AdaQR); fundamental limitations (DeepMind LIMIT ICLR 2026,
+DCI-Agent). Total: 40+ new references this session.*
