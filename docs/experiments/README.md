@@ -285,6 +285,11 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | **Mean-centering rescues moderate retrieval (+31pp), no specific regression** | Subtracting the corpus-mean K vector from query and stored vectors before scoring lifts moderate R@5 from 28% → 59% and vague R@5 from 46% → 50%, while keeping specific R@5 at 100%. Same insight as the position-0 attention-sink skip, applied at corpus scope. Implementation: `RefinementMode::MeanCentered` (~58ms p95). | High — 230 queries (30 specific + 100 moderate + 100 vague) on 100-cell Qwen3-0.6B corpus, results in `vague_queries/results.md` |
 | **Latent-space PRF (Rocchio in K-space) does NOT help in current form** | 8-config sweep (α∈{0.7…0.95}, β∈{0.05…0.3}, k'∈{1,3}). Sharp transition: β≤0.2 leaves vague unchanged (~46%), β=0.3 collapses specific to 30% R@5 — classic PRF query drift (Li et al. TOIS 2023). Two structural fixes worth trying: peak-tokens-only centroids and RRF fusion of first-stage + PRF-stage. | High — full sweep documented in `vague_queries/results.md` |
 | **Cross-encoder Stage-2 reranker stacks with mean-centering** | `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, MS MARCO trained, MiniLM arch) reranks the engine's top-10 candidates by full query+document attention. `centered + rerank` hits 68% moderate R@5 (+40pp vs baseline) and 64% vague R@5 (+18pp), specific stays 100%, ~86ms p95 (~30% latency overhead). Stacking is additive: rerank picks the right cell from a better candidate set when mean-centering improves the first stage. | High — same 100-cell × 230-query corpus, results in `vague_queries/results.md` |
+| **File ingestion as KV memory works** | Chunked a multi-paragraph document (Qwen3-0.6B, MPS), captured real K vectors per chunk, stored as packs with Supports edges between consecutive chunks. 8/8 queries found the correct chunk. R@3 = 100%. | High — `experiments/file_ingest_and_multiview_experiment.py` |
+| **Multi-view v1 (rule-based, separate packs) destroys moderate recall** | 3 rule-based framings stored as separate packs: moderate R@5 dropped from 80%→20%. Root cause: question-framing views near-identical across facts (cos~0.75), crowding top-k with wrong-fact views. Paraphrase views cos=0.99 to canonical (no retrieval value). | High — `experiments/multiview_diagnosis.py`, 10-fact corpus |
+| **Multi-view v2 (parent-document, add_view_keys) prevents degradation but adds zero improvement** | Views as retrieval cells on canonical pack via `add_view_keys`. Moderate holds at 80% (v1 catastrophe fixed). Vague stays at 60%. Qwen3-0.6B generates blank/repetitive/narrow questions regardless of prompt strategy. 3B model also produces repetitive questions. The capture model is too small for text generation. | High — `experiments/multiview_v2_experiment.py`, `docs/experiments/multi_view_v2/results.md` |
+| **LongMemEval 90.9%** | Full benchmark: 500 items, deterministic evaluator, Qwen3-0.6B + centered refinement. Outperforms published Letta (83.2%), LiCoMemory (73.8%), Mem0 (49%). | High — `docs/bench/locomo-longmemeval-baseline.md` |
+| **LoCoMo 68.2%** | Full benchmark: 1,542 items, deterministic evaluator. Competitive with Mem0g (68.4%), below vanilla GPT-4o-mini (74%), well below ByteRover (92.2%). The gap is conversational/vague-query retrieval — exactly the vocabulary-overlap problem. | High — `docs/bench/locomo-longmemeval-baseline.md` |
 | **RoPE injection works (already proven)** | 9/10 synthetic fact recall on Qwen3-0.6B (which uses RoPE). `RoPEPositionEncoder` and `RoPECorrectedConcatComposer` implemented and tested. RoPE correction experiment showed zero difference vs naive concat — position encoding is not the bottleneck. HuggingFace `generate()` auto-handles position ID offsetting. | High — proven by synthetic fact result + dedicated RoPE experiment + composer tests |
 
 ### Not Yet Tested (roads untravelled)
@@ -294,7 +299,7 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | Experiment | Why it matters | Risk if untested |
 |-----------|---------------|-----------------|
 | **Vague query improvement (BEYOND mean-centering)** | Mean-centering already lifted moderate from 28% → 59% R@5 with zero regression on specific (see Proven table). Vague stayed at 50% — bridging to 70%+ needs either (a) cross-encoder reranking on memo text where present, (b) a trained per-agent re-ranker (LoRA adapter), or (c) query rewriting via a cheap encoder (~30M params, NOT HyDE). PRF in current form does not help — needs peak-token centroids + RRF fusion before retry. | Without this, vague R@5 stays at 50% — a real ceiling for agent-style "How is X going?" queries. |
-| **Head-to-head benchmark vs Mem0/Letta/Zep** | The project claims differentiation from these systems but has no measured comparison. Same corpus, same queries, three systems running side-by-side. | Without data, all architectural advantages are theoretical. "Why use TardigradeDB?" has no concrete answer. |
+| **Head-to-head benchmark vs Mem0/Letta/Zep** | TardigradeDB-only baseline established (LoCoMo 68.2%, LongMemEval 90.9%). Three-way comparison (same corpus, same evaluator) requires Docker stack for Mem0+Letta. | Without side-by-side data on same evaluator, published competitor numbers use different eval methods. |
 | **Scale beyond 5K** | Proven at 5K memories (100% R@5). Untested at 10K, 100K. Engine retrieval scales linearly (Vamana 1.4x speedup); the question is whether the per-token pipeline holds 100% recall at 50K-100K memories. | Lower technical risk than expected, but the "database" claim still needs 10K+ validation. |
 
 #### Medium priority — production hardening + quality
@@ -350,6 +355,12 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | Traditional RAG baseline | Complete — 100% |
 | Vague query retrieval (100 queries per tier) | Complete — specific 100%, moderate 45%, vague 48% R@5 |
 | RoPE injection (Qwen3-0.6B, current pipeline) | Complete — 5/5 gibberish facts, 0/5 bare. RoPE is not a blocker. |
+| Vague query refinement (mean-centering + reranker) | Complete — centered +31pp moderate, reranker stacks to 68% moderate / 64% vague |
+| File ingestion as KV memory | Complete — 100% R@3 on multi-paragraph document |
+| Multi-view v1 (rule-based, separate packs) | Complete — **FAILED**: moderate 80%→20% (index dilution) |
+| Multi-view v2 (parent-document, add_view_keys) | Complete — no degradation, but 0% vague improvement (generator quality bottleneck) |
+| LoCoMo full benchmark (1,542 items) | Complete — 68.2% (deterministic eval, centered refinement) |
+| LongMemEval full benchmark (500 items) | Complete — 90.9% (deterministic eval, centered refinement) |
 
 ## Running Experiments
 
