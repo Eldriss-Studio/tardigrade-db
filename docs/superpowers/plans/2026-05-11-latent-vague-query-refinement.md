@@ -2,153 +2,269 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Improve vague-query R@5 (currently 60%) with three training-free latent-space techniques: ZCA whitening, token importance reweighting, and multi-layer query fusion — all preserving TardigradeDB's tensor-native premise.
+**Goal:** Improve vague-query R@5 (currently 60%) with three training-free latent-space techniques: ZCA whitening, token importance reweighting, and multi-layer query fusion.
 
-**Architecture:** Whitening extends the existing refinement pipeline (new `RefinementMode::Whitened` variant using corpus covariance statistics). Token reweighting decorates the scoring function with per-token IDF-like weights. Multi-layer fusion is Python-side orchestration (multiple `mem_read_pack` calls + RRF merge).
+**Architecture:** Refactor the closed `RefinementMode` enum into a `RefinementStrategy` trait (Strategy pattern) first. Then add `WhiteningStrategy` as a new implementation. Token reweighting decorates the scoring path. Multi-layer fusion is Python-side RRF over multiple engine queries.
 
-**Tech Stack:** Rust (tdb-retrieval, tdb-engine), `faer` crate for eigendecomposition, Python (tardigrade_hooks).
+**Tech Stack:** Rust (tdb-retrieval with `faer` crate for linear algebra), Python (tardigrade_hooks).
 
 ---
 
-### Task 1: Corpus Covariance Statistics in PerTokenRetriever
+### Task 1: Refactor RefinementMode enum → RefinementStrategy trait (Strategy Pattern)
+
+This task changes NO behavior — pure refactor. All existing tests must continue passing with identical results.
 
 **Files:**
-- Modify: `crates/tdb-retrieval/src/per_token.rs`
-- Test: `crates/tdb-retrieval/src/per_token.rs` (inline `#[cfg(test)]` module)
+- Modify: `crates/tdb-retrieval/src/refinement.rs`
+- Modify: `crates/tdb-engine/src/engine.rs` (update field type + call site)
+- Modify: `crates/tdb-python/src/lib.rs` (update mode construction)
+- Test: existing tests in `crates/tdb-retrieval/src/refinement.rs` + `crates/tdb-engine/tests/acceptance.rs`
 
-- [ ] **Step 1: Write failing test for corpus_sq_sum tracking**
+- [ ] **Step 1: Write acceptance test that proves the refactor is behavioral no-op**
 
-In the existing `#[cfg(test)] mod tests` at the bottom of `crates/tdb-retrieval/src/per_token.rs`, add:
+In `crates/tdb-retrieval/src/refinement.rs`, add to the existing `#[cfg(test)] mod tests`:
 
 ```rust
 #[test]
-fn test_corpus_covariance_is_none_when_empty() {
+fn strategy_trait_produces_same_results_as_enum() {
+    // Verify behavioral equivalence: Strategy trait dispatch matches old enum dispatch.
+    let mut r = populated_retriever();
+    let q = encode_per_token_keys(&[&[0.7_f32, 0.3, 0.1, 0.0][..]]);
+    let first_stage = r.query(&q, 3, Some(OWNER));
+
+    // MeanCentered via trait should produce identical scores to direct function call.
+    let direct = mean_centered_rescore(&r, &q, first_stage.clone(), 3);
+    let via_trait = MeanCenteredStrategy.refine(&mut r, &q, first_stage, 3, Some(OWNER));
+
+    assert_eq!(direct.len(), via_trait.len());
+    for (d, t) in direct.iter().zip(via_trait.iter()) {
+        assert_eq!(d.cell_id, t.cell_id);
+        assert!((d.score - t.score).abs() < 1e-6);
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cargo test -p tdb-retrieval strategy_trait_produces`
+Expected: FAIL — `MeanCenteredStrategy` does not exist.
+
+- [ ] **Step 3: Define the RefinementStrategy trait and implementations**
+
+In `crates/tdb-retrieval/src/refinement.rs`, add after the imports:
+
+```rust
+/// Strategy trait for post-retrieval refinement (replaces enum dispatch).
+///
+/// Each implementation transforms first-stage results in latent space.
+/// The engine holds a `Box<dyn RefinementStrategy>` instead of an enum.
+pub trait RefinementStrategy: Send + Sync {
+    fn name(&self) -> &str;
+    fn refine(
+        &self,
+        retriever: &mut PerTokenRetriever,
+        query_key: &[f32],
+        first_stage: Vec<RetrievalResult>,
+        k: usize,
+        owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult>;
+}
+
+/// Pass-through — no refinement.
+pub struct NoOpStrategy;
+
+impl RefinementStrategy for NoOpStrategy {
+    fn name(&self) -> &str { "none" }
+    fn refine(&self, _r: &mut PerTokenRetriever, _q: &[f32],
+              first_stage: Vec<RetrievalResult>, _k: usize, _o: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        first_stage
+    }
+}
+
+/// Subtract corpus mean from query + stored tokens, re-score.
+pub struct MeanCenteredStrategy;
+
+impl RefinementStrategy for MeanCenteredStrategy {
+    fn name(&self) -> &str { "centered" }
+    fn refine(&self, retriever: &mut PerTokenRetriever, query_key: &[f32],
+              first_stage: Vec<RetrievalResult>, k: usize, _o: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        mean_centered_rescore(retriever, query_key, first_stage, k)
+    }
+}
+
+/// Rocchio expansion in latent K-space.
+pub struct LatentPrfStrategy {
+    pub alpha: f32,
+    pub beta: f32,
+    pub k_prime: usize,
+}
+
+impl RefinementStrategy for LatentPrfStrategy {
+    fn name(&self) -> &str { "prf" }
+    fn refine(&self, retriever: &mut PerTokenRetriever, query_key: &[f32],
+              first_stage: Vec<RetrievalResult>, k: usize, owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        latent_prf(retriever, query_key, first_stage, self.alpha, self.beta, self.k_prime, k, owner_filter)
+    }
+}
+```
+
+Keep the existing `RefinementMode` enum AND the `apply()` function — they'll be removed in a follow-up once the engine is migrated. This way existing tests pass during the transition.
+
+Add a factory function:
+
+```rust
+/// Build a strategy from a mode name (Python API compatibility).
+pub fn strategy_from_name(name: &str, alpha: f32, beta: f32, k_prime: usize) -> Box<dyn RefinementStrategy> {
+    match name {
+        "none" => Box::new(NoOpStrategy),
+        "centered" | "mean_centered" => Box::new(MeanCenteredStrategy),
+        "prf" | "latent_prf" => Box::new(LatentPrfStrategy { alpha, beta, k_prime }),
+        _ => Box::new(NoOpStrategy),
+    }
+}
+```
+
+- [ ] **Step 4: Run the new test + all existing tests**
+
+Run: `cargo test -p tdb-retrieval`
+Expected: All existing tests pass + new test passes.
+
+- [ ] **Step 5: Migrate Engine to use `Box<dyn RefinementStrategy>`**
+
+In `crates/tdb-engine/src/engine.rs`:
+
+Change the field (line 213):
+```rust
+    refinement_strategy: Box<dyn tdb_retrieval::refinement::RefinementStrategy>,
+```
+
+Update `open_with_options` initialization (line 287):
+```rust
+    refinement_strategy: Box::new(tdb_retrieval::refinement::NoOpStrategy),
+```
+
+Replace the setter (line 240-243):
+```rust
+    pub fn set_refinement_mode(&mut self, mode: tdb_retrieval::refinement::RefinementMode) {
+        self.refinement_strategy = match mode {
+            tdb_retrieval::refinement::RefinementMode::None => {
+                Box::new(tdb_retrieval::refinement::NoOpStrategy)
+            }
+            tdb_retrieval::refinement::RefinementMode::MeanCentered => {
+                Box::new(tdb_retrieval::refinement::MeanCenteredStrategy)
+            }
+            tdb_retrieval::refinement::RefinementMode::LatentPrf { alpha, beta, k_prime } => {
+                Box::new(tdb_retrieval::refinement::LatentPrfStrategy { alpha, beta, k_prime })
+            }
+        };
+    }
+```
+
+Replace the getter (line 245-246):
+```rust
+    pub fn refinement_mode_name(&self) -> &str {
+        self.refinement_strategy.name()
+    }
+```
+
+Replace the refinement call site (lines 678-691):
+```rust
+        if self.refinement_strategy.name() != "none"
+            && is_per_token_query
+            && let Some(per_token) =
+                self.pipeline.first_stage_as_mut::<tdb_retrieval::per_token::PerTokenRetriever>()
+        {
+            candidates = self.refinement_strategy.refine(
+                per_token, query_key, candidates, k * 2, owner_filter,
+            );
+        }
+```
+
+- [ ] **Step 6: Run full engine + retrieval test suites**
+
+Run: `cargo test --workspace --exclude tdb-python`
+Expected: All tests pass — behavioral no-op.
+
+- [ ] **Step 7: Update PyO3 bindings**
+
+In `crates/tdb-python/src/lib.rs`, update `set_refinement_mode` to use `strategy_from_name`:
+
+```rust
+    fn set_refinement_mode(/* existing params */) -> PyResult<()> {
+        // Keep existing param parsing...
+        // Replace the final line with:
+        lock_engine(&engine)?.set_refinement_strategy(
+            tdb_retrieval::refinement::strategy_from_name(&mode_str, alpha, beta, k_prime)
+        );
+    }
+```
+
+And add the corresponding engine method:
+```rust
+    pub fn set_refinement_strategy(&mut self, strategy: Box<dyn tdb_retrieval::refinement::RefinementStrategy>) {
+        self.refinement_strategy = strategy;
+    }
+```
+
+- [ ] **Step 8: Run Python tests**
+
+Run: `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop && pytest tests/python/test_vague_refinement.py -v`
+Expected: All 11 refinement tests pass.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add crates/tdb-retrieval/src/refinement.rs crates/tdb-engine/src/engine.rs crates/tdb-python/src/lib.rs
+git commit -m "♻️ refactor(retrieval): RefinementStrategy trait replaces enum dispatch (Strategy pattern)"
+```
+
+---
+
+### Task 2: Corpus Covariance + ZCA Whitening via `faer`
+
+**Files:**
+- Modify: `crates/tdb-retrieval/Cargo.toml` (add `faer`)
+- Modify: `crates/tdb-retrieval/src/per_token.rs` (covariance tracking + whitening matrix)
+- Modify: `crates/tdb-retrieval/src/refinement.rs` (add `WhiteningStrategy`)
+- Modify: `crates/tdb-python/src/lib.rs` (add `"whitened"` to factory)
+- Test: inline in `per_token.rs` and `refinement.rs`
+
+- [ ] **Step 1: Write ATDD tests FIRST — covariance and whitening**
+
+In `crates/tdb-retrieval/src/per_token.rs` tests:
+
+```rust
+#[test]
+fn test_corpus_covariance_none_when_empty() {
     let r = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
     assert!(r.corpus_covariance().is_none());
 }
 
 #[test]
-fn test_corpus_covariance_computed_from_inserted_tokens() {
+fn test_corpus_covariance_computed_correctly() {
     let mut r = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
-    let t1 = [2.0_f32, 0.0];
-    let t2 = [0.0_f32, 2.0];
-    r.insert(0, 1, &encode_per_token_keys(&[&t1]));
-    r.insert(1, 1, &encode_per_token_keys(&[&t2]));
+    r.insert(0, 1, &encode_per_token_keys(&[&[2.0_f32, 0.0]]));
+    r.insert(1, 1, &encode_per_token_keys(&[&[0.0_f32, 2.0]]));
     let cov = r.corpus_covariance().unwrap();
-    // Covariance of [[2,0],[0,2]] with mean [1,1]:
-    // Var(x)=1, Var(y)=1, Cov(x,y)=-1
-    assert_eq!(cov.len(), 4); // 2x2 flattened
-    assert!((cov[0] - 1.0).abs() < 0.01); // Var(x)
-    assert!((cov[3] - 1.0).abs() < 0.01); // Var(y)
-    assert!((cov[1] - (-1.0)).abs() < 0.01); // Cov(x,y)
+    assert_eq!(cov.len(), 4);
+    assert!((cov[0] - 1.0).abs() < 0.01);
+    assert!((cov[3] - 1.0).abs() < 0.01);
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `cargo test -p tdb-retrieval test_corpus_covariance`
-Expected: FAIL — method does not exist.
-
-- [ ] **Step 3: Add `corpus_sq_sum` field and methods**
-
-In `crates/tdb-retrieval/src/per_token.rs`:
-
-Add field after `corpus_token_count` (line 177):
-```rust
-    /// Running sum of per-dimension squared products for covariance estimation.
-    /// Flattened dim×dim matrix: `corpus_sq_sum[j*dim+k] += token[j] * token[k]`.
-    corpus_sq_sum: Vec<f32>,
-```
-
-Initialize in `with_config` (line 202):
-```rust
-    corpus_sq_sum: Vec::new(),
-```
-
-Reset in `ensure_corpus_sum_dim` (add after `self.corpus_token_count = 0;`):
-```rust
-    self.corpus_sq_sum = vec![0.0; dim * dim];
-```
-
-Add accumulation in `accumulate_corpus` (after `self.corpus_token_count += 1;`):
-```rust
-    let dim = token.len();
-    for j in 0..dim {
-        for k in 0..dim {
-            self.corpus_sq_sum[j * dim + k] += token[j] * token[k];
-        }
-    }
-```
-
-Add public method after `corpus_mean()`:
-```rust
-    pub fn corpus_covariance(&self) -> Option<Vec<f32>> {
-        if self.corpus_token_count < 2 || self.corpus_sum.is_empty() {
-            return None;
-        }
-        let dim = self.corpus_sum.len();
-        if self.corpus_sq_sum.len() != dim * dim {
-            return None;
-        }
-        let n = self.corpus_token_count as f32;
-        let mean: Vec<f32> = self.corpus_sum.iter().map(|s| s / n).collect();
-        let mut cov = vec![0.0_f32; dim * dim];
-        for j in 0..dim {
-            for k in 0..dim {
-                cov[j * dim + k] = self.corpus_sq_sum[j * dim + k] / n - mean[j] * mean[k];
-            }
-        }
-        Some(cov)
-    }
-```
-
-- [ ] **Step 4: Run test**
-
-Run: `cargo test -p tdb-retrieval test_corpus_covariance`
-Expected: PASS
-
-- [ ] **Step 5: Run full retrieval test suite**
-
-Run: `cargo test -p tdb-retrieval`
-Expected: All existing tests still pass.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add crates/tdb-retrieval/src/per_token.rs
-git commit -m "✨ feat(retrieval): corpus covariance tracking for whitening refinement"
-```
-
----
-
-### Task 2: Whitening Matrix + RefinementMode::Whitened
-
-**Files:**
-- Modify: `crates/tdb-retrieval/Cargo.toml` (add `faer` dependency)
-- Modify: `crates/tdb-retrieval/src/per_token.rs` (whitening matrix cache)
-- Modify: `crates/tdb-retrieval/src/refinement.rs` (add Whitened variant + rescore fn)
-- Test: `crates/tdb-retrieval/src/refinement.rs` (inline tests)
-
-- [ ] **Step 1: Add `faer` dependency**
-
-In `crates/tdb-retrieval/Cargo.toml`, add under `[dependencies]`:
-```toml
-faer = "0.24"
-```
-
-- [ ] **Step 2: Write failing test for whitened rescore**
-
-In the `#[cfg(test)] mod tests` of `crates/tdb-retrieval/src/refinement.rs`, add:
+In `crates/tdb-retrieval/src/refinement.rs` tests:
 
 ```rust
 #[test]
 fn whitened_produces_different_scores_than_mean_centered() {
     let mut r = populated_retriever();
     let q = encode_per_token_keys(&[&[0.7_f32, 0.3, 0.1, 0.0][..]]);
-    let first_stage = r.query(&q, 3, Some(OWNER));
-    let mc = apply(RefinementMode::MeanCentered, &mut r, &q, first_stage.clone(), 3, Some(OWNER));
-    let wh = apply(RefinementMode::Whitened, &mut r, &q, first_stage, 3, Some(OWNER));
-    // Scores should differ (whitening applies covariance normalization).
+    let first = r.query(&q, 3, Some(OWNER));
+    let mc = MeanCenteredStrategy.refine(&mut r, &q, first.clone(), 3, Some(OWNER));
+    let wh = WhiteningStrategy.refine(&mut r, &q, first, 3, Some(OWNER));
     let mc_scores: Vec<f32> = mc.iter().map(|r| r.score).collect();
     let wh_scores: Vec<f32> = wh.iter().map(|r| r.score).collect();
     assert_ne!(mc_scores, wh_scores);
@@ -156,207 +272,90 @@ fn whitened_produces_different_scores_than_mean_centered() {
 
 #[test]
 fn whitened_falls_back_when_corpus_too_small() {
-    // Single cell — fewer tokens than dimensions=4, should fall back to mean-centering.
     let mut r = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
-    let cell0 = [1.0_f32, 0.0, 0.0, 0.0];
-    r.insert(0, OWNER, &encode_per_token_keys(&[&cell0]));
-    let q = encode_per_token_keys(&[&cell0[..]]);
-    let first_stage = r.query(&q, 1, Some(OWNER));
-    // Should not panic — graceful fallback.
-    let refined = apply(RefinementMode::Whitened, &mut r, &q, first_stage, 1, Some(OWNER));
+    r.insert(0, OWNER, &encode_per_token_keys(&[&[1.0_f32, 0.0, 0.0, 0.0]]));
+    let q = encode_per_token_keys(&[&[1.0_f32, 0.0, 0.0, 0.0][..]]);
+    let first = r.query(&q, 1, Some(OWNER));
+    let refined = WhiteningStrategy.refine(&mut r, &q, first, 1, Some(OWNER));
     assert!(!refined.is_empty());
 }
 ```
 
-- [ ] **Step 3: Run to verify failure**
+- [ ] **Step 2: Run to verify failure**
 
-Run: `cargo test -p tdb-retrieval whitened`
-Expected: FAIL — `Whitened` variant does not exist.
+Run: `cargo test -p tdb-retrieval corpus_covariance whitened`
+Expected: FAIL.
 
-- [ ] **Step 4: Add whitening_matrix method to PerTokenRetriever**
+- [ ] **Step 3: Add `faer` dependency**
 
-In `crates/tdb-retrieval/src/per_token.rs`, add a cached whitening matrix field:
-
-After `corpus_sq_sum` field:
-```rust
-    /// Cached whitening matrix (dim×dim flattened). Invalidated when corpus changes.
-    whitening_cache: Option<Vec<f32>>,
-    /// Token count when whitening_cache was last computed.
-    whitening_cache_count: usize,
+In `crates/tdb-retrieval/Cargo.toml` under `[dependencies]`:
+```toml
+faer = "0.24"
 ```
 
-Initialize in `with_config`:
-```rust
-    whitening_cache: None,
-    whitening_cache_count: 0,
-```
+- [ ] **Step 4: Implement covariance tracking in per_token.rs**
 
-Add public method after `corpus_covariance()`:
-```rust
-    pub fn whitening_matrix(&mut self) -> Option<&[f32]> {
-        if self.corpus_token_count == self.whitening_cache_count {
-            if let Some(ref cache) = self.whitening_cache {
-                return Some(cache.as_slice());
-            }
-        }
-        let cov = self.corpus_covariance()?;
-        let dim = self.corpus_sum.len();
-        let w = compute_whitening_matrix(&cov, dim)?;
-        self.whitening_cache = Some(w);
-        self.whitening_cache_count = self.corpus_token_count;
-        self.whitening_cache.as_deref()
-    }
-```
+Add `corpus_sq_sum: Vec<f32>` field, `whitening_cache: Option<Vec<f32>>`, `whitening_cache_count: usize` fields. Add `corpus_covariance()` and `whitening_matrix()` methods. Update `accumulate_corpus()` to track outer product sums. Use `faer::Mat` for eigendecomposition in `compute_whitening_matrix()`.
 
-Add the eigendecomposition helper (private, at module level):
-```rust
-fn compute_whitening_matrix(cov: &[f32], dim: usize) -> Option<Vec<f32>> {
-    use faer::Mat;
+(See previous plan Task 1 steps 3-4 and Task 2 step 4 for exact code — the implementation is the same, only the ordering changes: tests are already written.)
 
-    if cov.len() != dim * dim || dim == 0 {
-        return None;
-    }
-
-    let mat = Mat::from_fn(dim, dim, |i, j| cov[i * dim + j] as f64);
-    let eigen = mat.selfadjoint_eigendecomposition(faer::Side::Lower);
-    let eigenvalues = eigen.s().column_vector();
-    let eigenvectors = eigen.u();
-
-    // W = U @ diag(1/sqrt(λ)) @ U^T, clamping small eigenvalues for stability.
-    let eps = 1e-5_f64;
-    let mut result = vec![0.0_f32; dim * dim];
-    for i in 0..dim {
-        for j in 0..dim {
-            let mut sum = 0.0_f64;
-            for k in 0..dim {
-                let lam = eigenvalues.read(k).max(eps);
-                sum += eigenvectors.read(i, k) * (1.0 / lam.sqrt()) * eigenvectors.read(j, k);
-            }
-            result[i * dim + j] = sum as f32;
-        }
-    }
-    Some(result)
-}
-```
-
-- [ ] **Step 5: Add `Whitened` to RefinementMode + dispatcher**
+- [ ] **Step 5: Implement `WhiteningStrategy`**
 
 In `crates/tdb-retrieval/src/refinement.rs`:
 
-Add to the enum:
 ```rust
-    /// ZCA whitening: normalize covariance of query + stored tokens, re-score.
-    Whitened,
-```
+pub struct WhiteningStrategy;
 
-Add match arm in `apply()`:
-```rust
-        RefinementMode::Whitened => whitened_rescore(retriever, query_key, first_stage, k),
-```
-
-Add the rescore function:
-```rust
-fn whitened_rescore(
-    retriever: &mut PerTokenRetriever,
-    query_key: &[f32],
-    first_stage: Vec<RetrievalResult>,
-    k: usize,
-) -> Vec<RetrievalResult> {
-    if first_stage.is_empty() {
-        return first_stage;
+impl RefinementStrategy for WhiteningStrategy {
+    fn name(&self) -> &str { "whitened" }
+    fn refine(&self, retriever: &mut PerTokenRetriever, query_key: &[f32],
+              first_stage: Vec<RetrievalResult>, k: usize, _o: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        whitened_rescore(retriever, query_key, first_stage, k)
     }
-    // whitening_matrix() takes &mut self (lazy compute + cache).
-    let Some(w_matrix) = retriever.whitening_matrix() else {
-        // Fallback to mean-centered if whitening unavailable.
-        return mean_centered_rescore(retriever, query_key, first_stage, k);
-    };
-    let w_matrix = w_matrix.to_vec(); // clone to release &mut borrow
-    let Some(mean) = retriever.corpus_mean() else {
-        return first_stage;
-    };
-    let dim = mean.len();
-    let Some(query_tokens) = parse_query_tokens(query_key, dim) else {
-        return first_stage;
-    };
-
-    let whitened_query: Vec<Vec<f32>> = query_tokens
-        .iter()
-        .map(|tok| mat_vec_mul(&w_matrix, &subtract_in_place(tok.clone(), &mean), dim))
-        .collect();
-
-    let inv_sqrt_dk = 1.0 / (dim as f32).sqrt();
-    let top_n = retriever.top_n();
-
-    let mut rescored: Vec<RetrievalResult> = first_stage
-        .into_iter()
-        .map(|res| {
-            let mut dots: Vec<f32> = Vec::new();
-            for (stored_token, _owner) in retriever.dequantized_tokens_for_cell(res.cell_id) {
-                if stored_token.len() != dim {
-                    continue;
-                }
-                let ws = mat_vec_mul(&w_matrix, &subtract_in_place(stored_token, &mean), dim);
-                for wq in &whitened_query {
-                    dots.push(dot(wq, &ws) * inv_sqrt_dk);
-                }
-            }
-            let score = top_n_avg(&mut dots, top_n);
-            RetrievalResult { cell_id: res.cell_id, owner: res.owner, score }
-        })
-        .collect();
-
-    rescored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    rescored.truncate(k);
-    rescored
-}
-
-fn mat_vec_mul(matrix: &[f32], vec: &[f32], dim: usize) -> Vec<f32> {
-    let mut result = vec![0.0_f32; dim];
-    for i in 0..dim {
-        let mut sum = 0.0_f32;
-        for j in 0..dim {
-            sum += matrix[i * dim + j] * vec[j];
-        }
-        result[i] = sum;
-    }
-    result
 }
 ```
 
-- [ ] **Step 6: Run tests**
+The `whitened_rescore` function uses `faer` for the matrix-vector multiply (via `retriever.whitening_matrix()`), falls back to `mean_centered_rescore` if whitening unavailable.
 
-Run: `cargo test -p tdb-retrieval`
-Expected: All tests pass including the 2 new whitening tests.
-
-- [ ] **Step 7: Add PyO3 binding for "whitened" mode**
-
-In `crates/tdb-python/src/lib.rs`, find the `set_refinement_mode` match block and add:
+Add `"whitened"` to `strategy_from_name`:
 ```rust
-"whitened" => tdb_retrieval::refinement::RefinementMode::Whitened,
+"whitened" => Box::new(WhiteningStrategy),
 ```
+
+- [ ] **Step 6: Update PyO3 — add "whitened" alias**
+
+Already handled by `strategy_from_name` — just verify the Python binding calls it.
+
+- [ ] **Step 7: Run all tests**
+
+Run: `cargo test --workspace --exclude tdb-python`
+Expected: All pass.
+
+Run: `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop && pytest tests/python/test_vague_refinement.py -v`
+Expected: All pass.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/tdb-retrieval/Cargo.toml crates/tdb-retrieval/src/per_token.rs crates/tdb-retrieval/src/refinement.rs crates/tdb-python/src/lib.rs
-git commit -m "✨ feat(retrieval): ZCA whitening refinement mode with faer eigendecomposition"
+git add crates/tdb-retrieval/ crates/tdb-python/src/lib.rs
+git commit -m "✨ feat(retrieval): ZCA whitening strategy — faer eigendecomposition + corpus covariance"
 ```
 
 ---
 
-### Task 3: Token Importance Reweighting
+### Task 3: Token Importance Reweighting (Decorator Pattern)
 
 **Files:**
 - Create: `crates/tdb-retrieval/src/token_weighter.rs`
-- Modify: `crates/tdb-retrieval/src/lib.rs` (export module)
-- Modify: `crates/tdb-retrieval/src/refinement.rs` (use weighter in rescore fns)
-- Modify: `crates/tdb-engine/src/engine.rs` (add field + setter)
-- Modify: `crates/tdb-python/src/lib.rs` (PyO3 binding)
-- Test: `crates/tdb-retrieval/src/token_weighter.rs` (inline tests)
+- Modify: `crates/tdb-retrieval/src/lib.rs`
+- Modify: `crates/tdb-retrieval/src/refinement.rs` (integrate into rescore fns)
+- Modify: `crates/tdb-engine/src/engine.rs` (field + setter)
+- Modify: `crates/tdb-python/src/lib.rs` (binding)
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Write ATDD tests FIRST**
 
-Create `crates/tdb-retrieval/src/token_weighter.rs` with test only:
+Create `crates/tdb-retrieval/src/token_weighter.rs` with tests only:
 
 ```rust
 //! Per-token importance weighting — Decorator pattern.
@@ -367,58 +366,53 @@ mod tests {
 
     #[test]
     fn weight_near_mean_is_low() {
-        let mean = vec![1.0_f32, 0.0, 0.0];
-        let token_near_mean = vec![0.9_f32, 0.1, 0.0];
-        let w = token_weight(&token_near_mean, &mean);
-        assert!(w < 0.3, "Token near mean should have low weight, got {w}");
+        let mean = [1.0_f32, 0.0, 0.0];
+        let token = [0.9_f32, 0.1, 0.0];
+        assert!(token_weight(&token, &mean) < 0.3);
     }
 
     #[test]
-    fn weight_orthogonal_to_mean_is_high() {
-        let mean = vec![1.0_f32, 0.0, 0.0];
-        let token_ortho = vec![0.0_f32, 1.0, 0.0];
-        let w = token_weight(&token_ortho, &mean);
-        assert!(w > 0.8, "Token orthogonal to mean should have high weight, got {w}");
+    fn weight_orthogonal_is_high() {
+        let mean = [1.0_f32, 0.0, 0.0];
+        let token = [0.0_f32, 1.0, 0.0];
+        assert!(token_weight(&token, &mean) > 0.8);
     }
 
     #[test]
-    fn weight_is_clamped_non_negative() {
-        let mean = vec![1.0_f32, 0.0];
-        let token = vec![1.0_f32, 0.0]; // identical to mean
-        let w = token_weight(&token, &mean);
-        assert!(w >= 0.0);
+    fn disabled_returns_one() {
+        assert!((weighted_or_unit(false, &[0.5, 0.5], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
     }
 
     #[test]
-    fn disabled_weighter_returns_one() {
-        let mean = vec![1.0_f32, 0.0];
-        let token = vec![0.5_f32, 0.5];
-        let w = weighted_or_unit(false, &token, &mean);
-        assert!((w - 1.0).abs() < 1e-6);
+    fn weight_clamped_non_negative() {
+        let mean = [1.0_f32, 0.0];
+        let token = [1.0_f32, 0.0];
+        assert!(token_weight(&token, &mean) >= 0.0);
     }
 }
 ```
 
-- [ ] **Step 2: Implement token_weighter.rs**
+- [ ] **Step 2: Run to verify failure**
 
-Add the implementation above the tests:
+Run: `cargo test -p tdb-retrieval token_weight`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement token_weighter.rs**
 
 ```rust
 //! Per-token importance weighting — Decorator pattern.
 //!
-//! Tokens near the corpus mean carry little discriminative signal.
-//! Tokens orthogonal to the mean are distinctive. Weight formula:
-//! `w = 1 - cosine(token, corpus_mean)`, clamped to [0, 1].
+//! Weight = `1 - cosine(token, corpus_mean)`. Distinctive tokens
+//! (orthogonal to mean) get high weight; common tokens get low weight.
 
 pub fn token_weight(token: &[f32], corpus_mean: &[f32]) -> f32 {
     let dot: f32 = token.iter().zip(corpus_mean).map(|(a, b)| a * b).sum();
-    let norm_t: f32 = token.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_m: f32 = corpus_mean.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_t = token.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_m = corpus_mean.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm_t < 1e-9 || norm_m < 1e-9 {
         return 1.0;
     }
-    let cosine = dot / (norm_t * norm_m);
-    (1.0 - cosine).clamp(0.0, 1.0)
+    (1.0 - dot / (norm_t * norm_m)).clamp(0.0, 1.0)
 }
 
 pub fn weighted_or_unit(enabled: bool, token: &[f32], corpus_mean: &[f32]) -> f32 {
@@ -426,9 +420,7 @@ pub fn weighted_or_unit(enabled: bool, token: &[f32], corpus_mean: &[f32]) -> f3
 }
 ```
 
-- [ ] **Step 3: Export module**
-
-In `crates/tdb-retrieval/src/lib.rs`, add:
+Export in `crates/tdb-retrieval/src/lib.rs`:
 ```rust
 pub mod token_weighter;
 ```
@@ -436,124 +428,41 @@ pub mod token_weighter;
 - [ ] **Step 4: Run tests**
 
 Run: `cargo test -p tdb-retrieval token_weight`
-Expected: All 4 tests PASS.
+Expected: 4 tests PASS.
 
-- [ ] **Step 5: Integrate into refinement rescore functions**
+- [ ] **Step 5: Integrate into refinement + engine**
 
-In `crates/tdb-retrieval/src/refinement.rs`, update `mean_centered_rescore` and `whitened_rescore` to accept a `reweight: bool` parameter and apply per-token weights to dot products.
+Add `reweight: bool` parameter to `RefinementStrategy::refine()` and all implementations. Update `apply()` and all existing call sites. Add `token_reweighting: bool` field to Engine with setter. Add PyO3 binding. Multiply each dot product by `weighted_or_unit(reweight, &query_token, &mean)` in the rescore functions.
 
-Add import at top:
-```rust
-use crate::token_weighter::weighted_or_unit;
-```
-
-Update `apply()` signature to accept `reweight: bool`:
-```rust
-pub fn apply(
-    mode: RefinementMode,
-    retriever: &mut PerTokenRetriever,
-    query_key: &[f32],
-    first_stage: Vec<RetrievalResult>,
-    k: usize,
-    owner_filter: Option<OwnerId>,
-    reweight: bool,
-) -> Vec<RetrievalResult> {
-```
-
-In `mean_centered_rescore` and `whitened_rescore`, after computing each dot product, multiply by the query token's weight:
-
-Replace the dot computation loop body:
-```rust
-for cq in &centered_query {
-    let w = weighted_or_unit(reweight, cq, &mean);
-    dots.push(dot(cq, &centered_stored) * inv_sqrt_dk * w);
-}
-```
-
-- [ ] **Step 6: Update engine.rs to pass reweight flag**
-
-In `crates/tdb-engine/src/engine.rs`:
-
-Add field to `Engine` struct:
-```rust
-    token_reweighting: bool,
-```
-
-Initialize as `false` in `open_with_options`.
-
-Add setter/getter:
-```rust
-    pub fn set_token_reweighting(&mut self, enabled: bool) {
-        self.token_reweighting = enabled;
-    }
-
-    pub fn token_reweighting(&self) -> bool {
-        self.token_reweighting
-    }
-```
-
-Update the refinement call site to pass the flag:
-```rust
-    candidates = tdb_retrieval::refinement::apply(
-        self.refinement_mode,
-        per_token,
-        query_key,
-        candidates,
-        k * 2,
-        owner_filter,
-        self.token_reweighting,
-    );
-```
-
-- [ ] **Step 7: Add PyO3 bindings**
-
-In `crates/tdb-python/src/lib.rs`, add:
-```rust
-    fn set_token_reweighting(&self, enabled: bool) -> PyResult<()> {
-        lock_engine(&self.inner)?.set_token_reweighting(enabled);
-        Ok(())
-    }
-
-    fn token_reweighting(&self) -> PyResult<bool> {
-        Ok(lock_engine(&self.inner)?.token_reweighting())
-    }
-```
-
-- [ ] **Step 8: Fix all existing test call sites for `apply()`**
-
-The existing tests in `refinement.rs` call `apply()` without the `reweight` param. Add `false` as the last argument to all existing test calls.
-
-- [ ] **Step 9: Run full test suite**
+- [ ] **Step 6: Run full test suite**
 
 Run: `cargo test --workspace --exclude tdb-python`
-Expected: All tests pass.
+Expected: All pass.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add crates/tdb-retrieval/src/token_weighter.rs crates/tdb-retrieval/src/lib.rs crates/tdb-retrieval/src/refinement.rs crates/tdb-engine/src/engine.rs crates/tdb-python/src/lib.rs
-git commit -m "✨ feat(retrieval): token importance reweighting — IDF-like corpus-mean distance weighting"
+git add crates/tdb-retrieval/ crates/tdb-engine/src/engine.rs crates/tdb-python/src/lib.rs
+git commit -m "✨ feat(retrieval): token importance reweighting — corpus-mean distance (Decorator pattern)"
 ```
 
 ---
 
-### Task 4: Multi-Layer Query Fusion (Python)
+### Task 4: Multi-Layer Query Fusion (Python, Composite Pattern)
 
 **Files:**
 - Create: `python/tardigrade_hooks/multi_layer_query.py`
-- Modify: `python/tardigrade_hooks/client.py`
 - Create: `tests/python/test_multi_layer_query.py`
+- Modify: `python/tardigrade_hooks/client.py`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Write ATDD tests FIRST**
 
 Create `tests/python/test_multi_layer_query.py`:
 
 ```python
-"""ATDD tests for MultiLayerQuery — Composite pattern for multi-layer RRF fusion."""
+"""ATDD tests for multi-layer RRF fusion — Composite pattern."""
 
-import numpy as np
 import pytest
-
 from tardigrade_hooks.multi_layer_query import rrf_fuse
 
 
@@ -563,198 +472,54 @@ class TestRRFFusion:
         fused = rrf_fuse([ranked], k=60)
         assert [r["pack_id"] for r in fused] == [1, 2]
 
-    def test_two_lists_boost_shared_packs(self):
-        list_a = [{"pack_id": 1, "score": 0.9}, {"pack_id": 2, "score": 0.5}]
-        list_b = [{"pack_id": 2, "score": 0.8}, {"pack_id": 3, "score": 0.4}]
-        fused = rrf_fuse([list_a, list_b], k=60)
-        # Pack 2 appears in both lists — should rank highest
+    def test_shared_packs_rank_highest(self):
+        a = [{"pack_id": 1, "score": 0.9}, {"pack_id": 2, "score": 0.5}]
+        b = [{"pack_id": 2, "score": 0.8}, {"pack_id": 3, "score": 0.4}]
+        fused = rrf_fuse([a, b], k=60)
         assert fused[0]["pack_id"] == 2
 
-    def test_empty_lists(self):
+    def test_empty_input(self):
         assert rrf_fuse([], k=60) == []
         assert rrf_fuse([[]], k=60) == []
 
-    def test_disjoint_lists_interleave(self):
-        list_a = [{"pack_id": 1, "score": 0.9}]
-        list_b = [{"pack_id": 2, "score": 0.9}]
-        list_c = [{"pack_id": 3, "score": 0.9}]
-        fused = rrf_fuse([list_a, list_b, list_c], k=60)
+    def test_disjoint_lists(self):
+        a = [{"pack_id": 1, "score": 0.9}]
+        b = [{"pack_id": 2, "score": 0.9}]
+        c = [{"pack_id": 3, "score": 0.9}]
+        fused = rrf_fuse([a, b, c], k=60)
         assert len(fused) == 3
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `source .venv/bin/activate && PYTHONPATH=python pytest tests/python/test_multi_layer_query.py -v`
+Run: `PYTHONPATH=python pytest tests/python/test_multi_layer_query.py -v`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement multi_layer_query.py**
 
-Create `python/tardigrade_hooks/multi_layer_query.py`:
+Create `python/tardigrade_hooks/multi_layer_query.py` with `rrf_fuse()` function and `MultiLayerQuery` class. (See previous plan Task 4 step 3 for exact code.)
 
-```python
-"""Multi-layer query fusion — Composite pattern.
-
-Runs retrieval at multiple transformer layers, fuses rankings via
-Reciprocal Rank Fusion (RRF). Pure latent-space: no text, no external
-model. Only the query is multi-layer; stored memories use single-layer keys.
-"""
-
-from __future__ import annotations
-
-from collections import defaultdict
-
-import numpy as np
-
-from .constants import DEFAULT_CAPTURE_LAYER_RATIO
-from .encoding import encode_per_token
-
-DEFAULT_LAYER_RATIOS = (0.50, DEFAULT_CAPTURE_LAYER_RATIO, 0.83)
-DEFAULT_RRF_K = 60
-
-
-def rrf_fuse(
-    ranked_lists: list[list[dict]],
-    k: int = DEFAULT_RRF_K,
-) -> list[dict]:
-    """Fuse multiple ranked lists via Reciprocal Rank Fusion.
-
-    Each item in a ranked list must have a ``pack_id`` key.
-    Returns a single list sorted by fused RRF score (descending).
-    """
-    if not ranked_lists:
-        return []
-
-    scores: dict[int, float] = defaultdict(float)
-    pack_data: dict[int, dict] = {}
-
-    for ranked in ranked_lists:
-        for rank, item in enumerate(ranked):
-            pid = item["pack_id"]
-            scores[pid] += 1.0 / (k + rank + 1)
-            if pid not in pack_data:
-                pack_data[pid] = item
-
-    fused = []
-    for pid, score in sorted(scores.items(), key=lambda x: -x[1]):
-        entry = dict(pack_data[pid])
-        entry["rrf_score"] = score
-        fused.append(entry)
-
-    return fused
-
-
-class MultiLayerQuery:
-    """Composite: queries the engine at multiple layers, fuses via RRF."""
-
-    def __init__(
-        self,
-        engine,
-        *,
-        layer_ratios: tuple[float, ...] = DEFAULT_LAYER_RATIOS,
-        rrf_k: int = DEFAULT_RRF_K,
-    ):
-        self._engine = engine
-        self._layer_ratios = layer_ratios
-        self._rrf_k = rrf_k
-
-    def query(
-        self,
-        model,
-        tokenizer,
-        query_text: str,
-        k: int = 5,
-        owner: int | None = None,
-    ) -> list[dict]:
-        """Run retrieval at each layer, fuse via RRF."""
-        import torch
-
-        inputs = tokenizer(query_text, return_tensors="pt").to(model.device)
-        with torch.no_grad():
-            out = model(**inputs, output_hidden_states=True)
-
-        n_layers = model.config.num_hidden_layers
-        hidden_size = model.config.hidden_size
-
-        ranked_lists = []
-        for ratio in self._layer_ratios:
-            layer_idx = int(n_layers * ratio)
-            hidden = out.hidden_states[layer_idx][0][1:]  # skip pos 0
-            h_np = hidden.cpu().numpy().astype(np.float32)
-            query_key = encode_per_token(h_np, hidden_size)
-            results = self._engine.mem_read_pack(query_key, k * 2, owner)
-            ranked_lists.append(results)
-
-        fused = rrf_fuse(ranked_lists, k=self._rrf_k)
-        return fused[:k]
-```
-
-- [ ] **Step 4: Update client.py**
-
-In `python/tardigrade_hooks/client.py`, modify the `query` method to support `multi_layer`:
-
-```python
-    def query(self, query_text: str, *, k: int = 5, multi_layer: bool = False) -> list[dict]:
-        """Retrieve the top-k packs matching *query_text*."""
-        if multi_layer and self._tokenizer is not None:
-            from .multi_layer_query import MultiLayerQuery
-            # multi_layer requires a real model — fall back to single if stub
-            try:
-                mlq = MultiLayerQuery(self._engine)
-                return mlq.query(
-                    self._kv_fn.__self__ if hasattr(self._kv_fn, '__self__') else None,
-                    self._tokenizer, query_text, k=k, owner=self._owner,
-                )
-            except Exception:
-                pass
-        key, _ = self._kv_fn(query_text, self._tokenizer)
-        return self._engine.mem_read_pack(key, k, self._owner)
-```
+- [ ] **Step 4: Update client.py with `multi_layer` parameter**
 
 - [ ] **Step 5: Run tests**
 
-Run: `source .venv/bin/activate && pip install -e . && PYTHONPATH=python pytest tests/python/test_multi_layer_query.py -v`
+Run: `pip install -e . && PYTHONPATH=python pytest tests/python/test_multi_layer_query.py -v`
 Expected: All 4 tests PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add python/tardigrade_hooks/multi_layer_query.py python/tardigrade_hooks/client.py tests/python/test_multi_layer_query.py
-git commit -m "✨ feat(hooks): multi-layer query fusion via RRF — Composite pattern"
+git commit -m "✨ feat(hooks): multi-layer query fusion via RRF (Composite pattern)"
 ```
 
 ---
 
 ### Task 5: Stacking Experiment + CLAUDE.md
 
-**Files:**
-- Create: `experiments/vague_refinement_v2_experiment.py`
-- Modify: `CLAUDE.md`
-
-- [ ] **Step 1: Write experiment script**
-
-Test all configurations on the 10-fact Sonia corpus with Qwen3-0.6B on MPS:
-1. Baseline (centered)
-2. Whitened only
-3. Whitened + token reweighting
-4. Whitened + token reweighting + multi-layer fusion
-
-Report R@5 for specific/moderate/vague per configuration.
-
-- [ ] **Step 2: Run experiment**
-
-Run: `source .venv/bin/activate && python experiments/vague_refinement_v2_experiment.py`
-
-Success criteria:
-- Specific R@5 ≥ 100% in all configs
-- Moderate R@5 ≥ 80% in all configs
-- Vague R@5 > 60% in at least one config
-
-- [ ] **Step 3: Update CLAUDE.md with results and new test counts**
-
+- [ ] **Step 1: Write experiment** testing all configurations on 10-fact Sonia corpus
+- [ ] **Step 2: Run experiment, record R@5**
+- [ ] **Step 3: Update CLAUDE.md**
 - [ ] **Step 4: Commit and push**
 
-```bash
-git add experiments/vague_refinement_v2_experiment.py CLAUDE.md
-git commit -m "📊 experiments: latent-space vague refinement — whitening + reweighting + multi-layer"
-git push origin main
-```
+Success criteria: Specific ≥ 100%, Moderate ≥ 80%, Vague > 60%.
