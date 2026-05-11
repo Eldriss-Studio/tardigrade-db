@@ -8,10 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
 import tardigrade_db
-
-EDGE_FOLLOWS = 1
-EDGE_CONTRADICTS = 2
-EDGE_SUPPORTS = 3
+from tardigrade_hooks.constants import EDGE_CONTRADICTS, EDGE_FOLLOWS, EDGE_SUPPORTS
 
 CHAT_TEMPLATE = '{% for message in messages %}{{ message["content"] }}{% endfor %}'
 

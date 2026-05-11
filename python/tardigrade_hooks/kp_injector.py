@@ -14,6 +14,12 @@
 import numpy as np
 import torch
 
+from .constants import (
+    DEFAULT_CAPTURE_LAYER_RATIO,
+    EDGE_CONTRADICTS,
+    EDGE_FOLLOWS,
+    EDGE_SUPPORTS,
+)
 from .encoding import encode_per_token
 from .multi_composer import NaiveConcatComposer
 from transformers import DynamicCache
@@ -43,7 +49,7 @@ class KnowledgePackStore:
         self.hidden_size = cfg.hidden_size
 
         if query_layer is None:
-            self.query_layer = int(self.n_layers * 0.67)
+            self.query_layer = int(self.n_layers * DEFAULT_CAPTURE_LAYER_RATIO)
         else:
             self.query_layer = query_layer
 
@@ -226,9 +232,9 @@ class KnowledgePackStore:
 
     # -- Trace-linked storage and retrieval ------------------------------------
 
-    EDGE_FOLLOWS: int = 1
-    EDGE_CONTRADICTS: int = 2
-    EDGE_SUPPORTS: int = 3
+    EDGE_FOLLOWS: int = EDGE_FOLLOWS
+    EDGE_CONTRADICTS: int = EDGE_CONTRADICTS
+    EDGE_SUPPORTS: int = EDGE_SUPPORTS
 
     def store_and_link(self, fact_text, related_pack_id, salience=80.0):
         """Store a fact and link it to an existing memory (Follows edge).
