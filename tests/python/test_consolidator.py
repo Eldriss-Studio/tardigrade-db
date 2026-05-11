@@ -1,14 +1,12 @@
 """Acceptance tests for MemoryConsolidator — multi-view consolidation engine.
 
 Stores a canonical memory, consolidates it into views, and verifies
-the resulting pack topology (edges, text, tier gating, idempotency).
+that view keys are attached to the canonical pack (parent-document
+pattern: views are retrieval surfaces, not separate packs).
 
 Uses a minimal synthetic engine (no real LLM) by pre-storing packs
 with known retrieval keys and text, then running consolidation.
 """
-
-import tempfile
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -18,14 +16,12 @@ import tardigrade_db
 from tardigrade_hooks.constants import (
     CONSOLIDATION_MIN_TIER,
     DEFAULT_VIEW_FRAMINGS,
-    EDGE_SUPPORTS,
 )
 from tardigrade_hooks.consolidator import (
     ConsolidationPolicy,
     DefaultConsolidationPolicy,
     MemoryConsolidator,
 )
-from tardigrade_hooks.view_generator import ViewGenerator
 
 
 # -- Fixtures ----------------------------------------------------------------
@@ -61,55 +57,30 @@ def env(tmp_path):
     return engine, pack_id
 
 
-# -- Stub model for view storage (no real LLM needed) -----------------------
-
-class _StubModel:
-    """Minimal stand-in: consolidator only needs the model for
-    KnowledgePackStore.store(), which we bypass in tests by directly
-    calling _store_view_pack on the consolidator."""
-    pass
-
-
-class _StubTokenizer:
-    pass
-
-
 # -- Tests -------------------------------------------------------------------
 
 class TestConsolidationBasics:
-    """Core consolidation behavior."""
+    """Core consolidation behavior — views attach to the canonical pack."""
 
-    def test_consolidate_creates_view_packs(self, env):
+    def test_consolidate_attaches_views(self, env):
         engine, pack_id = env
         consolidator = MemoryConsolidator(engine, owner=OWNER)
-        view_ids = consolidator.consolidate(pack_id)
-        assert len(view_ids) == len(DEFAULT_VIEW_FRAMINGS)
+        count = consolidator.consolidate(pack_id)
+        assert count >= 1
+        assert engine.view_count(pack_id) >= 1
 
-    def test_view_packs_linked_via_supports_edge(self, env):
+    def test_views_discoverable_via_engine(self, env):
         engine, pack_id = env
         consolidator = MemoryConsolidator(engine, owner=OWNER)
-        view_ids = consolidator.consolidate(pack_id)
-        for vid in view_ids:
-            supports = engine.pack_supports(vid)
-            assert pack_id in supports, (
-                f"View pack {vid} not linked to canonical {pack_id}"
-            )
+        consolidator.consolidate(pack_id)
+        assert engine.view_count(pack_id) > 0
 
-    def test_view_packs_have_text(self, env):
+    def test_canonical_text_unchanged(self, env):
         engine, pack_id = env
+        text_before = engine.pack_text(pack_id)
         consolidator = MemoryConsolidator(engine, owner=OWNER)
-        view_ids = consolidator.consolidate(pack_id)
-        for vid in view_ids:
-            text = engine.pack_text(vid)
-            assert text is not None and len(text.strip()) > 0
-
-    def test_view_texts_differ_from_canonical(self, env):
-        engine, pack_id = env
-        consolidator = MemoryConsolidator(engine, owner=OWNER)
-        view_ids = consolidator.consolidate(pack_id)
-        canonical_text = engine.pack_text(pack_id)
-        for vid in view_ids:
-            assert engine.pack_text(vid) != canonical_text
+        consolidator.consolidate(pack_id)
+        assert engine.pack_text(pack_id) == text_before
 
     def test_canonical_importance_unchanged(self, env):
         engine, pack_id = env
@@ -128,36 +99,35 @@ class TestTierGating:
         engine = _make_engine(tmp_path)
         pack_id = _write_pack(engine, FACT_TEXT, salience=SALIENCE_DRAFT)
         consolidator = MemoryConsolidator(engine, owner=OWNER)
-        view_ids = consolidator.consolidate(pack_id)
-        assert view_ids == []
+        count = consolidator.consolidate(pack_id)
+        assert count == 0
 
     def test_validated_pack_consolidated(self, env):
         engine, pack_id = env
         consolidator = MemoryConsolidator(engine, owner=OWNER)
-        view_ids = consolidator.consolidate(pack_id)
-        assert len(view_ids) > 0
+        count = consolidator.consolidate(pack_id)
+        assert count > 0
 
 
 class TestIdempotency:
-    """Consolidation must not create duplicate views."""
+    """Consolidation must not attach duplicate views."""
 
-    def test_second_consolidation_creates_no_new_views(self, env):
+    def test_second_consolidation_adds_no_views(self, env):
         engine, pack_id = env
         consolidator = MemoryConsolidator(engine, owner=OWNER)
-        first_views = consolidator.consolidate(pack_id)
-        second_views = consolidator.consolidate(pack_id)
-        assert second_views == [], (
-            f"Expected no new views on second call, got {second_views}"
-        )
+        first = consolidator.consolidate(pack_id)
+        assert first > 0
+        second = consolidator.consolidate(pack_id)
+        assert second == 0
 
-    def test_total_pack_count_stable_after_double_consolidation(self, env):
+    def test_view_count_stable_after_double_consolidation(self, env):
         engine, pack_id = env
         consolidator = MemoryConsolidator(engine, owner=OWNER)
         consolidator.consolidate(pack_id)
-        count_after_first = len(engine.list_packs(OWNER))
+        vc1 = engine.view_count(pack_id)
         consolidator.consolidate(pack_id)
-        count_after_second = len(engine.list_packs(OWNER))
-        assert count_after_first == count_after_second
+        vc2 = engine.view_count(pack_id)
+        assert vc1 == vc2
 
 
 class TestConsolidateAll:
@@ -167,12 +137,11 @@ class TestConsolidateAll:
         engine = _make_engine(tmp_path)
         p1 = _write_pack(engine, "Fact one about Alice.")
         p2 = _write_pack(engine, "Fact two about Bob.")
-
         consolidator = MemoryConsolidator(engine, owner=OWNER)
         result = consolidator.consolidate_all()
         assert p1 in result
         assert p2 in result
-        assert all(len(views) == len(DEFAULT_VIEW_FRAMINGS) for views in result.values())
+        assert all(count > 0 for count in result.values())
 
 
 class TestConsolidationPolicy:
@@ -223,9 +192,9 @@ class TestEngineViewKeys:
 
     def test_view_match_returns_canonical(self, tmp_path):
         engine = tardigrade_db.Engine(str(tmp_path), vamana_threshold=9999)
-        ckey = np.array([1,0,0,0,0,0,0,0], dtype=np.float32)
+        ckey = np.array([1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32)
         pid = engine.mem_write_pack(OWNER, ckey, [(0, np.zeros(8, dtype=np.float32))], 80.0, text="Fact")
-        vkey = np.array([0,1,0,0,0,0,0,0], dtype=np.float32)
+        vkey = np.array([0, 1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
         engine.add_view_keys(pid, [vkey])
         results = engine.mem_read_pack(vkey, 5, OWNER)
         pids = [r["pack_id"] for r in results]
