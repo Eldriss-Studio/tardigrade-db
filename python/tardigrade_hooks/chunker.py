@@ -125,21 +125,29 @@ class TextChunker:
         stride = max(1, self._max_tokens - self._overlap_tokens)
         start = 0
         idx = 0
+        search_from = 0
 
         while start < len(all_tokens):
             end = min(start + self._max_tokens, len(all_tokens))
             chunk_tokens = all_tokens[start:end]
             chunk_text = self._tokenizer.decode(chunk_tokens)
 
-            start_char = text.find(chunk_tokens[0], 0 if not chunks else chunks[-1].start_char)
-            if start_char < 0:
-                start_char = 0
-            end_char = start_char + len(chunk_text)
+            # Find chunk text in original — handles both str and int tokens
+            pos = text.find(chunk_text.strip(), search_from)
+            if pos < 0:
+                # Decoded text may have extra whitespace; fuzzy match
+                first_word = chunk_text.strip().split()[0] if chunk_text.strip() else ""
+                pos = text.find(first_word, search_from) if first_word else search_from
+                if pos < 0:
+                    pos = search_from
+            start_char = pos
+            end_char = min(start_char + len(chunk_text.strip()), len(text))
+            search_from = start_char + 1
 
             chunks.append(Chunk(
-                text=chunk_text,
+                text=chunk_text.strip(),
                 start_char=start_char,
-                end_char=min(end_char, len(text)),
+                end_char=end_char,
                 chunk_index=idx,
                 token_count=len(chunk_tokens),
             ))
