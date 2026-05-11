@@ -5,6 +5,8 @@ BA = "BA"
 nothink = "nothink"
 # Sergey Brin (PageRank co-author)
 Brin = "Brin"
+# LaSER paper (Latent Space Explicit Reasoning)
+SER = "SER"
 
 [files]
 extend-exclude = ["Cargo.lock", "*.bin", "*.ptx", "*.cubin"]
