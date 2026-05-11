@@ -56,6 +56,18 @@ contradicted, the corresponding subsystem would require redesign.
 | **FwPKM** (Fast-weight Product Key Memory) | arXiv:2601.00671 | Dynamic fast-weight episodic memory updated during inference; alternative to fixed storage | `docs/competitors/competitors-search-2.md` |
 | **Generalized Key-Value Memory** | arXiv:2203.06223 | Decoupled memory dimension from support vectors; external KV memory in hardware | `docs/competitors/competitors-search-2.md` |
 
+### A3b. Index-Time Augmentation & Multi-View Retrieval
+
+| Paper | arXiv / DOI | What it justifies | Where cited |
+|---|---|---|---|
+| **HyPE** (Hypothetical Prompt Embeddings; Vake et al., 2025) | [SSRN:5139335](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5139335) | Index-time question generation per chunk — embed questions as retrieval keys, return parent chunk for synthesis. +42pp precision, +45pp recall on certain datasets. Key insight: LLM-generated questions (not rule-based) are required for discriminative views; views are retrieval keys only, never returned as results | `docs/refs/file-ingest-as-kv-memory.md`, `experiments/multiview_diagnosis.py` |
+| **Doc2Query--: When Less is More** (Gospodinov & MacAvaney, ECIR 2023) | [arXiv:2301.03266](https://arxiv.org/abs/2301.03266) | Relevance filtering of generated query expansions before indexing. Uncontrolled generation produces hallucinated/redundant queries that harm retrieval — **filtering improves effectiveness by 16% while cutting index size by 33%**. Directly explains TardigradeDB's multi-view failure: rule-based views are low-diversity expansions that dilute the index | `experiments/multiview_diagnosis.py` |
+| **Doc2Query++** (Topic-Coverage Dual-Index Fusion, October 2025) | [arXiv:2510.09557](https://arxiv.org/abs/2510.09557) | Dual-Index Fusion — text and query expansions in separate indexes, fused via RRF at retrieval. Solves the noise-from-concatenation problem that degrades dense retrieval when expansions are appended directly. Proposed fix architecture for TardigradeDB's view dilution | `experiments/multiview_diagnosis.py` |
+| **When More Reformulations Hurt: Avoiding Drift** (May 2026) | [arXiv:2605.00560](https://arxiv.org/html/2605.00560) | PRF-induced query drift when initial retrieved set contains off-topic documents. Adding expansion terms shifts query away from original intent. Explains why TardigradeDB's question-framing views ("What did Sonia translated do?") act as self-generated off-topic PRF, degrading moderate R@5 from 80%→20% | `experiments/multiview_diagnosis.py` |
+| **RAPTOR** (Recursive Abstractive Processing for Tree-Organized Retrieval; Sarthi et al., ICLR 2024) | [arXiv:2401.18059](https://arxiv.org/abs/2401.18059) | Hierarchical summarization tree — abstract nodes find neighborhoods, leaf nodes provide answers. Prevents abstract summaries from competing with specific leaves. +20% absolute accuracy on QuALITY. Relevant pattern: hierarchy prevents the view-canonical competition problem | `experiments/multiview_diagnosis.py` |
+| **Deliberation in Latent Space via Differentiable Cache Augmentation** (Liu et al., Google DeepMind, ICML 2025) | [arXiv:2412.17747](https://arxiv.org/abs/2412.17747) | Offline coprocessor augments KV cache with trained latent embeddings — extends cache, doesn't replace it. +10% GSM8K. Closest to what TardigradeDB could do natively: augment KV cache with learned "view embeddings" rather than storing separate view packs | `experiments/multiview_diagnosis.py` |
+| **Multi-Vector Retriever / Parent Document Retriever** (LangChain pattern) | [blog.langchain.com](https://blog.langchain.com/semi-structured-multi-modal-rag/) | Decouples retrieval representation from answer source. Summaries/questions/paraphrases as retrieval keys all resolve to the same parent document — parent is returned, never the summary itself. The architectural pattern TardigradeDB's consolidator should follow | `experiments/multiview_diagnosis.py` |
+
 ### A4. Agent Memory Systems
 
 | Paper | arXiv / DOI | What it justifies | Where cited |
@@ -66,6 +78,11 @@ contradicted, the corresponding subsystem would require redesign.
 | **"From Prompt-Response to Goal-Directed Systems"** | arXiv:2602.10479 | Agentic AI architecture framework; context for evolution toward stateful memory-equipped systems | `docs/refs/AI Agentic Memory System Efficiency.md` |
 | **Cost and accuracy of long-term graph memory in distributed LLM-based multi-agent systems** | arXiv:2601.07978 | Trade-offs in distributed graph memory; cost/accuracy analysis for graph-based approaches | `docs/refs/AI Agentic Memory System Efficiency.md` |
 | **Kelle** | arXiv:2510.16040 | KV caching on eDRAM for edge devices; hardware-aware KV persistence; eviction and hardware layout optimization | `docs/competitors/competitors-search-2.md` |
+| **SimpleMem** (Liu et al., 2026) | [arXiv:2601.02553](https://arxiv.org/html/2601.02553v1) | Three-stage pipeline: entropy-aware filtering → recursive memory consolidation (merges related units with dedup) → adaptive query-aware retrieval. Multi-view indexing (dense + BM25 + metadata). +26.4% F1, 30× token reduction. Omni-SimpleMem (April 2026) achieves SOTA on LoCoMo (F1=0.613) and Mem-Gallery (F1=0.810). Key insight: consolidation *reduces* redundancy rather than adding competing entries | `experiments/multiview_diagnosis.py` |
+| **ENGRAM** (2025) | [arXiv:2511.12960](https://arxiv.org/abs/2511.12960) | Typed memory partitioning (episodic/semantic/procedural) with per-type top-k retrieval then merge with dedup. Beats full-context baseline by +15 points on LongMemEval using ~1% of tokens. Key insight: typed partitioning prevents cross-type competition — directly relevant to preventing view-canonical competition in TardigradeDB | `experiments/multiview_diagnosis.py` |
+| **LiCoMemory** (2025) | [arXiv:2511.01448](https://arxiv.org/abs/2511.01448) | CogniGraph: lightweight hierarchical graph using entities and relations as semantic indexing layers, with temporal + hierarchy-aware search and unified reranking. +26.6pp on multi-session, +20.7pp on temporal reasoning subsets of LongMemEval. Architecture: session → entity-relation → chunk levels | `experiments/multiview_diagnosis.py` |
+| **MemOS** (MemTensor, 2025) | [arXiv:2505.22101](https://arxiv.org/abs/2505.22101) | Memory Operating System: elevates memory to first-class operational resource. Three-layer architecture (API / scheduling+management / storage+infrastructure). Three memory types: parametric, activation, plaintext. Governance: scheduling, layering, permission control, exception handling. Confirms architectural direction of treating memory as a managed OS resource | `experiments/multiview_diagnosis.py` |
+| **MemoryOS** (BAI-LAB, EMNLP 2025 Oral) | [GitHub](https://github.com/BAI-LAB/MemoryOS) | Three-level storage: short/mid/long-term. FIFO paging, dynamic information movement between levels | `experiments/multiview_diagnosis.py` |
 
 ### A5. Additional arXiv Citations (refs documents)
 
@@ -84,6 +101,9 @@ completeness.
 - arXiv:2507.22925 — G-Memory: memory system architecture (cited in `docs/refs/AI-db-discussion.md`)
 - arXiv:2511.16131v1 — Advanced memory architectures
 - arXiv:2402.01763v3 — Transformer memory architecture papers
+- arXiv:2604.01707v1 — Memory in the LLM Era: Modular Architectures and Strategies [benchmark + analysis]
+- arXiv:2605.03675 — MemTier: Tiered Memory Architecture and Retrieval Bottleneck Analysis for Long-Running Agents
+- arXiv:2603.04814v1 — Beyond the Context Window: Cost-Performance Analysis of Fact-Based Memory vs Long-Context LLMs
 
 ### A6. Neuroscience Foundation
 
@@ -211,6 +231,7 @@ completeness.
 | **K\*K retrieval** (query with K, store K) | K vectors share a massive common component across all sequences (~4000 cross-sentence dot product at non-sink positions vs ~200 content-specific signal difference). Confirmed bad by FIER, ShadowKV, "From QKV to K/KV" — symmetric attention cannot represent directional query-to-memory relationships |
 | **HyDE** (Hypothetical Document Embeddings; Gao et al., ACL 2023, arXiv:2212.10496) | Generate a hypothetical answer with an LLM, embed it, retrieve. Effective for vocabulary-mismatched/vague queries in text-based RAG, but **rejected for TardigradeDB's retrieval path**: requires an extra LLM forward pass per query (500–2000ms per the dev community, e.g., dev.to/aarjay_singh "Why I stopped putting LLMs in my agent memory retrieval path"). The agent IS the LLM — having it generate a hypothetical inside its own retrieval loop is architecturally backwards and breaks the agent-step latency budget. Latent-space PRF (Rocchio in K-space) achieves the same vocabulary-bridging effect with no LLM call |
 | **Cross-encoder reranking on stored text** (BGE-Reranker, MiniLM as a primary stage) | Operates on text. TardigradeDB's primary stored unit is KV tensors, not text. Memo text in `text_store` is optional and often absent. Making vague-query handling depend on memo text would split the retrieval contract. Kept as a **future optional Stage-3** when memos are present (see B1 BGE-Reranker entry); rejected as the primary fix |
+| **Rule-based multi-view consolidation** (views as competing packs in same index) | Tested 2026-05-11: 3 rule-based framings (summary/question/paraphrase) stored as separate packs. Moderate R@5 dropped from 80%→20% — views dilute top-k. Question views near-identical across facts (cos~0.75), crowd out canonicals. Doc2Query-- predicted this: uncontrolled/low-diversity expansions harm retrieval. Fix requires either (a) dual-index fusion (Doc2Query++), (b) parent-document pattern (HyPE), or (c) LLM-powered views + quality filter |
 | **Text-based BM25 + RRF hybrid** (as primary stage) | Same text dependency as cross-encoder reranking. Adds value only when memos exist and are descriptive. RRF (Cormack 2009) is still adopted as a fusion mechanism for the latent-space PRF stage in case PRF drifts (see A2) — we use the rank-fusion math without the BM25 sparse signal |
 
 ### C3. Architectural Patterns Named in Plans & Docs
@@ -267,6 +288,7 @@ completeness.
 | **Scorer comparison** | ColBERT cosine_sum_max: 53.3%; per_head_max Q*K: 63.3%; hidden states + Top5Avg: 100%. K*K causes gravity well (cross-sentence dot product ~4000, content signal ~200) | `docs/experiments/kv-cache-validation.md` |
 | **RAG baseline comparison** | intfloat/e5-small-v2 achieves 100% recall@1-5 on 100 memories (30 positive queries); multi-hop: RAG 5/10, TardigradeDB 0/10 (latent hidden states miss second-hop entity names) | `docs/experiments/kv-cache-validation.md`, `docs/experiments/multi-memory-injection.md` |
 | **Trace-Boosted Retrieval sweep** | Hard plateau: any boost_factor > 0 fixes the same 3/9 failures; optimal = 0.3; 5 failures immune to boosting (background memories scored higher) | `docs/experiments/multi-memory-injection.md` |
+| **Multi-view consolidation diagnosis** | Rule-based views (summary/question/paraphrase) **degrade** moderate R@5 from 80%→20% by diluting the result set. Root cause: question-framing views ("What did Sonia translated do?") are near-identical across facts (cos~0.75 between question views of different facts), crowding top-k with views from wrong facts. Paraphrase views cos=0.99 to canonical (no retrieval value). File ingest 100% R@3 (works perfectly). Three fix architectures identified: dual-index (Doc2Query++), parent-document (HyPE), LLM-powered views + quality filter | `experiments/multiview_diagnosis.py`, `experiments/file_ingest_and_multiview_experiment.py` |
 
 ---
 
@@ -346,6 +368,12 @@ completeness.
 | `github.com/punkpeye/awesome-mcp-servers` | MCP server collection |
 | `byterover.dev/blog` (assumed repo) | AKL algorithm reference |
 | `github.com/MemTensor/MemOS` | MemOS 2.0 source; OpenClaw plugin and memory OS architecture |
+| `github.com/aiming-lab/SimpleMem` | SimpleMem: parallel multi-view agent memory retrieval; Omni-SimpleMem multimodal extension |
+| `github.com/Shichun-Liu/Agent-Memory-Paper-List` | Curated paper list for "Memory in the Age of AI Agents" survey (arXiv:2512.13564) |
+| `github.com/DEEP-PolyU/Awesome-GraphMemory` | Survey of graph-based agent memory: taxonomy, techniques, applications |
+| `github.com/BAI-LAB/MemoryOS` | MemoryOS (EMNLP 2025 Oral): three-level storage for personalized AI agents |
+| `github.com/parthsarthi03/raptor` | RAPTOR: recursive abstractive processing for tree-organized retrieval |
+| `github.com/NirDiamant/RAG_Techniques` | RAG techniques collection including HyPE implementation notebook |
 
 ---
 
@@ -372,6 +400,7 @@ This section maps each major TardigradeDB design decision to its external valida
 | **vLLM KV Connector v1 is prefix-cache only** (no cross-prompt injection possible) | vLLM source `base.py:451-480`: contract documentation + `scheduler.py` tracing + synthetic-fact A/B test (cold and primed byte-identical) | High — verified against source + experiment |
 | MLP adapter over Orthogonal Procrustes for cross-family retrieval | Procrustes empirically plateaus at ~47% R@5; MLP achieves 76.7% on same Qwen→GPT-2 corpus | High — empirical ablation |
 | Agent provides link intelligence; engine stores the decision | Phase 33 experiment: auto-linking via hidden-state similarity failed (30% accuracy vs 70% with explicit links); confirmed by field (Mem0, Cognee, Hindsight all require LLM extraction or trained probes for entity linking) | High — empirical + competitive validation |
+| **Multi-view consolidation: views as retrieval keys, not competing results** | Doc2Query-- (arXiv:2301.03266) documents saturation/dilution failure; Doc2Query++ (arXiv:2510.09557) proposes dual-index fusion; HyPE (SSRN:5139335) shows LLM-generated questions as retrieval-only keys with parent resolution; ENGRAM (arXiv:2511.12960) shows typed partitioning prevents cross-type competition; multi-view diagnosis experiment (2026-05-11) confirmed rule-based views degrade moderate R@5 from 80%→20% via index dilution | High — empirical + strong literature consensus |
 | **Latent-space PRF (Rocchio in K-space) over HyDE/cross-encoder for vague-query refinement** | Three-way constraint analysis: (1) HyDE adds 500–2000ms LLM call per query, breaks agent-loop budget; (2) cross-encoder/BM25 require memo text which is optional in TardigradeDB; (3) Rocchio (1971) generalized to dense vectors by Yu et al. CIKM 2021 (arXiv:2108.13454) and validated for late-interaction by ColBERT-PRF (arXiv:2106.11251) — pure latent-space, no LLM, no text dependency, operates on K vectors already stored. Empirical validation pending the refinement implementation | Medium — strong literature foundation; empirical confirmation pending |
 
 ---
@@ -417,6 +446,8 @@ reviewed:
 
 ---
 
-*Generated: 2026-05-01. Updated: 2026-05-02. Sources: codebase + docs + `.claude/plans/` +
+*Generated: 2026-05-01. Updated: 2026-05-11. Sources: codebase + docs + `.claude/plans/` +
 Resumancer session journal (40 entries, 2026-04 tardigrade-db branch) + Codex/Claude sessions
-2026-01 through 2026-05.*
+2026-01 through 2026-05. May 2026 update: multi-view consolidation diagnosis + 20 new references
+(HyPE, Doc2Query--/++, RAPTOR, SimpleMem, ENGRAM, LiCoMemory, MemOS, Deliberation in Latent Space,
+parent-document retriever pattern, query drift literature).*
