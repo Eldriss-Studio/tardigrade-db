@@ -5,7 +5,7 @@ from __future__ import annotations
 from tdb_bench.adapters import LettaAdapter, Mem0Adapter, TardigradeAdapter
 from tdb_bench.contracts import BenchmarkAdapter, DatasetAdapter, Evaluator
 from tdb_bench.datasets import LoCoMoDatasetAdapter, LongMemEvalDatasetAdapter
-from tdb_bench.evaluators import DeterministicEvaluator, LLMGatedEvaluator
+from tdb_bench.evaluators import DeterministicEvaluator, DeepSeekProvider, LLMGatedEvaluator, OpenAIProvider
 from tdb_bench.errors import ConfigError
 
 
@@ -37,13 +37,14 @@ class RegistryFactory:
     @staticmethod
     def create_evaluator(evaluator_cfg: dict) -> Evaluator:
         mode = evaluator_cfg.get("mode", "deterministic")
-        answerer_model = evaluator_cfg.get("answerer_model", "deterministic-answerer")
-        judge_model = evaluator_cfg.get("judge_model", "deterministic-judge")
+        judge_model = evaluator_cfg.get("judge_model", "gpt-4.1-mini")
 
         if mode == "deterministic":
             return DeterministicEvaluator()
-        if mode == "llm":
-            return LLMGatedEvaluator(answerer_model=answerer_model, judge_model=judge_model)
-        if mode == "llm_gated":
-            return LLMGatedEvaluator(answerer_model=answerer_model, judge_model=judge_model)
+        if mode in ("llm", "llm_gated"):
+            providers = [
+                DeepSeekProvider(),
+                OpenAIProvider(model=judge_model),
+            ]
+            return LLMGatedEvaluator(providers=providers)
         raise ConfigError(f"Unknown evaluator mode: {mode}")
