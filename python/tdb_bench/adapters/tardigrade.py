@@ -44,6 +44,7 @@ _MODEL_NAME = os.getenv("TDB_BENCH_MODEL", "Qwen/Qwen3-0.6B")
 _DEVICE = os.getenv("TDB_BENCH_DEVICE", "cuda")
 _REFINEMENT = os.getenv("TDB_REFINEMENT_MODE", "none")
 _RERANK_MODEL = os.getenv("TDB_BENCH_RERANK_MODEL", "")  # empty disables reranker
+_RLS_MODE = os.getenv("TDB_RLS_MODE", "none")
 
 # Module-level model cache so repeated ``adapter = TardigradeAdapter()``
 # calls (one per repeat in BenchmarkRunner) don't re-download/re-load
@@ -139,10 +140,35 @@ class TardigradeAdapter(BenchmarkAdapter):
                 use_hidden_states=True,
             )
             self._mode = "native"
+            self._rls = None
+            if _RLS_MODE != "none":
+                from tardigrade_hooks.rls import (  # type: ignore
+                    KeywordExpansionStrategy,
+                    MultiPhrasingStrategy,
+                    ReflectiveLatentSearch,
+                )
+                strategies = []
+                if _RLS_MODE in ("keyword", "both"):
+                    strategies.append(KeywordExpansionStrategy())
+                if _RLS_MODE in ("multiphrasing", "both"):
+                    strategies.append(MultiPhrasingStrategy())
+                if strategies:
+                    rls_model, rls_tokenizer, rls_query_layer = _load_model_cached()
+                    self._rls = ReflectiveLatentSearch(
+                        engine=self._engine,
+                        model=rls_model,
+                        tokenizer=rls_tokenizer,
+                        query_layer=rls_query_layer,
+                        hidden_size=rls_model.config.hidden_size,
+                        owner=1,
+                        k=5,
+                        strategies=strategies,
+                    )
         except Exception as exc:
             # Capture why we fell back so metadata() can surface it.
             self._engine = None
             self._hook = None
+            self._rls = None
             self._mode = os.getenv("TDB_BENCH_FALLBACK_MODE", "in_memory")
             self._fallback_reason = str(exc)[:200]
 
@@ -188,6 +214,30 @@ class TardigradeAdapter(BenchmarkAdapter):
                 latency_ms=(time.perf_counter() - start) * 1000.0,
                 status="ok",
                 error=None,
+            )
+
+        if self._rls is not None:
+            start = time.perf_counter()
+            handles = self._rls.query(item.question, top_k=top_k)
+            latency_ms = (time.perf_counter() - start) * 1000.0
+
+            evidence: list[str] = []
+            answer = ""
+            for h in handles[: max(1, top_k)]:
+                mapped = self._cell_to_item.get(int(h.cell_id))
+                if mapped is None:
+                    continue
+                evidence.append(mapped.context)
+                if not answer:
+                    answer = mapped.ground_truth
+            if not answer:
+                return AdapterQueryResult(
+                    answer="", evidence=[], latency_ms=latency_ms,
+                    status="failed", error="no_rls_match",
+                )
+            return AdapterQueryResult(
+                answer=answer, evidence=evidence,
+                latency_ms=latency_ms, status="ok", error=None,
             )
 
         import torch  # type: ignore
@@ -267,10 +317,35 @@ class TardigradeAdapter(BenchmarkAdapter):
                     model_config=model.config, model=model,
                     use_hidden_states=True,
                 )
+                self._rls = None
+                if _RLS_MODE != "none":
+                    from tardigrade_hooks.rls import (  # type: ignore
+                        KeywordExpansionStrategy,
+                        MultiPhrasingStrategy,
+                        ReflectiveLatentSearch,
+                    )
+                    strategies = []
+                    if _RLS_MODE in ("keyword", "both"):
+                        strategies.append(KeywordExpansionStrategy())
+                    if _RLS_MODE in ("multiphrasing", "both"):
+                        strategies.append(MultiPhrasingStrategy())
+                    if strategies:
+                        rls_model, rls_tokenizer, rls_query_layer = _load_model_cached()
+                        self._rls = ReflectiveLatentSearch(
+                            engine=self._engine,
+                            model=rls_model,
+                            tokenizer=rls_tokenizer,
+                            query_layer=rls_query_layer,
+                            hidden_size=rls_model.config.hidden_size,
+                            owner=1,
+                            k=5,
+                            strategies=strategies,
+                        )
             except Exception:
                 # If a reset fails we degrade to fallback rather than crash the run.
                 self._engine = None
                 self._hook = None
+                self._rls = None
                 self._mode = "in_memory"
 
     def metadata(self) -> dict[str, str]:
@@ -278,6 +353,7 @@ class TardigradeAdapter(BenchmarkAdapter):
             "adapter": self.name,
             "mode": self._mode,
             "refinement_mode": self._refinement,
+            "rls_mode": _RLS_MODE,
             "model": _MODEL_NAME if self._mode == "native" else "lexical",
             "reranker_model": _RERANK_MODEL if self._reranker is not None else "",
         }
