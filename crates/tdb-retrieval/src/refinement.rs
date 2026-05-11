@@ -143,6 +143,30 @@ impl RefinementStrategy for LatentPrfStrategy {
     }
 }
 
+/// ZCA whitening: transform query + stored tokens by W = U * diag(1/sqrt(lambda)) * U^T
+/// before scoring. Decorrelates dimensions and equalizes variance, making the
+/// dot product sensitive to semantic differences rather than dominant activation
+/// directions. Falls back to mean-centered if corpus is too small for eigendecomposition.
+#[derive(Debug)]
+pub struct WhiteningStrategy;
+
+impl RefinementStrategy for WhiteningStrategy {
+    fn refine(
+        &self,
+        retriever: &mut PerTokenRetriever,
+        query_key: &[f32],
+        first_stage: Vec<RetrievalResult>,
+        k: usize,
+        _owner_filter: Option<OwnerId>,
+    ) -> Vec<RetrievalResult> {
+        whitened_rescore(retriever, query_key, first_stage, k)
+    }
+
+    fn name(&self) -> &'static str {
+        "whitened"
+    }
+}
+
 /// Factory: create a boxed strategy from a name string (for Python bindings).
 ///
 /// Accepted names: `"none"`, `"centered"` / `"mean_centered"`, `"prf"` / `"latent_prf"`.
@@ -161,6 +185,7 @@ pub fn strategy_from_name(
             beta: beta.unwrap_or(0.3),
             k_prime: k_prime.unwrap_or(3),
         })),
+        "whitened" | "zca" => Some(Box::new(WhiteningStrategy)),
         _ => None,
     }
 }
@@ -253,6 +278,74 @@ fn mean_centered_rescore(
     rescored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     rescored.truncate(k);
     rescored
+}
+
+/// Re-score top candidates after ZCA whitening both query and stored tokens.
+///
+/// Falls back to [`mean_centered_rescore`] when the corpus is too small for
+/// eigendecomposition (fewer than 2 tokens).
+fn whitened_rescore(
+    retriever: &mut PerTokenRetriever,
+    query_key: &[f32],
+    first_stage: Vec<RetrievalResult>,
+    k: usize,
+) -> Vec<RetrievalResult> {
+    if first_stage.is_empty() {
+        return first_stage;
+    }
+    let Some(w_matrix) = retriever.whitening_matrix() else {
+        // Corpus too small — fall back to mean-centered.
+        return mean_centered_rescore(retriever, query_key, first_stage, k);
+    };
+    // Copy to avoid borrow conflict with retriever methods below.
+    let w_matrix = w_matrix.to_vec();
+    let Some(mean) = retriever.corpus_mean() else {
+        return first_stage;
+    };
+    let dim = mean.len();
+    let Some(query_tokens) = parse_query_tokens(query_key, dim) else {
+        return first_stage;
+    };
+
+    let whitened_query: Vec<Vec<f32>> = query_tokens
+        .iter()
+        .map(|tok| mat_vec_mul(&w_matrix, &subtract_in_place(tok.clone(), &mean), dim))
+        .collect();
+
+    let inv_sqrt_dk = 1.0 / (dim as f32).sqrt();
+    let top_n = retriever.top_n();
+
+    let mut rescored: Vec<RetrievalResult> = first_stage
+        .into_iter()
+        .map(|res| {
+            let mut dots: Vec<f32> = Vec::new();
+            for (stored_token, _owner) in retriever.dequantized_tokens_for_cell(res.cell_id) {
+                if stored_token.len() != dim {
+                    continue;
+                }
+                let ws = mat_vec_mul(&w_matrix, &subtract_in_place(stored_token, &mean), dim);
+                for wq in &whitened_query {
+                    dots.push(dot(wq, &ws) * inv_sqrt_dk);
+                }
+            }
+            let score = top_n_avg(&mut dots, top_n);
+            RetrievalResult { cell_id: res.cell_id, owner: res.owner, score }
+        })
+        .collect();
+
+    rescored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    rescored.truncate(k);
+    rescored
+}
+
+/// Multiply a dim x dim row-major matrix by a dim-length vector.
+fn mat_vec_mul(matrix: &[f32], vec: &[f32], dim: usize) -> Vec<f32> {
+    let mut result = vec![0.0_f32; dim];
+    for i in 0..dim {
+        let row = &matrix[i * dim..(i + 1) * dim];
+        result[i] = row.iter().zip(vec.iter()).map(|(a, b)| a * b).sum();
+    }
+    result
 }
 
 /// Rocchio-in-K-space: expand query toward centroid of top-K' results, re-retrieve.
@@ -473,6 +566,28 @@ mod tests {
         let enum_mc_ids: Vec<_> = enum_mc.iter().map(|r| r.cell_id).collect();
         let trait_mc_ids: Vec<_> = trait_mc.iter().map(|r| r.cell_id).collect();
         assert_eq!(enum_mc_ids, trait_mc_ids);
+    }
+
+    #[test]
+    fn whitened_produces_different_scores_than_mean_centered() {
+        let mut r = populated_retriever();
+        let q = encode_per_token_keys(&[&[0.7_f32, 0.3, 0.1, 0.0][..]]);
+        let first = r.query(&q, 3, Some(OWNER));
+        let mc = MeanCenteredStrategy.refine(&mut r, &q, first.clone(), 3, Some(OWNER));
+        let wh = WhiteningStrategy.refine(&mut r, &q, first, 3, Some(OWNER));
+        let mc_scores: Vec<f32> = mc.iter().map(|r| r.score).collect();
+        let wh_scores: Vec<f32> = wh.iter().map(|r| r.score).collect();
+        assert_ne!(mc_scores, wh_scores);
+    }
+
+    #[test]
+    fn whitened_falls_back_when_corpus_too_small() {
+        let mut r = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
+        r.insert(0, OWNER, &encode_per_token_keys(&[&[1.0_f32, 0.0, 0.0, 0.0]]));
+        let q = encode_per_token_keys(&[&[1.0_f32, 0.0, 0.0, 0.0][..]]);
+        let first = r.query(&q, 1, Some(OWNER));
+        let refined = WhiteningStrategy.refine(&mut r, &q, first, 1, Some(OWNER));
+        assert!(!refined.is_empty());
     }
 
     #[test]
