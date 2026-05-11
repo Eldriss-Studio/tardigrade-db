@@ -35,6 +35,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
+from tardigrade_hooks.constants import DEFAULT_CAPTURE_LAYER_RATIO
 from tdb_bench.contracts import BenchmarkAdapter
 from tdb_bench.models import AdapterQueryResult, BenchmarkItem
 
@@ -61,7 +62,7 @@ def _load_model_cached() -> tuple[Any, Any, int]:
         )
         model = model.to(_DEVICE).eval()
         n_layers = model.config.num_hidden_layers
-        query_layer = int(n_layers * 0.67)
+        query_layer = int(n_layers * DEFAULT_CAPTURE_LAYER_RATIO)
         _MODEL_CACHE["model"] = model
         _MODEL_CACHE["tokenizer"] = tokenizer
         _MODEL_CACHE["query_layer"] = query_layer

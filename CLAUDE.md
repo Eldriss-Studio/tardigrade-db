@@ -132,6 +132,7 @@ Four-layer system treating memory as a managed OS resource:
 - `docs/refs/AI Agentic Memory System Efficiency.md` — Comprehensive industry analysis (Mem0, Letta, Zep, ByteRover benchmarks, economics)
 - `docs/competitors/competitors-search-1.md` — Direct competitors by architectural pillar (MemArt, RelayCaching, Aeon, ByteRover, Letta, Genesys, SpaceTimeDB)
 - `docs/competitors/competitors-search-2.md` — KV-cache and weights-as-memory research landscape (LMCache, LRAgent, FwPKM, MemoryLLM, PRIME)
+- `docs/refs/file-ingest-as-kv-memory.md` — Research memo: file→KV-tensor ingestion feasibility, multi-view consolidation, RoPE/cross-attention complications, storage sizing
 
 ## Competitive Positioning
 
