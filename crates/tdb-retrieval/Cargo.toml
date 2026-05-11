@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 tdb-core = { workspace = true }
+faer = "0.24"
 
 [dev-dependencies]
 criterion = { workspace = true }

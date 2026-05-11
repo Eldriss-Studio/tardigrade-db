@@ -175,6 +175,15 @@ pub struct PerTokenRetriever {
     corpus_sum: Vec<f32>,
     /// Number of f32 token vectors that have contributed to `corpus_sum`.
     corpus_token_count: usize,
+    /// Running sum of outer products (`x_j * x_k`) across all tokens, stored
+    /// as a flat `dim*dim` matrix in row-major order. Used to compute corpus
+    /// covariance for ZCA whitening.
+    corpus_sq_sum: Vec<f32>,
+    /// Cached ZCA whitening matrix (dim*dim, row-major). Invalidated when
+    /// `corpus_token_count` changes.
+    whitening_cache: Option<Vec<f32>>,
+    /// Token count at which `whitening_cache` was last computed.
+    whitening_cache_count: usize,
 }
 
 impl PerTokenRetriever {
@@ -200,6 +209,9 @@ impl PerTokenRetriever {
             last_scored_cell_count: 0,
             corpus_sum: Vec::new(),
             corpus_token_count: 0,
+            corpus_sq_sum: Vec::new(),
+            whitening_cache: None,
+            whitening_cache_count: 0,
         }
     }
 
@@ -243,6 +255,48 @@ impl PerTokenRetriever {
         Some(self.corpus_sum.iter().map(|s| s * inv).collect())
     }
 
+    /// Corpus covariance matrix (dim x dim, row-major), or `None` if fewer
+    /// than 2 tokens have been inserted.
+    ///
+    /// Computed from the running sums: `Cov[j,k] = E[x_j*x_k] - E[x_j]*E[x_k]`.
+    pub fn corpus_covariance(&self) -> Option<Vec<f32>> {
+        if self.corpus_token_count < 2 || self.corpus_sum.is_empty() {
+            return None;
+        }
+        let dim = self.corpus_sum.len();
+        if self.corpus_sq_sum.len() != dim * dim {
+            return None;
+        }
+        let n = self.corpus_token_count as f32;
+        let mean: Vec<f32> = self.corpus_sum.iter().map(|s| s / n).collect();
+        let mut cov = vec![0.0_f32; dim * dim];
+        for j in 0..dim {
+            for k in 0..dim {
+                cov[j * dim + k] = self.corpus_sq_sum[j * dim + k] / n - mean[j] * mean[k];
+            }
+        }
+        Some(cov)
+    }
+
+    /// Cached ZCA whitening matrix (dim x dim, row-major).
+    ///
+    /// Computed via eigendecomposition of the corpus covariance matrix using
+    /// `faer`. The cache is invalidated when `corpus_token_count` changes.
+    /// Returns `None` if the corpus is too small or eigendecomposition fails.
+    pub fn whitening_matrix(&mut self) -> Option<&[f32]> {
+        if self.corpus_token_count == self.whitening_cache_count
+            && let Some(ref cache) = self.whitening_cache
+        {
+            return Some(cache.as_slice());
+        }
+        let cov = self.corpus_covariance()?;
+        let dim = self.corpus_sum.len();
+        let w = compute_whitening_matrix(&cov, dim)?;
+        self.whitening_cache = Some(w);
+        self.whitening_cache_count = self.corpus_token_count;
+        self.whitening_cache.as_deref()
+    }
+
     /// Number of individual token entries stored.
     pub fn token_count(&self) -> usize {
         self.store.len()
@@ -259,17 +313,30 @@ impl PerTokenRetriever {
             // Mismatched dim resets it; corpus_token_count is reset to keep mean valid.
             self.corpus_sum = vec![0.0; dim];
             self.corpus_token_count = 0;
+            self.corpus_sq_sum = vec![0.0; dim * dim];
+            self.whitening_cache = None;
+            self.whitening_cache_count = 0;
         }
     }
 
     fn accumulate_corpus(&mut self, token: &[f32]) {
-        if token.len() != self.corpus_sum.len() {
+        let dim = self.corpus_sum.len();
+        if token.len() != dim {
             return;
         }
         for (sum, value) in self.corpus_sum.iter_mut().zip(token.iter()) {
             *sum += *value;
         }
         self.corpus_token_count += 1;
+
+        // Accumulate outer product for covariance computation.
+        if self.corpus_sq_sum.len() == dim * dim {
+            for j in 0..dim {
+                for k in 0..dim {
+                    self.corpus_sq_sum[j * dim + k] += token[j] * token[k];
+                }
+            }
+        }
     }
 
     fn candidate_limit(&self, k: usize) -> usize {
@@ -409,6 +476,44 @@ impl PerTokenRetriever {
         results.truncate(k);
         results
     }
+}
+
+/// Compute ZCA whitening matrix W = U * diag(1/sqrt(lambda)) * U^T from
+/// a covariance matrix via `faer`'s self-adjoint eigendecomposition.
+///
+/// Returns `None` if the input is malformed or `dim == 0`.
+fn compute_whitening_matrix(cov: &[f32], dim: usize) -> Option<Vec<f32>> {
+    use faer::Mat;
+
+    if cov.len() != dim * dim || dim == 0 {
+        return None;
+    }
+
+    let mat = Mat::from_fn(dim, dim, |i, j| cov[i * dim + j] as f64);
+    let eigen = mat.self_adjoint_eigen(faer::Side::Lower).ok()?;
+    let s_diag = eigen.S();
+    let u_mat = eigen.U();
+
+    // Extract eigenvalues into a plain Vec for indexing.
+    let s_col = s_diag.column_vector();
+    let mut eigenvalues = Vec::with_capacity(dim);
+    for k in 0..dim {
+        eigenvalues.push(*s_col.get(k));
+    }
+
+    let eps = 1e-5_f64;
+    let mut result = vec![0.0_f32; dim * dim];
+    for i in 0..dim {
+        for j in 0..dim {
+            let mut sum = 0.0_f64;
+            for k in 0..dim {
+                let lam = eigenvalues[k].max(eps);
+                sum += u_mat[(i, k)] * (1.0 / lam.sqrt()) * u_mat[(j, k)];
+            }
+            result[i * dim + j] = sum as f32;
+        }
+    }
+    Some(result)
 }
 
 impl Default for PerTokenRetriever {
@@ -836,5 +941,24 @@ mod tests {
             (score_top1 - score_top5).abs() > f32::EPSILON,
             "top_n=1 score ({score_top1}) should differ from top_n=5 score ({score_top5})"
         );
+    }
+
+    #[test]
+    fn test_corpus_covariance_none_when_empty() {
+        let r = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
+        assert!(r.corpus_covariance().is_none());
+    }
+
+    #[test]
+    fn test_corpus_covariance_computed_correctly() {
+        let mut r = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
+        r.insert(0, OWNER_ONE, &encode_per_token_keys(&[&[2.0_f32, 0.0]]));
+        r.insert(1, OWNER_ONE, &encode_per_token_keys(&[&[0.0_f32, 2.0]]));
+        let cov = r.corpus_covariance().unwrap();
+        assert_eq!(cov.len(), 4);
+        // Mean=[1,1]. Var(x)=1, Var(y)=1, Cov(x,y)=-1
+        assert!((cov[0] - 1.0).abs() < 0.01);
+        assert!((cov[3] - 1.0).abs() < 0.01);
+        assert!((cov[1] - (-1.0)).abs() < 0.01);
     }
 }

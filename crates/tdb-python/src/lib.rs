@@ -267,8 +267,8 @@ impl Engine {
 
     /// Configure post-retrieval refinement (vague-query rescue).
     ///
-    /// `mode` selects the strategy: `"none"`, `"centered"`, `"prf"`. With
-    /// `"prf"`, optional `alpha` (default 0.7), `beta` (default 0.3), and
+    /// `mode` selects the strategy: `"none"`, `"centered"`, `"whitened"`, `"prf"`.
+    /// With `"prf"`, optional `alpha` (default 0.7), `beta` (default 0.3), and
     /// `k_prime` (default 3) tune the Rocchio expansion.
     #[pyo3(signature = (mode, alpha=None, beta=None, k_prime=None))]
     fn set_refinement_mode(
@@ -281,14 +281,14 @@ impl Engine {
         let strategy = tdb_retrieval::refinement::strategy_from_name(mode, alpha, beta, k_prime)
             .ok_or_else(|| {
                 PyRuntimeError::new_err(format!(
-                    "unknown refinement mode '{mode}' (expected 'none', 'centered', or 'prf')"
+                    "unknown refinement mode '{mode}' (expected 'none', 'centered', 'prf', or 'whitened')"
                 ))
             })?;
         lock_engine(&self.inner)?.set_refinement_strategy(strategy);
         Ok(())
     }
 
-    /// Currently configured refinement mode as `"none" | "centered" | "prf"`.
+    /// Currently configured refinement mode as `"none" | "centered" | "whitened" | "prf"`.
     fn refinement_mode(&self) -> PyResult<String> {
         Ok(lock_engine(&self.inner)?.refinement_mode_name().to_string())
     }
