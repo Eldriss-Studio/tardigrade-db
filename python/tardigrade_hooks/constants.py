@@ -36,3 +36,13 @@ CONSOLIDATION_BATCH_SIZE: int = 16
 
 # -- File ingest salience ----------------------------------------------------
 DEFAULT_FILE_INGEST_SALIENCE: float = 70.0
+
+# -- Multi-view v2: LLM generation + diversity filter ----------------------
+VIEW_DIVERSITY_THRESHOLD: float = 0.92
+MAX_VIEW_CANDIDATES: int = 5
+MAX_VIEWS_KEPT: int = 3
+LLM_VIEW_PROMPT_TEMPLATE: str = (
+    "Write one specific question that the following fact can answer. "
+    "Use different words than the original fact.\n\n"
+    "Fact: {fact_text}\n\nQuestion:"
+)
