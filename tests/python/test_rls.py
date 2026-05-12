@@ -2,7 +2,10 @@
 
 import pytest
 
+import numpy as np
+
 from tardigrade_hooks.rls import (
+    EmbeddingExpansionStrategy,
     KeywordExpansionStrategy,
     MultiPhrasingStrategy,
     ReformulationStrategy,
@@ -19,6 +22,16 @@ class TestReformulationStrategyABC:
 
     def test_multiphrasing_is_substitutable(self):
         assert isinstance(MultiPhrasingStrategy(), ReformulationStrategy)
+
+    def test_embedding_is_substitutable(self):
+        # Minimal mock: 5-token vocab with 4-dim embeddings
+        class FakeTokenizer:
+            def encode(self, text, add_special_tokens=False):
+                return [0]
+            def decode(self, ids):
+                return "test"
+        embed = np.random.randn(5, 4).astype(np.float32)
+        assert isinstance(EmbeddingExpansionStrategy(FakeTokenizer(), embed), ReformulationStrategy)
 
 
 class TestKeywordExpansion:
@@ -76,3 +89,32 @@ class TestMultiPhrasing:
         s = MultiPhrasingStrategy()
         assert s.reformulate("") == []
         assert s.reformulate(None) == []
+
+
+class TestEmbeddingExpansion:
+    @pytest.fixture
+    def strategy(self):
+        try:
+            from transformers import AutoTokenizer, AutoModelForCausalLM
+        except ImportError:
+            pytest.skip("transformers not installed")
+        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+        model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B")
+        embed = model.get_input_embeddings().weight.detach().float().cpu().numpy()
+        return EmbeddingExpansionStrategy(tokenizer, embed)
+
+    def test_expands_query(self, strategy):
+        results = strategy.reformulate("Tell me about athletic achievements")
+        assert len(results) >= 1
+        expanded = results[0].lower()
+        assert len(expanded.split()) > 2
+
+    def test_empty_input(self, strategy):
+        assert strategy.reformulate("") == []
+        assert strategy.reformulate(None) == []
+
+    def test_expansion_contains_related_tokens(self, strategy):
+        results = strategy.reformulate("What does Sonia know about languages?")
+        if results:
+            expanded = results[0].lower()
+            assert len(expanded.split()) > 2
