@@ -293,6 +293,7 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | **LLM-judged benchmark confirms gap is real** | DeepSeek LLM judge (2,042 items, 0 fallbacks): LoCoMo 67.2% (was 68.2% deterministic), LongMemEval 88.8% (was 90.9%). Deterministic evaluator was generous, not strict. The retrieval gap is genuine. | High — `docs/bench/locomo-longmemeval-llm-judged.md` |
 | **ZCA whitening, token reweighting, multi-layer fusion: all 0% improvement** | All 4 configs (baseline, whitened, +reweight, +multi-layer) produce identical results on 10-fact corpus: Specific 100%, Moderate 80%, Vague 60%. Same 3 queries miss in every configuration. Vocabulary mismatch for these queries is too fundamental for any latent-space geometry transformation to fix — confirmed by DeepMind LIMIT paper (ICLR 2026): vector-space retrieval has a theoretical ceiling bounded by sign-rank. | High — `experiments/vague_refinement_v2_experiment.py`, DeepMind arXiv:2508.21038 |
 | **Latent-space retrieval ceiling identified** | The remaining vague-query failures require world-knowledge reasoning ("ultramarathons are athletic events"), not similarity computation. No geometric transform (whitening, reweighting, multi-layer, mean-centering) bridges this gap. The DCI pattern (arXiv:2605.05242) — agentic corpus interaction via tools — is the research-backed alternative that preserves TardigradeDB's premise. | High — theoretical proof + 4-config experiment + DCI literature |
+| **RLS keyword expansion: 100% on 10-fact corpus, 0% on LoCoMo** | Reflective Latent Search with hand-crafted synonym map: Vague 60%→100% (+40pp), Moderate 80%→100% (+20pp) on Sonia corpus. LoCoMo 67.2%→67.2% (zero movement). The architecture works (RETRIEVE→EVALUATE→REFORMULATE→RE-RETRIEVE→FUSE) but hand-crafted synonyms don't generalize. The 10-fact Sonia corpus is not predictive of LoCoMo performance. | High — architecture validated, synonym source is the bottleneck |
 | **RoPE injection works (already proven)** | 9/10 synthetic fact recall on Qwen3-0.6B (which uses RoPE). `RoPEPositionEncoder` and `RoPECorrectedConcatComposer` implemented and tested. RoPE correction experiment showed zero difference vs naive concat — position encoding is not the bottleneck. HuggingFace `generate()` auto-handles position ID offsetting. | High — proven by synthetic fact result + dedicated RoPE experiment + composer tests |
 
 ### Not Yet Tested (roads untravelled)
@@ -369,6 +370,8 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | Token importance reweighting | Complete — 0% improvement |
 | Multi-layer query fusion (RRF) | Complete — 0% improvement |
 | Stacked whitening + reweight + multi-layer | Complete — 0% improvement. Theoretical ceiling confirmed (DeepMind LIMIT, ICLR 2026) |
+| RLS keyword expansion (10-fact) | Complete — 100% all tiers (+40pp vague). Hand-crafted synonyms. |
+| RLS keyword expansion (LoCoMo) | Complete — 67.2% (0% improvement). Synonyms don't generalize. |
 
 ## Running Experiments
 
