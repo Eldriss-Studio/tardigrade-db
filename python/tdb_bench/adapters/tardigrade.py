@@ -36,6 +36,15 @@ from collections import OrderedDict
 from typing import Any
 
 from tardigrade_hooks.constants import DEFAULT_CAPTURE_LAYER_RATIO
+from tardigrade_hooks.constants import (
+    RLS_DEFAULT_GEN_MODEL,
+    RLS_MODE_BOTH,
+    RLS_MODE_EMBEDDING,
+    RLS_MODE_GENERATIVE,
+    RLS_MODE_KEYWORD,
+    RLS_MODE_MULTIPHRASING,
+    RLS_MODE_NONE,
+)
 from tdb_bench.contracts import BenchmarkAdapter
 from tdb_bench.models import AdapterQueryResult, BenchmarkItem
 
@@ -44,7 +53,7 @@ _MODEL_NAME = os.getenv("TDB_BENCH_MODEL", "Qwen/Qwen3-0.6B")
 _DEVICE = os.getenv("TDB_BENCH_DEVICE", "cuda")
 _REFINEMENT = os.getenv("TDB_REFINEMENT_MODE", "none")
 _RERANK_MODEL = os.getenv("TDB_BENCH_RERANK_MODEL", "")  # empty disables reranker
-_RLS_MODE = os.getenv("TDB_RLS_MODE", "none")
+_RLS_MODE = os.getenv("TDB_RLS_MODE", RLS_MODE_NONE)
 
 # Module-level model cache so repeated ``adapter = TardigradeAdapter()``
 # calls (one per repeat in BenchmarkRunner) don't re-download/re-load
@@ -141,22 +150,33 @@ class TardigradeAdapter(BenchmarkAdapter):
             )
             self._mode = "native"
             self._rls = None
-            if _RLS_MODE != "none":
+            if _RLS_MODE != RLS_MODE_NONE:
                 from tardigrade_hooks.rls import (  # type: ignore
                     EmbeddingExpansionStrategy,
+                    GenerativeReformulationStrategy,
                     KeywordExpansionStrategy,
                     MultiPhrasingStrategy,
                     ReflectiveLatentSearch,
                 )
                 strategies = []
-                if _RLS_MODE in ("keyword", "both"):
+                if _RLS_MODE in (RLS_MODE_KEYWORD, RLS_MODE_BOTH):
                     strategies.append(KeywordExpansionStrategy())
-                if _RLS_MODE in ("multiphrasing", "both"):
+                if _RLS_MODE in (RLS_MODE_MULTIPHRASING, RLS_MODE_BOTH):
                     strategies.append(MultiPhrasingStrategy())
-                if _RLS_MODE in ("embedding", "both"):
+                if _RLS_MODE in (RLS_MODE_EMBEDDING, RLS_MODE_BOTH):
                     rls_model_tmp, rls_tok_tmp, _ = _load_model_cached()
                     embed_w = rls_model_tmp.get_input_embeddings().weight.detach().float().cpu().numpy()
                     strategies.append(EmbeddingExpansionStrategy(rls_tok_tmp, embed_w))
+                if _RLS_MODE == RLS_MODE_GENERATIVE:
+                    import torch as _torch
+                    from transformers import AutoModelForCausalLM as _Auto, AutoTokenizer as _Tok
+                    _gen_model_name = os.getenv("TDB_RLS_GEN_MODEL", RLS_DEFAULT_GEN_MODEL)
+                    _gen_dtype = getattr(_torch, os.getenv("TDB_RLS_GEN_DTYPE", "float16"))
+                    _gen_device = os.getenv("TDB_BENCH_DEVICE", "mps" if _torch.backends.mps.is_available() else "cpu")
+                    _gen_tok = _Tok.from_pretrained(_gen_model_name)
+                    _gen_model = _Auto.from_pretrained(_gen_model_name, dtype=_gen_dtype).to(_gen_device)
+                    _gen_model.requires_grad_(False)
+                    strategies.append(GenerativeReformulationStrategy(_gen_model, _gen_tok))
                 if strategies:
                     rls_model, rls_tokenizer, rls_query_layer = _load_model_cached()
                     self._rls = ReflectiveLatentSearch(
@@ -323,16 +343,16 @@ class TardigradeAdapter(BenchmarkAdapter):
                     use_hidden_states=True,
                 )
                 self._rls = None
-                if _RLS_MODE != "none":
+                if _RLS_MODE != RLS_MODE_NONE:
                     from tardigrade_hooks.rls import (  # type: ignore
                         KeywordExpansionStrategy,
                         MultiPhrasingStrategy,
                         ReflectiveLatentSearch,
                     )
                     strategies = []
-                    if _RLS_MODE in ("keyword", "both"):
+                    if _RLS_MODE in (RLS_MODE_KEYWORD, RLS_MODE_BOTH):
                         strategies.append(KeywordExpansionStrategy())
-                    if _RLS_MODE in ("multiphrasing", "both"):
+                    if _RLS_MODE in (RLS_MODE_MULTIPHRASING, RLS_MODE_BOTH):
                         strategies.append(MultiPhrasingStrategy())
                     if strategies:
                         rls_model, rls_tokenizer, rls_query_layer = _load_model_cached()

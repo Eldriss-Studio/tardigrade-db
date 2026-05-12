@@ -46,3 +46,19 @@ LLM_VIEW_PROMPT_TEMPLATE: str = (
     "Use different words than the original fact.\n\n"
     "Fact: {fact_text}\n\nQuestion:"
 )
+
+# -- RLS (Reflective Latent Search) -----------------------------------------
+RLS_MODE_NONE: str = "none"
+RLS_MODE_KEYWORD: str = "keyword"
+RLS_MODE_MULTIPHRASING: str = "multiphrasing"
+RLS_MODE_EMBEDDING: str = "embedding"
+RLS_MODE_GENERATIVE: str = "generative"
+RLS_MODE_BOTH: str = "both"
+RLS_DEFAULT_CONFIDENCE_THRESHOLD: float = 1.5
+RLS_DEFAULT_MAX_ATTEMPTS: int = 2
+RLS_DEFAULT_GEN_MODEL: str = "Qwen/Qwen2.5-3B"
+RLS_REFORMULATION_PROMPT: str = (
+    'Rephrase this question using different words:\n'
+    '"{query_text}"\n'
+    'Rephrased:'
+)
