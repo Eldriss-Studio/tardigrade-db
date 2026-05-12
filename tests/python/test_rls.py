@@ -6,6 +6,7 @@ import numpy as np
 
 from tardigrade_hooks.rls import (
     EmbeddingExpansionStrategy,
+    GenerativeReformulationStrategy,
     KeywordExpansionStrategy,
     MultiPhrasingStrategy,
     ReformulationStrategy,
@@ -118,3 +119,44 @@ class TestEmbeddingExpansion:
         if results:
             expanded = results[0].lower()
             assert len(expanded.split()) > 2
+
+
+class TestGenerativeReformulation:
+    @pytest.fixture
+    def strategy(self):
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except ImportError:
+            pytest.skip("transformers not installed")
+        model_name = "Qwen/Qwen2.5-3B"
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name, dtype=torch.float16,
+            ).to(device)
+            model.requires_grad_(False)
+        except Exception:
+            pytest.skip(f"{model_name} not available")
+        return GenerativeReformulationStrategy(model, tokenizer)
+
+    def test_is_substitutable(self, strategy):
+        assert isinstance(strategy, ReformulationStrategy)
+
+    def test_reformulates_with_different_words(self, strategy):
+        results = strategy.reformulate("What does Sonia know about languages?")
+        assert len(results) >= 1
+        rephrased = results[0].lower()
+        assert rephrased != "what does sonia know about languages?"
+        assert len(rephrased.strip()) > 5
+
+    def test_no_blank_output(self, strategy):
+        results = strategy.reformulate("Tell me about athletic achievements")
+        assert len(results) >= 1
+        assert "_" not in results[0]
+        assert len(results[0].strip()) > 5
+
+    def test_empty_input(self, strategy):
+        assert strategy.reformulate("") == []
+        assert strategy.reformulate(None) == []

@@ -137,6 +137,50 @@ class EmbeddingExpansionStrategy(ReformulationStrategy):
         return [" ".join(unique)] if len(unique) > len(content) else []
 
 
+from .constants import (
+    RLS_DEFAULT_CONFIDENCE_THRESHOLD,
+    RLS_DEFAULT_MAX_ATTEMPTS,
+    RLS_REFORMULATION_PROMPT,
+)
+
+
+class GenerativeReformulationStrategy(ReformulationStrategy):
+    """Uses a language model to rephrase queries for re-retrieval.
+
+    Decoupled from the KV capture model — can use a larger model
+    (e.g., 3B) for reasoning while the capture model stays small (0.6B).
+    """
+
+    def __init__(self, model, tokenizer, max_new_tokens: int = 40):
+        self._model = model
+        self._tokenizer = tokenizer
+        self._max_new_tokens = max_new_tokens
+
+    def reformulate(self, query_text: str | None) -> list[str]:
+        if not query_text or not query_text.strip():
+            return []
+        import torch
+
+        prompt = RLS_REFORMULATION_PROMPT.format(query_text=query_text)
+        inputs = self._tokenizer(prompt, return_tensors="pt").to(self._model.device)
+        with torch.no_grad():
+            output = self._model.generate(
+                **inputs,
+                max_new_tokens=self._max_new_tokens,
+                do_sample=True,
+                temperature=0.3,
+                top_p=0.9,
+            )
+        generated = self._tokenizer.decode(
+            output[0][inputs["input_ids"].shape[1]:],
+            skip_special_tokens=True,
+        )
+        rephrased = generated.strip().split("\n")[0].strip()
+        if not rephrased or len(rephrased) < 5 or "_" * 3 in rephrased:
+            return []
+        return [rephrased]
+
+
 def rrf_fuse_handles(handle_lists: list[list], k: int = 60) -> list:
     """Fuse MemoryCellHandle lists via RRF, dedup by cell_id."""
     scores: dict[int, float] = defaultdict(float)
@@ -153,8 +197,8 @@ def rrf_fuse_handles(handle_lists: list[list], k: int = 60) -> list:
     return [handle_by_id[cid] for cid in sorted_ids]
 
 
-DEFAULT_CONFIDENCE_THRESHOLD = 1.5
-DEFAULT_MAX_ATTEMPTS = 2
+DEFAULT_CONFIDENCE_THRESHOLD = RLS_DEFAULT_CONFIDENCE_THRESHOLD
+DEFAULT_MAX_ATTEMPTS = RLS_DEFAULT_MAX_ATTEMPTS
 
 
 class ReflectiveLatentSearch:
