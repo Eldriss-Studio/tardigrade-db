@@ -84,6 +84,59 @@ class MultiPhrasingStrategy(ReformulationStrategy):
         return [keyword_only, f"What did {who_what} involve"]
 
 
+EMBEDDING_EXPANSION_TOP_K = 10
+EMBEDDING_EXPANSION_MIN_SIM = 0.3
+
+
+class EmbeddingExpansionStrategy(ReformulationStrategy):
+    """Expands query with nearest neighbors from the model's embedding table.
+
+    Language-agnostic: uses the model's own vocabulary knowledge.
+    No external thesaurus. Pure latent-space.
+    """
+
+    def __init__(self, tokenizer, embed_weights, top_k: int = EMBEDDING_EXPANSION_TOP_K):
+        import numpy as np
+
+        self._tokenizer = tokenizer
+        self._embed = np.array(embed_weights, dtype=np.float32)
+        self._top_k = top_k
+        norms = np.linalg.norm(self._embed, axis=1, keepdims=True)
+        norms[norms < 1e-9] = 1.0
+        self._normed = self._embed / norms
+
+    def reformulate(self, query_text: str | None) -> list[str]:
+        if not query_text or not query_text.strip():
+            return []
+        import numpy as np
+
+        words = re.findall(r"[a-zA-Z]+", query_text.lower())
+        content = [w for w in words if w not in _STOP_WORDS and len(w) > 2]
+        if not content:
+            return []
+
+        expanded_tokens = list(content)
+        for word in content:
+            token_ids = self._tokenizer.encode(word, add_special_tokens=False)
+            if not token_ids:
+                continue
+            token_id = token_ids[0]
+            if token_id >= len(self._normed):
+                continue
+            query_vec = self._normed[token_id]
+            sims = self._normed @ query_vec
+            top_indices = np.argsort(sims)[::-1][1:self._top_k + 1]
+            for idx in top_indices:
+                if sims[idx] < EMBEDDING_EXPANSION_MIN_SIM:
+                    break
+                neighbor_text = self._tokenizer.decode([int(idx)]).strip()
+                if len(neighbor_text) > 2 and neighbor_text.lower() not in _STOP_WORDS:
+                    expanded_tokens.append(neighbor_text.lower())
+
+        unique = list(dict.fromkeys(expanded_tokens))
+        return [" ".join(unique)] if len(unique) > len(content) else []
+
+
 def rrf_fuse_handles(handle_lists: list[list], k: int = 60) -> list:
     """Fuse MemoryCellHandle lists via RRF, dedup by cell_id."""
     scores: dict[int, float] = defaultdict(float)

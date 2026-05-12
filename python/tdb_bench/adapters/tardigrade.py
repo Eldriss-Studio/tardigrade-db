@@ -143,6 +143,7 @@ class TardigradeAdapter(BenchmarkAdapter):
             self._rls = None
             if _RLS_MODE != "none":
                 from tardigrade_hooks.rls import (  # type: ignore
+                    EmbeddingExpansionStrategy,
                     KeywordExpansionStrategy,
                     MultiPhrasingStrategy,
                     ReflectiveLatentSearch,
@@ -152,6 +153,10 @@ class TardigradeAdapter(BenchmarkAdapter):
                     strategies.append(KeywordExpansionStrategy())
                 if _RLS_MODE in ("multiphrasing", "both"):
                     strategies.append(MultiPhrasingStrategy())
+                if _RLS_MODE in ("embedding", "both"):
+                    rls_model_tmp, rls_tok_tmp, _ = _load_model_cached()
+                    embed_w = rls_model_tmp.get_input_embeddings().weight.detach().float().cpu().numpy()
+                    strategies.append(EmbeddingExpansionStrategy(rls_tok_tmp, embed_w))
                 if strategies:
                     rls_model, rls_tokenizer, rls_query_layer = _load_model_cached()
                     self._rls = ReflectiveLatentSearch(
