@@ -38,7 +38,7 @@
 governance, and organization (trace + WAL).</p>
 <h3 id="retrieval-architecture"><a class="doc-anchor" href="#retrieval-architecture">§</a>Retrieval Architecture</h3><div class="example-wrap"><pre class="language-text"><code>query → SLB (cache, separate) → Pipeline [BruteForce, Vamana*] → merge</code></pre></div>
 <p>The SLB is a separate LRU cache (needs direct access for warming on reads).
-The [<code>RetrieverPipeline</code>] chains cold-path retrievers via the [<code>Retriever</code>] trait.
+The <a href="../../tdb_retrieval/pipeline/struct.RetrieverPipeline.html" title="struct tdb_retrieval::pipeline::RetrieverPipeline"><code>RetrieverPipeline</code></a> chains cold-path retrievers via the <a href="../../tdb_retrieval/retriever/trait.Retriever.html" title="trait tdb_retrieval::retriever::Retriever"><code>Retriever</code></a> trait.
 Vamana is lazily activated when cell count crosses the threshold.
 Sentinel layer index for KV Pack retrieval key cells.</p>
 </div></details></section></div></main></body></html>
