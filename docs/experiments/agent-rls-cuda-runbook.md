@@ -28,8 +28,43 @@ Verify CUDA:
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 
+## Prepare Datasets
+
+The benchmark datasets (~137MB) are gitignored. Generate them from the public sources:
+
+```bash
+# 1. Clone the source repos (one-time)
+mkdir -p benchmarks/data_sources
+git clone https://github.com/snap-stanford/locomo.git benchmarks/data_sources/locomo_repo
+git clone https://github.com/xiaowu0162/LongMemEval.git benchmarks/data_sources/longmemeval_repo
+
+# 2. Run the preparation script
+python benchmarks/scripts/prepare_phase1_datasets.py \
+  --locomo-json benchmarks/data_sources/locomo_repo/data/locomo10.json \
+  --longmemeval-json benchmarks/data_sources/longmemeval_repo/data/longmemeval_oracle.json \
+  --output-dir benchmarks/datasets/phase1_oracle \
+  --locomo-context evidence
+
+# Expected output:
+# Wrote 1542 LoCoMo rows -> .../locomo_phase1.jsonl
+# Wrote 500 LongMemEval rows -> .../longmemeval_phase1.jsonl
+```
+
+Verify:
+```bash
+wc -l benchmarks/datasets/phase1_oracle/*.jsonl
+# 1542 locomo_phase1.jsonl
+#  500 longmemeval_phase1.jsonl
+```
+
 ## DeepSeek API Key
 
+Create `.env.bench` with your DeepSeek API key:
+```bash
+echo "DEEPSEEK_API_KEY=sk-your-key-here" > .env.bench
+```
+
+Then source it:
 ```bash
 export DEEPSEEK_API_KEY=$(grep DEEPSEEK_API_KEY .env.bench | cut -d= -f2)
 ```
