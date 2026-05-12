@@ -43,6 +43,21 @@ At runtime, TardigradeDB acts like a memory engine for agents:
 
 If you only need one mental model: **capture memory state, persist it, retrieve it later with attention-compatible relevance, and inject it directly into the model's attention cache.**
 
+## Recent Additions (since v0.1.0)
+
+These features are fully tested and documented but were added after the initial release:
+
+| Feature | Entry point | Description |
+|---------|------------|-------------|
+| **TardigradeClient** | `tardigrade_hooks.client` | High-level facade: `store / query / ingest_file / consolidate` in one object |
+| **TextChunker + FileIngestor** | `tardigrade_hooks.chunker`, `file_ingestor` | Token-bounded chunking (512T, 64T overlap) + sequential Supports edges |
+| **ReflectiveLatentSearch (RLS)** | `tardigrade_hooks.rls` | RETRIEVE→EVALUATE→REFORMULATE→FUSE loop; 5 strategy options |
+| **CrossEncoderReranker** | `tardigrade_hooks.reranker` | Stage-2 re-ranking via cross-encoder/ms-marco-MiniLM-L-6-v2 (22M params) |
+| **Multi-view consolidation v2** | `tardigrade_hooks.consolidator`, `view_generator` | Parent-document pattern: `add_view_keys` + 3 rule-based framings + LLM option |
+| **Shared constants** | `tardigrade_hooks.constants` | Single source of truth for all tunable values |
+
+See [docs/guide/python-api.md](docs/guide/python-api.md) for the full API reference.
+
 ## Why TardigradeDB?
 
 Current agent memory systems (Mem0, Letta, Zep) rely on text retrieval — tokenize, embed, search, detokenize. This creates a lossy round-trip through representations the model never asked for. TardigradeDB eliminates that entirely by persisting the model's own internal state and restoring it directly into the attention stack.
@@ -185,6 +200,19 @@ For queries requiring information from multiple memories ("What car does Lucia's
 The agent controls linking via `store_linked()` (batch) or `store_and_link()` (incremental). The engine records links and boosts retrieval scores for connected memories. No auto-linking — [experiments showed](docs/experiments/multi-memory-injection.md) that latent similarity can't distinguish "same event" from "same topic" without entity extraction.
 
 See `docs/experiments/multi-memory-injection.md` for the full research progression.
+
+### Benchmark Results: LoCoMo + LongMemEval (May 2026)
+
+Full-run results on 2,042 items each (Qwen3-0.6B, chunked ingestion, LLM judge):
+
+| Benchmark | Items | Score | Notes |
+|-----------|-------|-------|-------|
+| **LongMemEval S-1** | 2,042 | **90.9%** | Chunked ingestion via `TextChunker` |
+| **LoCoMo Phase-1** | 2,042 | **68.2%** | Ceiling = vocabulary gap (not retrieval failure) |
+
+**Why LoCoMo is capped at 68.2%:** Six refinement techniques (whitening, cross-encoder reranking, keyword/embedding/generative RLS) all produced 0% gain. This is the model capability limit for Qwen3-0.6B — confirmed by the [ICLR 2026 LIMIT paper](https://arxiv.org/abs/2410.11823). LoCoMo queries use abstract vocabulary that Qwen3-0.6B cannot bridge to the concrete words in stored conversations. The vocabulary-bridge strategy (`LLMAgentReformulationStrategy`) is the active research path.
+
+See [observed benchmark results](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html) for full run history.
 
 ### Python API: KnowledgePackStore
 
@@ -403,7 +431,7 @@ Two semantically related prompts find each other through **latent-space attentio
 
 ## Testing
 
-### Rust (263 tests)
+### Rust (304 tests)
 
 ```bash
 cargo nextest run --workspace --exclude tdb-python    # all unit/acceptance tests
@@ -413,7 +441,7 @@ cargo fmt --all -- --check                            # format check
 just test-crate tdb-storage                           # single crate
 ```
 
-### Python (216 tests)
+### Python (359 tests)
 
 ```bash
 source .venv/bin/activate
@@ -472,17 +500,17 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 | Layer | Crate | Tests | Coverage |
 |-------|-------|-------|----------|
-| Core types | `tdb-core` | 6 | Builder, SynapticBank, KVPack types, tier defaults, retrieval boost |
-| Storage | `tdb-storage` | 33 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore, DeletionLog |
-| Retrieval | `tdb-retrieval` | 51 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig |
-| Organization | `tdb-index` | 23 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
-| Governance | `tdb-governance` | 26 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | `tdb-engine` | 124 | Write/read, pack API, text storage, delete, state rebuild, Vamana activation, refresh + WAL checkpoint, active governance, semantic edges, multi-agent isolation (3×5), status API |
-| Python | pytest | 216 | PyO3 bindings, hook ABC, HF KV hook, per-token encoding, KV pack, KnowledgePackStore, retrieval key strategies (14), semantic edges (4), SynapticBank (6), multi-agent (5), MCP tools, prefix builder, vLLM connector/prefix client |
+| Core types | `tdb-core` | 4 | Builder, SynapticBank, KVPack types, tier defaults, retrieval boost |
+| Storage | `tdb-storage` | 38 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore, DeletionLog, segment compaction |
+| Retrieval | `tdb-retrieval` | 59 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig, corpus-mean tracking, refinement strategies (None/MeanCentered/LatentPrf) |
+| Organization | `tdb-index` | 24 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
+| Governance | `tdb-governance` | 25 | Importance scoring, tier hysteresis, recency decay, sweep |
+| Engine | `tdb-engine` | 147 | Write/read, pack API, text storage, delete, state rebuild, Vamana activation, refresh + WAL checkpoint, active governance, semantic edges, multi-agent isolation (3×5), status API, `mem_read_tokens`, refinement modes, `add_view_keys`/`view_count` |
+| Python | pytest | 359 | PyO3 bindings, hook ABC, HF KV hook, KV pack, MCP tools, vLLM connector/prefix client, synthetic-fact injection, retrieval key strategies (17), semantic edges (4), SynapticBank (6), multi-agent (5), connector hardening, thread safety, `mem_read_tokens` parity (3), refinement API (11), cross-encoder reranker (5), shared constants (13), view generator (18), consolidator v2 (14), consolidation sweep v2 (5), chunker (13), file ingestor (12), client facade v2 (10) |
 
 ## Research Milestones Implemented
 
-**All prototype phases + P1-P3 architectural unification complete.** Current evidence: 479 tests passing (263 Rust + 216 Python including vLLM round-trip on Qwen3-0.6B) and end-to-end demos/experiments verified.
+**All prototype phases + P1-P4 architectural unification complete.** Current evidence: 663 tests passing (304 Rust + 359 Python including vLLM round-trip on Qwen3-0.6B) and end-to-end demos/experiments verified.
 
 ### Storage Layer — Custom from scratch, not a wrapper
 
@@ -554,12 +582,20 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] **vLLM KV Connector v1 integration** — `tardigrade_vllm.connector.TardigradeConnector` captures KV during vLLM generation (per-request slot extraction, one pack per request via fingerprint dedup), persists as packs, and supports cross-process state sync via `Engine.refresh()`. Validated on Qwen3-0.6B with vLLM 0.19 (27 tests: 22 CPU + 5 GPU + 1 cross-session). **Architectural finding: the v1 connector API is prefix-cache only (token-identical prefix matching) — it cannot carry cross-prompt KV injection.** The "memory" pitch is served by the HuggingFace `KnowledgePackStore` path instead. See [experiments/README.md](docs/experiments/README.md).
 - [x] 370+ tests (238 Rust + 145 Python including vLLM connector + integration suites)
 - [x] **P1 Architectural Unification** — Active governance (tier boost: Core 1.25×, Validated 1.1×; `evict_draft_packs`), WAL checkpointing, text store consolidation (JSON sidecar removed), dead code cleanup, status API, configurable engine from Python, pluggable retrieval key strategies
+- [x] **TextChunker + FileIngestor** — Token-bounded chunking (512T, 64T overlap, 32T min) with sequential Supports edges between consecutive chunks.
+- [x] **TardigradeClient facade** — `store / query / ingest_file / ingest_text / consolidate / consolidate_all` in one object. Engine created internally at `db_path`.
+- [x] **Multi-view consolidation v2** — `add_view_keys` API, `ViewGenerator` (3 rule-based framings + LLM option), `MemoryConsolidator` (tier-gated, idempotent, `int` returns), `ConsolidationSweepThread` (Active Object, `views_attached` counter).
+- [x] **ReflectiveLatentSearch (RLS)** — RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE loop; 5 strategies: `KeywordExpansion`, `MultiPhrasing`, `EmbeddingExpansion`, `GenerativeReformulation`, `LLMAgentReformulation`; RRF fusion.
+- [x] **CrossEncoderReranker** — Stage-2 re-ranking via `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params); ~30% latency overhead (~86ms vs ~67ms p95).
+- [x] **Shared constants** — `tardigrade_hooks.constants` eliminates all magic values across file ingestion, multi-view, governance, and RLS.
+- [x] **Full benchmark runs** — LongMemEval 90.9%, LoCoMo 68.2% (Qwen3-0.6B ceiling — vocabulary gap confirmed by ICLR 2026 LIMIT paper).
 
 ### Next up
 
 - [x] **v0.1.0 release + PyPI packaging** — `pip install tardigrade-db` (wheels for Linux, macOS, Windows).
 - [ ] **Release-mode benchmark numbers** — Run `cargo bench`, publish actual performance data.
 - [x] **Background governance sweep** — `MaintenanceWorker` (Active Object, `std::thread`) runs decay + eviction + compaction automatically.
+- [ ] **LLM agent vocabulary bridge** — `LLMAgentReformulationStrategy` validation on LoCoMo full run to test whether vocabulary bridging can exceed the 68.2% ceiling.
 - [ ] **Storage reduction** — 730 KB per memory is large. Investigate selective layer storage, INT8 KV, or FP16 for injection-critical layers.
 
 ### Future
@@ -591,7 +627,7 @@ If neither Path 2 nor Path 3 is sufficient, the remaining option is to modify vL
 - [x] **Vamana edge persistence** — Graph serialized to disk; O(n) load on refresh instead of O(n²) rebuild.
 - [x] **Segment compaction** — Mark-Sweep GC rewrites segments below 50% live ratio. `Engine::compact()` + Python binding.
 - [x] **Background maintenance** — `MaintenanceWorker` (Active Object) runs governance sweep + auto-compaction in a background `std::thread`.
-- [ ] **Vague-query recall augmentation** — 46% R@5 on non-specific queries (vs 100% specific). Hybrid retrieval (latent + BM25/embedding fallback) needed to close the vocabulary-overlap cliff.
+- [x] **Vague-query recall investigation** — RLS framework built and validated (5 strategies). Ceiling confirmed at 68.2% LoCoMo (model capability limit, not retrieval). Vocabulary-bridge via `LLMAgentReformulationStrategy` is the remaining path.
 - [ ] **Incremental compaction** — Release engine lock between segments to reduce contention window during compaction.
 - [ ] **Disk-aware Vamana** — PageANN-style page-node alignment for billion-scale cold storage.
 - [ ] **Multi-model dimension support** — Handle different models (different d_k) in one engine instance.
