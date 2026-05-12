@@ -375,7 +375,8 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | RLS keyword expansion (10-fact) | Complete — 100% all tiers (+40pp vague). Hand-crafted synonyms. |
 | RLS keyword expansion (LoCoMo) | Complete — 67.2% (0% improvement). Synonyms don't generalize. |
 | RLS embedding expansion (LoCoMo) | Complete — 67.2% (0% improvement). Embedding neighbors are lexical, not conceptual. |
-| RLS generative 3B (LoCoMo) | Complete — 68.2% (0% improvement). Confidence threshold never fires. Root cause discovered: **LoCoMo score collapse** — all packs return identical scores (ratio=1.000). Adapter truncates 9K-token contexts to 256 tokens, producing near-identical hidden states. Every technique tested on LoCoMo was running on degenerate scores. This is an adapter ingestion bug, not an engine issue. Fix: use FileIngestor with proper chunking instead of single-pack truncation. |
+| RLS generative 3B (LoCoMo) | Complete — 68.2% (0%). Score ratio=1.000 from pack dedup, not degenerate hidden states. Chunked ingestion (128 chunks/conversation) also 68.2%. With diverse texts scores DO differentiate (274 vs 249 vs 221). 68.2% is the real LoCoMo ceiling for Qwen3-0.6B latent-space retrieval — the vocabulary mismatch is genuine. |
+| Chunked ingestion (LoCoMo) | Complete — 68.2% (unchanged from truncated). Chunking doesn't help because the adapter maps any chunk from the correct conversation to the right answer — the retrieval already finds some matching chunk. The gap is vocabulary mismatch between queries and conversation content, not ingestion granularity. |
 
 ## Running Experiments
 
