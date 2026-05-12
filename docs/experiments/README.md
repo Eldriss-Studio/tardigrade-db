@@ -377,6 +377,9 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | RLS embedding expansion (LoCoMo) | Complete — 67.2% (0% improvement). Embedding neighbors are lexical, not conceptual. |
 | RLS generative 3B (LoCoMo) | Complete — 68.2% (0%). Score ratio=1.000 from pack dedup, not degenerate hidden states. Chunked ingestion (128 chunks/conversation) also 68.2%. With diverse texts scores DO differentiate (274 vs 249 vs 221). 68.2% is the real LoCoMo ceiling for Qwen3-0.6B latent-space retrieval — the vocabulary mismatch is genuine. |
 | Chunked ingestion (LoCoMo) | Complete — 68.2% (unchanged from truncated). Chunking doesn't help because the adapter maps any chunk from the correct conversation to the right answer — the retrieval already finds some matching chunk. The gap is vocabulary mismatch between queries and conversation content, not ingestion granularity. |
+| LLM agent reformulation — naive fusion (LoCoMo) | Complete — **52.9% (-15.3pp)**. DeepSeek vocabulary bridging with always-reformulate + max-score lexical fusion DEGRADES performance. Reformulated terms cross-contaminate: broader vocabulary matches wrong conversations. Confirms RAG-Fusion (arXiv:2603.02153) finding that unguarded fusion hurts on high-confidence queries. 50-item subset showed +7.4pp (less cross-contamination in small corpus). |
+| LLM agent reformulation — naive fusion (LongMemEval) | Complete — **77.8% (-11.0pp)**. Same degradation pattern. Naive max-score fusion picks wrong items when reformulated vocabulary appears in multiple contexts. |
+| **Next: margin-based acceptance** | Pending — only replace original answer when reformulated variant scores ≥2x higher (DMQR-RAG approach). Should recover baseline + add selective reformulation benefit. Also pending: native mode test on CUDA (RTX 3070 Ti) for latent-space retrieval baseline. |
 
 ## Running Experiments
 
