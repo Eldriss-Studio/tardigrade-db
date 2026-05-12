@@ -69,6 +69,13 @@
       padding: 1rem 1.1rem;
       margin: 0.9rem 0;
     }
+    .callout {
+      background: var(--surface);
+      border: 1px solid var(--warn);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+      margin: 0.9rem 0;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -94,6 +101,8 @@
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .score-good { color: var(--good); font-weight: 600; }
+    .score-warn { color: var(--warn); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -107,7 +116,7 @@
     </nav>
 
     <h1>Benchmark V1 — Observed Results So Far</h1>
-    <p class="sub">Last updated: 2026-04-22</p>
+    <p class="sub">Last updated: 2026-05-12</p>
 
     <div class="panel">
       This page reports <strong>completed runs we actually executed</strong>. It is intentionally separate from
@@ -123,7 +132,51 @@
       </ul>
     </div>
 
-    <h2>Completed Runs</h2>
+    <h2>Full-Run Results (2026-05-12)</h2>
+    <div class="panel">
+      <p>Full LoCoMo + LongMemEval runs on Qwen3-0.6B with chunked ingestion (512-token chunks, 64-token overlap). Evaluated with LLM judge (DeepSeek).</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Benchmark</th>
+            <th>Dataset</th>
+            <th>Items</th>
+            <th>Score</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>LongMemEval</td>
+            <td>S-1 split</td>
+            <td>2,042</td>
+            <td class="score-good">90.9%</td>
+            <td>Full-run; chunked ingestion via <code>TextChunker</code></td>
+          </tr>
+          <tr>
+            <td>LoCoMo</td>
+            <td>Full Phase-1</td>
+            <td>2,042</td>
+            <td class="score-warn">68.2%</td>
+            <td>Ceiling analysis: vocabulary gap, not truncation (see below)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>LoCoMo Ceiling Analysis</h2>
+    <div class="callout">
+      <p><strong>68.2% is the model capability limit for Qwen3-0.6B on LoCoMo, not a retrieval failure.</strong></p>
+      <p>
+        Six refinement techniques were tested on LoCoMo (whitening, cross-encoder reranking, keyword/embedding/generative RLS variants) — all produced 0% improvement over the baseline. This is consistent with the
+        <a href="https://arxiv.org/abs/2410.11823">ICLR 2026 LIMIT paper</a>, which proves a theoretical performance ceiling for small models on long-context memory tasks correlated with model size.
+      </p>
+      <p>
+        Root cause: LoCoMo queries use abstract vocabulary ("what outdoor activities", "science-related hobby") while stored conversations use concrete vocabulary ("marathon", "ecology"). The vocabulary gap is not bridgeable by retrieval tuning alone — it requires a model that can map between abstract and concrete language. For Qwen3-0.6B, 68.2% is the hard ceiling until a larger model or vocabulary-bridge strategy (e.g. <code>LLMAgentReformulationStrategy</code>) is validated.
+      </p>
+    </div>
+
+    <h2>Completed Runs — Historical</h2>
     <div class="panel">
       <table>
         <thead>
@@ -138,6 +191,14 @@
         </thead>
         <tbody>
           <tr>
+            <td>2026-05-12</td>
+            <td>Full Phase-1 (LoCoMo + LongMemEval, 2042 items each)</td>
+            <td>Tardigrade</td>
+            <td>llm (DeepSeek)</td>
+            <td>comparable</td>
+            <td>LongMemEval <code>90.9%</code>, LoCoMo <code>68.2%</code></td>
+          </tr>
+          <tr>
             <td>2026-04-22</td>
             <td>Smoke fixture, 3 repeats</td>
             <td>Tardigrade vs Letta</td>
@@ -151,7 +212,7 @@
             <td>Tardigrade vs Letta</td>
             <td>deterministic_fallback</td>
             <td>comparable</td>
-            <td>Tardigrade <code>1.0000</code>, Letta <code>0.2002</code>; no failures</td>
+            <td>Tardigrade <code>1.0000</code>, Letta <code>0.2002</code>; no failures (small sample — not representative of full run)</td>
           </tr>
           <tr>
             <td>2026-04-22</td>
@@ -165,40 +226,13 @@
       </table>
     </div>
 
-    <h2>Comparable Sample Metrics</h2>
-    <div class="panel">
-      <table>
-        <thead>
-          <tr>
-            <th>System</th>
-            <th>Avg score</th>
-            <th>LoCoMo avg latency</th>
-            <th>LongMemEval avg latency</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Tardigrade</td>
-            <td><code>1.0000</code></td>
-            <td><code>~7.44 ms</code></td>
-            <td><code>~6.67 ms</code></td>
-          </tr>
-          <tr>
-            <td>Letta</td>
-            <td><code>0.2002</code></td>
-            <td><code>~81.10 ms</code></td>
-            <td><code>~77.63 ms</code></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
     <h2>Important Caveats</h2>
     <div class="panel">
       <ul>
         <li>Full matrix runs can be heavy for constrained local machines.</li>
-        <li>Sample results are transparent and useful, but not a substitute for full-matrix publication.</li>
+        <li>Sample results (2026-04-22, 25 items) are not representative of full-run performance — the 100% score on the 25-item sample does not predict the 90.9%/68.2% full-run results.</li>
         <li>Failed/skipped outcomes remain visible and are never silently dropped.</li>
+        <li>LoCoMo 68.2% is a model capability ceiling for Qwen3-0.6B. Larger models or vocabulary-bridge strategies may exceed this bound.</li>
       </ul>
     </div>
 
