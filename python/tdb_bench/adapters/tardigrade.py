@@ -54,6 +54,8 @@ _DEVICE = os.getenv("TDB_BENCH_DEVICE", "cuda")
 _REFINEMENT = os.getenv("TDB_REFINEMENT_MODE", "none")
 _RERANK_MODEL = os.getenv("TDB_BENCH_RERANK_MODEL", "")  # empty disables reranker
 _RLS_MODE = os.getenv("TDB_RLS_MODE", RLS_MODE_NONE)
+_CHUNK_TOKENS = int(os.getenv("TDB_BENCH_CHUNK_TOKENS", "128"))
+_CHUNK_OVERLAP = int(os.getenv("TDB_BENCH_CHUNK_OVERLAP", "16"))
 
 # Module-level model cache so repeated ``adapter = TardigradeAdapter()``
 # calls (one per repeat in BenchmarkRunner) don't re-download/re-load
@@ -207,26 +209,33 @@ class TardigradeAdapter(BenchmarkAdapter):
 
         import torch  # type: ignore
 
+        from tardigrade_hooks.chunker import TextChunker
+
         model, tokenizer, query_layer = _load_model_cached()
+        chunker = TextChunker(tokenizer, max_tokens=_CHUNK_TOKENS, overlap_tokens=_CHUNK_OVERLAP)
+
         for item in items:
-            inputs = tokenizer(
-                item.context, return_tensors="pt", truncation=True, max_length=256,
-            )
-            inputs = {k: v.to(model.device) for k, v in inputs.items()}
-            with torch.no_grad():
-                out = model(**inputs, use_cache=True, output_hidden_states=True)
-            decision = self._hook.on_generate(
-                layer=query_layer,
-                past_key_values=out.past_key_values,
-                model_hidden_states=out.hidden_states[query_layer],
-            )
-            if not decision.should_write:
-                continue
-            cell_id = self._engine.mem_write(
-                1, query_layer, decision.key, decision.value, decision.salience, None,
-            )
-            self._cell_to_item[int(cell_id)] = item
-            # Also keep an in-memory snapshot so metadata() / fallback work.
+            chunks = chunker.chunk(item.context)
+            chunk_texts = [c.text for c in chunks] if chunks else [item.context[:500]]
+
+            for chunk_text in chunk_texts:
+                inputs = tokenizer(
+                    chunk_text, return_tensors="pt", truncation=True, max_length=_CHUNK_TOKENS,
+                )
+                inputs = {k: v.to(model.device) for k, v in inputs.items()}
+                with torch.no_grad():
+                    out = model(**inputs, use_cache=True, output_hidden_states=True)
+                decision = self._hook.on_generate(
+                    layer=query_layer,
+                    past_key_values=out.past_key_values,
+                    model_hidden_states=out.hidden_states[query_layer],
+                )
+                if not decision.should_write:
+                    continue
+                cell_id = self._engine.mem_write(
+                    1, query_layer, decision.key, decision.value, decision.salience, None,
+                )
+                self._cell_to_item[int(cell_id)] = item
             self._store.insert(item)
 
     def query(self, item: BenchmarkItem, top_k: int) -> AdapterQueryResult:
@@ -379,6 +388,7 @@ class TardigradeAdapter(BenchmarkAdapter):
             "mode": self._mode,
             "refinement_mode": self._refinement,
             "rls_mode": _RLS_MODE,
+            "chunk_tokens": str(_CHUNK_TOKENS),
             "model": _MODEL_NAME if self._mode == "native" else "lexical",
             "reranker_model": _RERANK_MODEL if self._reranker is not None else "",
         }
