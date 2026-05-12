@@ -92,6 +92,18 @@ contradicted, the corresponding subsystem would require redesign.
 | **Chroma Context-1: Self-Editing Search Agent** (2026) | [trychroma.com](https://www.trychroma.com/research/context-1) | Agent that reformulates its own search queries based on retrieval results. Demonstrates the self-editing search pattern TardigradeDB's RLS protocol would implement | agentic retrieval research (2026-05-11) |
 | **MMLF: Multi-Query Multi-Passage Late Fusion** (NAACL 2025) | [ACL Anthology](https://aclanthology.org/2025.findings-naacl.367.pdf) | Engine-level fusion of multiple query representations into a single retrieval pass. Relevant primitive for RLS: batch multiple reformulated queries and fuse at the engine level | agentic retrieval research (2026-05-11) |
 
+### A3e. Adaptive Retrieval Gating & Confidence-Based Reformulation
+
+| Paper | arXiv / DOI | What it justifies | Where cited |
+|---|---|---|---|
+| **CRAG** (Corrective RAG; Yan et al., 2024) | [arXiv:2401.15884](https://arxiv.org/abs/2401.15884) | Three-way confidence gate (Correct/Ambiguous/Incorrect) using a T5-large retrieval evaluator. Two-threshold system with dataset-specific calibration. Lower thresholds as permissive as -0.99 on [-1,1] scale. Key insight: a healthy corrective system should trigger on 20-40% of queries — if 0%, thresholds are miscalibrated. Directly informed the diagnosis that TardigradeDB's 1.10 score-ratio confidence threshold was gating out nearly all queries | LLM agent reformulation experiment (2026-05-12) |
+| **Self-RAG** (Asai et al., 2023) | [arXiv:2310.11511](https://arxiv.org/abs/2310.11511) | Learned reflection tokens (Retrieve/ISREL/ISSUP/ISUSE) trained into the LM vocabulary. Does NOT re-query on irrelevant results — filters and generates without retrieval or uses only relevant subset. Retrieval threshold default 0.2 controls frequency. More "retrieve or don't" than "reformulate and retry" | LLM agent reformulation experiment (2026-05-12) |
+| **TARG** (Training-Free Adaptive Retrieval Gating, 2025) | [arXiv:2511.09803](https://arxiv.org/abs/2511.09803) | Margin gate using top-1 vs top-2 logit gap as uncertainty signal. Optimal retrieval budgets of 1-33% depending on model strength. At 0.1% retrieval rate, exceeded Always-RAG accuracy (83.8 vs 80.8 EM). Directly analogous to TardigradeDB's score-ratio threshold — confirms the gate must be calibrated to a retrieval budget, not set arbitrarily | LLM agent reformulation experiment (2026-05-12) |
+| **DMQR-RAG** (Diverse Multi-Query Rewriting, 2024) | [arXiv:2411.13154](https://arxiv.org/abs/2411.13154) | Tested 4 rewriting strategies; applying all simultaneously is NOT optimal. Adaptive selection reduces rewrites by ~40% while improving performance (+2.17% on FreshQA). Key insight: for experiments, establish the always-reformulate ceiling first, then add adaptive selection | LLM agent reformulation experiment (2026-05-12) |
+| **RAG-Fusion Industry Deployment** (2025) | [arXiv:2603.02153](https://arxiv.org/abs/2603.02153) | Production deployment: fusion consistently increased upstream recall BUT gains were statistically insignificant after reranking (p_adj >= 0.125). Hit@10 degraded by -6.08pp. Fusion benefits "largely confined to recall-scarce query regimes." Sub-queries beyond 5 cause informational redundancy. Directly relevant: TardigradeDB's vague-query failures ARE the recall-scarce regime where fusion helps | LLM agent reformulation experiment (2026-05-12) |
+| **FLARE** (Active Retrieval Augmented Generation; Jiang et al., 2023) | [arXiv:2305.06983](https://arxiv.org/abs/2305.06983) | Triggers retrieval on low-confidence generated tokens. Best results when retrieval triggers on 40-80% of sentences. Confirms that selective but generous retrieval outperforms both always-retrieve and never-retrieve | LLM agent reformulation experiment (2026-05-12) |
+| **Weighted RRF** (Confidence-Aware Fusion; CCNC 2026) | [uregina.ca](https://uregina.ca/~nss373/papers/Rag-CCNC2026.pdf) | Standard RRF treats all queries as equally important, diluting precision when low-quality reformulations are included. WRRF incorporates confidence scores: score range 0.6712 at rank 1 with gradual decline vs standard RRF's near-flat 0.0159-0.0667. Implication: when fusing original + reformulated results, weight the original higher proportional to confidence | LLM agent reformulation experiment (2026-05-12) |
+
 ### A4. Agent Memory Systems
 
 | Paper | arXiv / DOI | What it justifies | Where cited |
@@ -262,6 +274,7 @@ completeness.
 | **RLS embedding expansion** (nearest-neighbor vocabulary bridge from model's embedding table) | Tested 2026-05-11 on full LoCoMo (1,542 items): 67.2%→67.2% (0% improvement). Embedding neighbors capture lexical similarity ("athletic"→"athletics"), not conceptual ("athletic"→"ultramarathon"). The vocabulary gap in LoCoMo requires reasoning-level knowledge that shallow embedding proximity cannot provide. Architecture sound (EmbeddingExpansionStrategy), synonym source insufficient |
 | **Rule-based multi-view consolidation** (views as competing packs in same index) | Tested 2026-05-11: 3 rule-based framings (summary/question/paraphrase) stored as separate packs. Moderate R@5 dropped from 80%→20% — views dilute top-k. Question views near-identical across facts (cos~0.75), crowd out canonicals. Doc2Query-- predicted this: uncontrolled/low-diversity expansions harm retrieval. Fix requires either (a) dual-index fusion (Doc2Query++), (b) parent-document pattern (HyPE), or (c) LLM-powered views + quality filter |
 | **Text-based BM25 + RRF hybrid** (as primary stage) | Same text dependency as cross-encoder reranking. Adds value only when memos exist and are descriptive. RRF (Cormack 2009) is still adopted as a fusion mechanism for the latent-space PRF stage in case PRF drifts (see A2) — we use the rank-fusion math without the BM25 sparse signal |
+| **Aggressive confidence gating for RLS** (score-ratio threshold 1.10) | Tested 2026-05-12: RLS confidence gate (`top1_score / top2_score >= 1.10`) blocked nearly all queries from reaching the reformulation strategies, rendering keyword/embedding/generative RLS ineffective regardless of strategy quality. Literature confirms (CRAG, TARG, FLARE): healthy reformulation systems trigger on 20-40% of queries; 0% means miscalibrated thresholds. For the LLM agent reformulation experiment, bypassed the gate entirely (`confidence_threshold=0.0`) to establish the ceiling per DMQR-RAG's recommendation. Gate will be re-calibrated to a proper retrieval budget if the experiment shows positive results |
 
 ### C3. Architectural Patterns Named in Plans & Docs
 
@@ -480,9 +493,10 @@ reviewed:
 
 ---
 
-*Generated: 2026-05-01. Updated: 2026-05-11. Sources: codebase + docs + `.claude/plans/` +
+*Generated: 2026-05-01. Updated: 2026-05-12. Sources: codebase + docs + `.claude/plans/` +
 Resumancer session journal (40 entries, 2026-04 tardigrade-db branch) + Codex/Claude sessions
 2026-01 through 2026-05. May 2026 updates: multi-view consolidation diagnosis (20 refs);
 vague-query research (ExpandR, SoftQE, vstash, Hindsight, ByteRover architecture); latent-space
 transforms (LaSER, DEBATER, KV Packet, AdaQR); fundamental limitations (DeepMind LIMIT ICLR 2026,
-DCI-Agent). Total: 40+ new references this session.*
+DCI-Agent); adaptive retrieval gating (CRAG, Self-RAG, TARG, DMQR-RAG, RAG-Fusion, FLARE, WRRF).
+Total: 47+ new references across sessions.*

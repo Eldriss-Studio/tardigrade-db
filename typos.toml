@@ -7,6 +7,8 @@ nothink = "nothink"
 Brin = "Brin"
 # LaSER paper (Latent Space Explicit Reasoning)
 SER = "SER"
+# Akari Asai (Self-RAG author)
+Asai = "Asai"
 
 [files]
 extend-exclude = ["Cargo.lock", "*.bin", "*.ptx", "*.cubin"]

@@ -7,7 +7,10 @@ All retrieval stays tensor-native.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import urllib.request
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import TYPE_CHECKING
@@ -138,6 +141,11 @@ class EmbeddingExpansionStrategy(ReformulationStrategy):
 
 
 from .constants import (
+    RLS_AGENT_API_URL,
+    RLS_AGENT_DEFAULT_MODEL,
+    RLS_AGENT_MAX_REFORMULATIONS,
+    RLS_AGENT_PROMPT_TEMPLATE,
+    RLS_AGENT_TIMEOUT,
     RLS_DEFAULT_CONFIDENCE_THRESHOLD,
     RLS_DEFAULT_MAX_ATTEMPTS,
     RLS_REFORMULATION_PROMPT,
@@ -179,6 +187,63 @@ class GenerativeReformulationStrategy(ReformulationStrategy):
         if not rephrased or len(rephrased) < 5 or "_" * 3 in rephrased:
             return []
         return [rephrased]
+
+
+_NUMBERING_PREFIX = re.compile(r"^\s*(?:\d+[.)]\s*|[-•]\s*)")
+
+
+class LLMAgentReformulationStrategy(ReformulationStrategy):
+    """Calls an external LLM API to generate vocabulary-bridged reformulations.
+
+    Unlike GenerativeReformulationStrategy (which runs a local small model),
+    this strategy leverages a capable LLM with world knowledge to bridge
+    vocabulary gaps the capture model cannot.
+    """
+
+    def __init__(self, api_key: str, model: str | None = None) -> None:
+        self._api_key = api_key
+        self._model = model or os.getenv("TDB_RLS_AGENT_MODEL", RLS_AGENT_DEFAULT_MODEL)
+
+    def reformulate(self, query_text: str | None) -> list[str]:
+        if not query_text or not query_text.strip():
+            return []
+        if not self._api_key:
+            return []
+        try:
+            return self._call_api(query_text)
+        except Exception:
+            return []
+
+    def _call_api(self, query_text: str) -> list[str]:
+        prompt = RLS_AGENT_PROMPT_TEMPLATE.format(query_text=query_text)
+        payload = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 200,
+            "temperature": 0.3,
+        }
+        req = urllib.request.Request(
+            RLS_AGENT_API_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=RLS_AGENT_TIMEOUT) as response:  # noqa: S310
+            body = json.loads(response.read().decode("utf-8"))
+        content = body["choices"][0]["message"]["content"]
+        return self._parse_response(content)
+
+    def _parse_response(self, content: str) -> list[str]:
+        lines = content.strip().split("\n")
+        cleaned = []
+        for line in lines:
+            stripped = _NUMBERING_PREFIX.sub("", line).strip()
+            if stripped:
+                cleaned.append(stripped)
+        return cleaned[:RLS_AGENT_MAX_REFORMULATIONS]
 
 
 def rrf_fuse_handles(handle_lists: list[list], k: int = 60) -> list:

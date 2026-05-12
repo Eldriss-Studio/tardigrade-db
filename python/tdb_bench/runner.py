@@ -174,7 +174,10 @@ class BenchmarkRunner:
                 except Exception as exc:  # pragma: no cover - network/system variability
                     adapter_ingest_failures[system_name] = f"INGEST_FAILED: {exc}"
 
-            for item in loaded_items:
+            _total = len(loaded_items)
+            _scored_count = 0
+            _score_sum = 0.0
+            for _idx, item in enumerate(loaded_items, 1):
                 for system_name, adapter in adapters.items():
                     if system_name in adapter_ingest_failures:
                         q = None
@@ -221,6 +224,15 @@ class BenchmarkRunner:
                         row["score"] = scored.score
                         row["judgment"] = scored.judgment
                         row["evaluator_mode"] = scored.evaluator_mode
+                        _scored_count += 1
+                        _score_sum += scored.score
+                        _avg = _score_sum / _scored_count
+                        print(
+                            f"[{_idx}/{_total}] {item.dataset}/{item.item_id} "
+                            f"score={scored.score:.2f} avg={_avg:.4f} "
+                            f"latency={q.latency_ms:.0f}ms",
+                            flush=True,
+                        )
                     else:
                         row["score"] = 0.0
                         row["judgment"] = q.status
