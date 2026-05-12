@@ -131,3 +131,14 @@ TARDIGRADE_MODEL="Qwen/Qwen2.5-3B" python -m tardigrade_mcp
 ```
 
 Larger models produce richer KV representations but use more RAM and storage.
+
+## Python API Features Not Available in MCP
+
+The 7 MCP tools expose base-level KV store + trace operations. The following features are available via the Python API ([`TardigradeClient`](python-api.md#tardigradeclient)) but are not currently exposed through MCP:
+
+- **Reflective Latent Search (RLS)** — confidence-gated query reformulation with 5 strategy options
+- **File ingestion** — `ingest_file()` / `ingest_text()` with automatic token-bounded chunking
+- **Multi-view consolidation v2** — `consolidate()` / `consolidate_all()` for multi-framing retrieval surfaces
+- **CrossEncoderReranker** — Stage-2 re-ranking over text-bearing candidates
+
+MCP RLS routing is planned for a future phase.

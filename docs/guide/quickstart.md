@@ -46,47 +46,54 @@ Then in any conversation, the agent has memory tools:
 - `tardigrade_list_all` — list all stored memories
 - `tardigrade_forget` — delete a memory permanently
 
-## Option B: Use with Python
+## Option B: Use with Python (TardigradeClient)
 
-The Python API injects KV cache directly into the model's attention — zero prompt tokens for retrieved memories. Requires running a HuggingFace model locally.
+The Python `TardigradeClient` facade is the recommended entry point. It combines store, query, file ingest, and consolidation behind one object. Pass a `db_path` and it creates and manages the engine internally.
 
 ```python
-import torch
-from tardigrade_db import Engine
-from tardigrade_hooks.kp_injector import KnowledgePackStore
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from tardigrade_hooks.client import TardigradeClient
 
-# Load model
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
-model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen3-0.6B", dtype=torch.float32, attn_implementation="eager"
-)
-model.eval()
+# Create client — engine is created automatically at db_path
+client = TardigradeClient("./my-agent-memory", owner=1)
 
-# Create engine + memory store
-engine = Engine("./my-agent-memory")
-kps = KnowledgePackStore(engine, model, tokenizer, owner=1)
+# Store a single fact
+pack_id = client.store("User prefers morning meetings before 10am")
 
-# Store a memory
-kps.store("User prefers morning meetings before 10am")
+# Query — returns list of pack result dicts
+results = client.query("When should we schedule the review?", k=3)
 
-# Retrieve + generate (zero prompt tokens for the memory)
-text, tokens, had_memory = kps.generate(
-    "When should we schedule the review?",
-    max_new_tokens=50, do_sample=False,
-)
-print(text)  # The model recalls the morning preference
+# Ingest a file with automatic token-bounded chunking
+result = client.ingest_file("context.txt")  # IngestResult with pack_ids, chunk_count
+print(f"Ingested {result.chunk_count} chunks as {len(result.pack_ids)} packs")
+
+# Consolidate views for a pack (multi-view v2)
+n = client.consolidate(pack_id)        # int: views attached
+all_views = client.consolidate_all()   # dict[int, int]: {pack_id: views_attached}
 ```
+
+### What happens under the hood during `query()`
+
+1. **Retrieve:** `kv_capture_fn` encodes the query into a retrieval key via a model forward pass
+2. **Evaluate:** Top5Avg per-token latent scoring checks confidence (score ratio between rank 1 and rank 2)
+3. **Reformulate:** If confidence is below threshold, RLS runs keyword expansion + multi-phrasing variants
+4. **Re-retrieve:** Each variant is scored independently
+5. **Fuse:** Results from all variants are merged via Reciprocal Rank Fusion (RRF)
 
 ## Linking Related Memories
 
-When the agent learns a new detail about something it already remembers:
+For multi-hop queries, link facts at store time so retrieval can follow connections:
 
 ```python
+from tardigrade_db import Engine
+from tardigrade_hooks.kp_injector import KnowledgePackStore
+
+engine = Engine("./my-agent-memory")
+kps = KnowledgePackStore(engine, model, tokenizer, owner=1)
+
 # Store initial fact
 existing = kps.store("Went to a bookstore in Pilsen")
 
-# Later, learn the name
+# Later, learn the name — link it
 kps.store_and_link("The bookstore is called Casa Azul", existing)
 
 # Query follows the link automatically
@@ -103,5 +110,5 @@ text, _, _ = kps.generate_with_trace("What is the bookstore called?")
 ## Next Steps
 
 - [MCP Setup Guide](mcp-setup.md) — detailed configuration for different clients
-- [Python API Reference](python-api.md) — full KnowledgePackStore interface
-- [Concepts](concepts.md) — KV injection, trace links, governance explained
+- [Python API Reference](python-api.md) — full API including TardigradeClient, RLS, file ingestion, and multi-view
+- [Concepts](concepts.md) — KV injection, RLS, trace links, multi-view consolidation, governance explained

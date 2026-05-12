@@ -10,6 +10,63 @@ TardigradeDB stores the model's own KV cache tensors — the internal state the 
 
 **When to use:** Single-fact recall queries. "What's the user's preference?" "What did they say about X?"
 
+## Reflective Latent Search (RLS)
+
+Latent-space retrieval works well for specific queries, but vague queries ("What outdoor activities does this person enjoy?") often return weak results — the vocabulary in the query doesn't overlap with the vocabulary in the stored memory.
+
+RLS runs a RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE loop to recover from those misses.
+
+```
+1. RETRIEVE  — single forward pass, Top5Avg scoring
+2. EVALUATE  — confidence = score[rank-1] / score[rank-2]
+               if ratio ≥ threshold (1.10): return immediately
+3. REFORMULATE — run configured strategies to generate query variants
+4. RE-RETRIEVE — score each variant independently
+5. FUSE      — Reciprocal Rank Fusion over all result lists
+```
+
+**Why confidence-ratio gating?** If rank-1 is clearly better than rank-2, the retrieval is unambiguous and reformulation only adds noise. Gating on ratio lets high-confidence queries bypass the overhead entirely.
+
+**Why Reciprocal Rank Fusion?** Different reformulations may surface different relevant memories. RRF combines ranked lists by position, not by raw score magnitude, so results from diverse query forms can coexist without one dominating.
+
+**Strategy cost ladder** (choose based on latency budget):
+
+| Strategy | Model needed | Latency |
+|----------|-------------|---------|
+| `KeywordExpansionStrategy` | none | <1ms |
+| `MultiPhrasingStrategy` | none | <1ms |
+| `EmbeddingExpansionStrategy` | embedding table | ~5ms |
+| `GenerativeReformulationStrategy` | local LLM (e.g. Qwen2.5-3B) | ~500ms |
+| `LLMAgentReformulationStrategy` | external API (DeepSeek) | ~1-2s (network) |
+
+**Benchmark result:** RLS keyword/embedding strategies produced 0% lift on LoCoMo (2,042 items), confirming that the 68.2% ceiling is the model capability limit, not a retrieval failure. The agent strategy (vocabulary bridging) is the active research path.
+
+## Multi-view Consolidation
+
+A single fact can be queried in many forms: "Tomoko teaches swimming" vs "Who teaches swimming?" vs "Nishida's instruction". Latent-space retrieval matches well when the query resembles the stored text — but paraphrases can miss.
+
+Multi-view consolidation creates multiple retrieval surfaces for the same canonical memory. Each view is a text reframing stored as a linked pack:
+
+```
+Canonical pack (KV tensor)
+  └── Supports edge → Summary view:   "Tomoko Nishida teaches swimming"
+  └── Supports edge → Question view:  "What did Tomoko Nishida do?"
+  └── Supports edge → Paraphrase view: "Nishida Tomoko relocated to the center"
+```
+
+The canonical pack holds the actual KV tensor used for injection. The views are lightweight retrieval surfaces that point back to the same fact. Querying from any framing can now surface the memory.
+
+**Three rule-based framings** (no model required):
+- `summary` — extractive first clause
+- `question` — WH-question with extracted subject
+- `paraphrase` — clause reordering + synonym substitution
+
+**LLM framing** (`llm_question`) — uses a local model to generate diverse questions via the HyPE pattern. More creative, but requires a model.
+
+**Idempotency:** `MemoryConsolidator` tracks views already attached and skips packs that have already been consolidated. Safe to call repeatedly without generating duplicate views.
+
+**Governance gating:** Only packs at Validated tier or above are consolidated (configurable via `min_tier`). Draft memories are ephemeral candidates, not worth the consolidation overhead.
+
 ## Trace Links
 
 Memories can be connected via trace links — durable graph edges stored in the engine. When the agent retrieves one memory, it can follow trace links to discover related memories.
@@ -59,6 +116,7 @@ Packs are:
 |-------|-------------|------------|
 | **Storage** | Q4 quantize KV tensors, persist to disk | 730 KB per memory |
 | **Retrieval** | Per-token Top5Avg scoring in latent space | 100% recall at 100 memories |
+| **RLS** | Confidence-gated reformulation + RRF fusion | Closes vocab-gap misses |
 | **Injection** | Reconstruct DynamicCache, inject into model.generate() | 8/10, byte-identical to text RAG |
 | **Trace** | Follow graph edges to discover related memories | 70% on cross-referencing at 140 memories |
 
@@ -71,7 +129,7 @@ TardigradeDB's KV injection works best for single-fact recall. For queries that 
 | Path | Delivery | Token cost | Requires |
 |------|----------|------------|----------|
 | MCP server | Text in tool response | Normal prompt tokens | Any LLM client |
-| Python API | KV cache injection | Zero prompt tokens | Model access (HuggingFace) |
+| Python API (`TardigradeClient`) | KV cache injection | Zero prompt tokens | Model access (HuggingFace) |
 
 Both paths use TardigradeDB's latent-space retrieval to find the right memories. The difference is delivery: the MCP server returns memory text in its tool response (which the LLM reads as prompt tokens), while the Python API injects KV cache directly into the model's attention (bypassing the prompt entirely).
 
