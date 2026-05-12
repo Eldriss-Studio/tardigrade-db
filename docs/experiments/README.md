@@ -375,7 +375,7 @@ Moved core engine logic from Python to Rust to eliminate round-trips and improve
 | RLS keyword expansion (10-fact) | Complete — 100% all tiers (+40pp vague). Hand-crafted synonyms. |
 | RLS keyword expansion (LoCoMo) | Complete — 67.2% (0% improvement). Synonyms don't generalize. |
 | RLS embedding expansion (LoCoMo) | Complete — 67.2% (0% improvement). Embedding neighbors are lexical, not conceptual. |
-| RLS generative 3B (LoCoMo) | Complete — 68.2% (0% improvement). Confidence threshold too permissive: only 1/2042 queries triggered reformulation. Score ratio check never fires because engine always returns similarly-scored results. Need absolute score threshold. |
+| RLS generative 3B (LoCoMo) | Complete — 68.2% (0% improvement). Confidence threshold never fires. Root cause discovered: **LoCoMo score collapse** — all packs return identical scores (ratio=1.000). Adapter truncates 9K-token contexts to 256 tokens, producing near-identical hidden states. Every technique tested on LoCoMo was running on degenerate scores. This is an adapter ingestion bug, not an engine issue. Fix: use FileIngestor with proper chunking instead of single-pack truncation. |
 
 ## Running Experiments
 
