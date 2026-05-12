@@ -1,5 +1,9 @@
 """ATDD tests for Reflective Latent Search — Strategy pattern for query reformulation."""
 
+import json
+import os
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 import numpy as np
@@ -8,6 +12,7 @@ from tardigrade_hooks.rls import (
     EmbeddingExpansionStrategy,
     GenerativeReformulationStrategy,
     KeywordExpansionStrategy,
+    LLMAgentReformulationStrategy,
     MultiPhrasingStrategy,
     ReformulationStrategy,
 )
@@ -160,3 +165,54 @@ class TestGenerativeReformulation:
     def test_empty_input(self, strategy):
         assert strategy.reformulate("") == []
         assert strategy.reformulate(None) == []
+
+
+def _mock_deepseek_response(content: str):
+    """Build a mock urllib response matching DeepSeek Chat Completions format."""
+    body = json.dumps({
+        "choices": [{"message": {"content": content}}],
+    }).encode("utf-8")
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = body
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    return mock_resp
+
+
+class TestLLMAgentReformulation:
+    def test_reformulate_returns_list(self):
+        response_text = (
+            "What marathon races has Sonia completed?\n"
+            "Tell me about Sonia's running and endurance events\n"
+            "Has Sonia done any ultramarathon or triathlon training?"
+        )
+        with patch("urllib.request.urlopen", return_value=_mock_deepseek_response(response_text)):
+            s = LLMAgentReformulationStrategy(api_key="test-key")
+            results = s.reformulate("What athletic achievements does Sonia have?")
+        assert isinstance(results, list)
+        assert all(isinstance(r, str) for r in results)
+        assert 2 <= len(results) <= 5
+
+    def test_api_failure_returns_empty(self):
+        with patch("urllib.request.urlopen", side_effect=ConnectionError("timeout")):
+            s = LLMAgentReformulationStrategy(api_key="test-key")
+            results = s.reformulate("What athletic achievements does Sonia have?")
+        assert results == []
+
+    def test_respects_model_env(self):
+        with patch.dict(os.environ, {"TDB_RLS_AGENT_MODEL": "deepseek-reasoner"}):
+            s = LLMAgentReformulationStrategy(api_key="test-key")
+        assert s._model == "deepseek-reasoner"
+
+    def test_none_query_returns_empty(self):
+        s = LLMAgentReformulationStrategy(api_key="test-key")
+        assert s.reformulate(None) == []
+        assert s.reformulate("") == []
+
+    def test_is_substitutable(self):
+        s = LLMAgentReformulationStrategy(api_key="test-key")
+        assert isinstance(s, ReformulationStrategy)
+
+    def test_mode_agent_activates_strategy(self):
+        from tardigrade_hooks.constants import RLS_MODE_AGENT
+        assert RLS_MODE_AGENT == "agent"

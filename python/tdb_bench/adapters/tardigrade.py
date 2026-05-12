@@ -40,6 +40,7 @@ from tardigrade_hooks.constants import (
     RLS_DEFAULT_GEN_MODEL,
     RLS_MODE_BOTH,
     RLS_MODE_EMBEDDING,
+    RLS_MODE_AGENT,
     RLS_MODE_GENERATIVE,
     RLS_MODE_KEYWORD,
     RLS_MODE_MULTIPHRASING,
@@ -56,6 +57,32 @@ _RERANK_MODEL = os.getenv("TDB_BENCH_RERANK_MODEL", "")  # empty disables rerank
 _RLS_MODE = os.getenv("TDB_RLS_MODE", RLS_MODE_NONE)
 _CHUNK_TOKENS = int(os.getenv("TDB_BENCH_CHUNK_TOKENS", "128"))
 _CHUNK_OVERLAP = int(os.getenv("TDB_BENCH_CHUNK_OVERLAP", "16"))
+
+
+def _create_rls_strategies(rls_mode: str) -> list:
+    """Factory Method for ReformulationStrategy instances.
+
+    Creates only strategies that need no GPU. GPU-dependent strategies
+    (EmbeddingExpansion, GenerativeReformulation) stay in the native-only
+    init path with their guarded imports.
+    """
+    from tardigrade_hooks.rls import (
+        KeywordExpansionStrategy,
+        LLMAgentReformulationStrategy,
+        MultiPhrasingStrategy,
+    )
+
+    strategies: list = []
+    if rls_mode in (RLS_MODE_KEYWORD, RLS_MODE_BOTH):
+        strategies.append(KeywordExpansionStrategy())
+    if rls_mode in (RLS_MODE_MULTIPHRASING, RLS_MODE_BOTH):
+        strategies.append(MultiPhrasingStrategy())
+    if rls_mode == RLS_MODE_AGENT:
+        strategies.append(
+            LLMAgentReformulationStrategy(api_key=os.getenv("DEEPSEEK_API_KEY", "").strip())
+        )
+    return strategies
+
 
 # Module-level model cache so repeated ``adapter = TardigradeAdapter()``
 # calls (one per repeat in BenchmarkRunner) don't re-download/re-load
@@ -93,7 +120,7 @@ class _InMemoryStore:
     def insert(self, item: BenchmarkItem) -> None:
         self.data[item.item_id] = item
 
-    def best_match(self, question: str, top_k: int) -> tuple[str, list[str]]:
+    def scored_best_match(self, question: str, top_k: int) -> list[tuple[int, BenchmarkItem]]:
         terms = {t.lower() for t in question.split() if t.strip()}
         scored: list[tuple[int, BenchmarkItem]] = []
         for item in self.data.values():
@@ -101,9 +128,42 @@ class _InMemoryStore:
             score = sum(1 for t in terms if t in hay)
             scored.append((score, item))
         scored.sort(key=lambda s: s[0], reverse=True)
-        top = [x[1] for x in scored[: max(1, top_k)]]
-        best = top[0]
-        return best.ground_truth, [b.context for b in top]
+        return scored[: max(1, top_k)]
+
+    def best_match(self, question: str, top_k: int) -> tuple[str, list[str]]:
+        top = self.scored_best_match(question, top_k)
+        best = top[0][1]
+        return best.ground_truth, [item.context for _, item in top]
+
+
+class _LexicalReformulationSearch:
+    """REFORMULATE-SEARCH-FUSE loop over lexical _InMemoryStore.
+
+    Bridge pattern: same ReformulationStrategy interface as
+    ReflectiveLatentSearch, but retrieves via word-overlap scoring
+    instead of latent-space dot products.
+    """
+
+    def __init__(self, store: _InMemoryStore, strategies: list) -> None:
+        self._store = store
+        self._strategies = strategies
+
+    def query(self, question: str, top_k: int) -> tuple[str, list[str]]:
+        top = self._store.scored_best_match(question, top_k)
+        best_score, best_item = top[0] if top else (0, None)
+        best_evidence = [item.context for _, item in top]
+
+        for strategy in self._strategies:
+            for variant in strategy.reformulate(question):
+                scored = self._store.scored_best_match(variant, top_k)
+                if scored and scored[0][0] > best_score:
+                    best_score = scored[0][0]
+                    best_item = scored[0][1]
+                    best_evidence = [item.context for _, item in scored]
+
+        if best_item is None:
+            return "", []
+        return best_item.ground_truth, best_evidence
 
 
 class TardigradeAdapter(BenchmarkAdapter):
@@ -129,8 +189,10 @@ class TardigradeAdapter(BenchmarkAdapter):
                 # is an optional second-stage, not a blocker.
                 self._reranker = None
 
+        self._lexical_rls = None
         force_fallback = os.getenv("TDB_BENCH_FORCE_FALLBACK", "").lower() in ("1", "true", "yes")
         if force_fallback:
+            self._init_lexical_rls()
             return
 
         try:
@@ -157,6 +219,7 @@ class TardigradeAdapter(BenchmarkAdapter):
                     EmbeddingExpansionStrategy,
                     GenerativeReformulationStrategy,
                     KeywordExpansionStrategy,
+                    LLMAgentReformulationStrategy,
                     MultiPhrasingStrategy,
                     ReflectiveLatentSearch,
                 )
@@ -179,8 +242,14 @@ class TardigradeAdapter(BenchmarkAdapter):
                     _gen_model = _Auto.from_pretrained(_gen_model_name, dtype=_gen_dtype).to(_gen_device)
                     _gen_model.requires_grad_(False)
                     strategies.append(GenerativeReformulationStrategy(_gen_model, _gen_tok))
+                if _RLS_MODE == RLS_MODE_AGENT:
+                    _agent_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+                    strategies.append(LLMAgentReformulationStrategy(api_key=_agent_key))
                 if strategies:
                     rls_model, rls_tokenizer, rls_query_layer = _load_model_cached()
+                    rls_kwargs = {}
+                    if _RLS_MODE == RLS_MODE_AGENT:
+                        rls_kwargs["confidence_threshold"] = float("inf")
                     self._rls = ReflectiveLatentSearch(
                         engine=self._engine,
                         model=rls_model,
@@ -190,14 +259,23 @@ class TardigradeAdapter(BenchmarkAdapter):
                         owner=1,
                         k=5,
                         strategies=strategies,
+                        **rls_kwargs,
                     )
         except Exception as exc:
-            # Capture why we fell back so metadata() can surface it.
             self._engine = None
             self._hook = None
             self._rls = None
             self._mode = os.getenv("TDB_BENCH_FALLBACK_MODE", "in_memory")
             self._fallback_reason = str(exc)[:200]
+            self._init_lexical_rls()
+
+    def _init_lexical_rls(self) -> None:
+        """Set up lexical reformulation search for in_memory mode."""
+        if _RLS_MODE == RLS_MODE_NONE:
+            return
+        strategies = _create_rls_strategies(_RLS_MODE)
+        if strategies:
+            self._lexical_rls = _LexicalReformulationSearch(self._store, strategies)
 
     # ---- BenchmarkAdapter contract ----
 
@@ -214,9 +292,15 @@ class TardigradeAdapter(BenchmarkAdapter):
         model, tokenizer, query_layer = _load_model_cached()
         chunker = TextChunker(tokenizer, max_tokens=_CHUNK_TOKENS, overlap_tokens=_CHUNK_OVERLAP)
 
-        for item in items:
+        _total = len(items)
+        for _idx, item in enumerate(items, 1):
             chunks = chunker.chunk(item.context)
             chunk_texts = [c.text for c in chunks] if chunks else [item.context[:500]]
+            print(
+                f"[ingest {_idx}/{_total}] {item.item_id} "
+                f"chunks={len(chunk_texts)}",
+                flush=True,
+            )
 
             for chunk_text in chunk_texts:
                 inputs = tokenizer(
@@ -232,6 +316,8 @@ class TardigradeAdapter(BenchmarkAdapter):
                 )
                 if not decision.should_write:
                     continue
+                if len(decision.key) == 0 or len(decision.value) == 0:
+                    continue
                 cell_id = self._engine.mem_write(
                     1, query_layer, decision.key, decision.value, decision.salience, None,
                 )
@@ -241,7 +327,10 @@ class TardigradeAdapter(BenchmarkAdapter):
     def query(self, item: BenchmarkItem, top_k: int) -> AdapterQueryResult:
         if self._mode != "native":
             start = time.perf_counter()
-            answer, evidence = self._store.best_match(item.question, top_k)
+            if self._lexical_rls is not None:
+                answer, evidence = self._lexical_rls.query(item.question, top_k)
+            else:
+                answer, evidence = self._store.best_match(item.question, top_k)
             return AdapterQueryResult(
                 answer=answer,
                 evidence=evidence,
@@ -355,6 +444,7 @@ class TardigradeAdapter(BenchmarkAdapter):
                 if _RLS_MODE != RLS_MODE_NONE:
                     from tardigrade_hooks.rls import (  # type: ignore
                         KeywordExpansionStrategy,
+                        LLMAgentReformulationStrategy,
                         MultiPhrasingStrategy,
                         ReflectiveLatentSearch,
                     )
@@ -363,8 +453,14 @@ class TardigradeAdapter(BenchmarkAdapter):
                         strategies.append(KeywordExpansionStrategy())
                     if _RLS_MODE in (RLS_MODE_MULTIPHRASING, RLS_MODE_BOTH):
                         strategies.append(MultiPhrasingStrategy())
+                    if _RLS_MODE == RLS_MODE_AGENT:
+                        _agent_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+                        strategies.append(LLMAgentReformulationStrategy(api_key=_agent_key))
                     if strategies:
                         rls_model, rls_tokenizer, rls_query_layer = _load_model_cached()
+                        rls_kwargs = {}
+                        if _RLS_MODE == RLS_MODE_AGENT:
+                            rls_kwargs["confidence_threshold"] = float("inf")
                         self._rls = ReflectiveLatentSearch(
                             engine=self._engine,
                             model=rls_model,
@@ -374,13 +470,14 @@ class TardigradeAdapter(BenchmarkAdapter):
                             owner=1,
                             k=5,
                             strategies=strategies,
+                            **rls_kwargs,
                         )
             except Exception:
-                # If a reset fails we degrade to fallback rather than crash the run.
                 self._engine = None
                 self._hook = None
                 self._rls = None
                 self._mode = "in_memory"
+                self._init_lexical_rls()
 
     def metadata(self) -> dict[str, str]:
         meta = {

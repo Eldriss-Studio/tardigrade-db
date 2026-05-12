@@ -53,7 +53,21 @@ RLS_MODE_KEYWORD: str = "keyword"
 RLS_MODE_MULTIPHRASING: str = "multiphrasing"
 RLS_MODE_EMBEDDING: str = "embedding"
 RLS_MODE_GENERATIVE: str = "generative"
+RLS_MODE_AGENT: str = "agent"
 RLS_MODE_BOTH: str = "both"
+RLS_AGENT_API_URL: str = "https://api.deepseek.com/v1/chat/completions"
+RLS_AGENT_DEFAULT_MODEL: str = "deepseek-chat"
+RLS_AGENT_TIMEOUT: int = 15
+RLS_AGENT_MAX_REFORMULATIONS: int = 5
+RLS_AGENT_PROMPT_TEMPLATE: str = (
+    "You are helping search a memory system that stores conversations verbatim. "
+    "It retrieves by matching words in the stored text, not by understanding meaning.\n\n"
+    "Generate 3-5 alternative search queries that use different vocabulary "
+    "the stored conversation might actually contain.\n\n"
+    "Original query: \"{query_text}\"\n\n"
+    "Think about what specific words a real conversation would use instead of "
+    "the abstract terms in the query. Output one query per line, nothing else."
+)
 RLS_DEFAULT_CONFIDENCE_THRESHOLD: float = 1.10
 RLS_DEFAULT_MAX_ATTEMPTS: int = 2
 RLS_DEFAULT_GEN_MODEL: str = "Qwen/Qwen2.5-3B"
