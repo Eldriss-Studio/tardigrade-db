@@ -181,6 +181,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod cell_source_pool;
 pub mod engine;
 pub mod maintenance;
 pub(crate) mod pack_directory;

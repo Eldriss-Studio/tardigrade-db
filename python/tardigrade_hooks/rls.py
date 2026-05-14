@@ -3,6 +3,33 @@
 Strategy pattern for query reformulation. Template Method for the
 RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE loop.
 All retrieval stays tensor-native.
+
+.. warning::
+    **Experimental — 2026-05-14 audit found all RLS modes harmful.**
+    Measured on the cleaned LoCoMo dataset (1533 items, deterministic
+    eval, 50-item subset):
+
+    +----------------------+--------+
+    | Mode                 | Score  |
+    +======================+========+
+    | none (no RLS)        | 21.95% |
+    +----------------------+--------+
+    | keyword              | 16.62% |
+    +----------------------+--------+
+    | agent (DeepSeek API) |  9.29% |
+    +----------------------+--------+
+
+    The DeepSeek agent reformulator loses 12.7pp while adding ~1.7s
+    of latency per query. Hypothesized causes: fusion logic discards
+    good answers, reformulations dilute the latent signal, confidence
+    threshold was tuned against a broken baseline.
+
+    Default in :class:`~tdb_bench.adapters.tardigrade.TardigradeAdapter`
+    remains ``TDB_RLS_MODE=none``; opting in via env var now logs a
+    one-time warning. Code is preserved for future fusion-redesign
+    work but should not be enabled in production runs.
+
+    Full record: ``docs/experiments/2026-05-14-bench-audit.md``.
 """
 
 from __future__ import annotations

@@ -30,7 +30,9 @@ unmodified retrieval. The corresponding empirical numbers live in
 from __future__ import annotations
 
 import os
+import queue
 import tempfile
+import threading
 import time
 from collections import OrderedDict
 from typing import Any
@@ -55,8 +57,43 @@ _DEVICE = os.getenv("TDB_BENCH_DEVICE", "cuda")
 _REFINEMENT = os.getenv("TDB_REFINEMENT_MODE", "none")
 _RERANK_MODEL = os.getenv("TDB_BENCH_RERANK_MODEL", "")  # empty disables reranker
 _RLS_MODE = os.getenv("TDB_RLS_MODE", RLS_MODE_NONE)
+
+# RLS is opt-in only. The 2026-05-14 bench audit found every RLS mode
+# harmful relative to no-RLS (keyword -5.3pp, DeepSeek agent -12.7pp on
+# the 50-item LoCoMo subset). Code is preserved for future fusion-redesign
+# work; meanwhile, opting in via env var emits a one-time warning so the
+# choice is visible in run logs. See docs/experiments/2026-05-14-bench-audit.md.
+if _RLS_MODE != RLS_MODE_NONE:
+    import warnings as _warnings
+    _warnings.warn(
+        f"TDB_RLS_MODE={_RLS_MODE!r} — RLS is experimental and was found "
+        "harmful in the 2026-05-14 audit (all modes underperform no-RLS "
+        "on the clean dataset). See docs/experiments/2026-05-14-bench-audit.md.",
+        stacklevel=2,
+    )
 _CHUNK_TOKENS = int(os.getenv("TDB_BENCH_CHUNK_TOKENS", "128"))
 _CHUNK_OVERLAP = int(os.getenv("TDB_BENCH_CHUNK_OVERLAP", "16"))
+
+# Slice B1 — GPU batching for the ingest forward pass.
+# Default 8 chunks per batched forward pass fits the RTX 3070 Ti's
+# 8 GB VRAM with Qwen3-0.6B at chunk size 128 with comfortable
+# headroom. Override via `TDB_BENCH_GPU_BATCH_SIZE` when tuning on
+# different hardware.
+_GPU_BATCH_SIZE = int(os.getenv("TDB_BENCH_GPU_BATCH_SIZE", "8"))
+
+# Slice B2 — engine-side batched writes. WriteRequest tuple field
+# defaults reused across all writes from this adapter; named for
+# clarity instead of inline magic literals.
+_DEFAULT_WRITE_OWNER = 1
+_DEFAULT_WRITE_SALIENCE = 1.0
+_NO_PARENT_CELL_ID: int | None = None
+
+# Slice D2 — CPU/GPU pipeline overlap.
+# Bounded queue depth between the GPU-forward producer thread and the
+# `mem_write_batch` consumer thread. Depth 4 gives the consumer time
+# to drain while the producer prepares the next item without
+# unboundedly buffering pending writes.
+_INGEST_PIPELINE_DEPTH = int(os.getenv("TDB_INGEST_PIPELINE_DEPTH", "4"))
 
 
 def _create_rls_strategies(rls_mode: str) -> list:
@@ -292,37 +329,175 @@ class TardigradeAdapter(BenchmarkAdapter):
         model, tokenizer, query_layer = _load_model_cached()
         chunker = TextChunker(tokenizer, max_tokens=_CHUNK_TOKENS, overlap_tokens=_CHUNK_OVERLAP)
 
-        _total = len(items)
-        for _idx, item in enumerate(items, 1):
-            chunks = chunker.chunk(item.context)
-            chunk_texts = [c.text for c in chunks] if chunks else [item.context[:500]]
-            print(
-                f"[ingest {_idx}/{_total}] {item.item_id} "
-                f"chunks={len(chunk_texts)}",
-                flush=True,
-            )
+        # Slice D2 — producer-consumer pipeline.
+        #
+        # Producer (this thread): runs the GPU-bound batched forward
+        # passes and posts (write_requests, item) onto a bounded
+        # queue. Consumer (`_writer_loop`): calls
+        # `engine.mem_write_batch` and updates `_cell_to_item` /
+        # `_store`. The bounded queue is the backpressure mechanism;
+        # the consumer holds the engine mutex during its writes,
+        # so this is genuine CPU/GPU overlap on the engine's side
+        # (PyTorch releases the GIL during CUDA work; the engine's
+        # `py.detach()` releases it during writes).
+        write_queue: queue.Queue = queue.Queue(maxsize=_INGEST_PIPELINE_DEPTH)
+        writer_error: dict[str, BaseException] = {}
+        writer_thread = threading.Thread(
+            target=self._writer_loop,
+            args=(write_queue, writer_error),
+            name="tdb-ingest-writer",
+            daemon=True,
+        )
+        writer_thread.start()
 
-            for chunk_text in chunk_texts:
-                inputs = tokenizer(
-                    chunk_text, return_tensors="pt", truncation=True, max_length=_CHUNK_TOKENS,
+        _total = len(items)
+        try:
+            for _idx, item in enumerate(items, 1):
+                if writer_error:
+                    break
+                chunks = chunker.chunk(item.context)
+                chunk_texts = [c.text for c in chunks] if chunks else [item.context[:500]]
+                print(
+                    f"[ingest {_idx}/{_total}] {item.item_id} "
+                    f"chunks={len(chunk_texts)}",
+                    flush=True,
                 )
-                inputs = {k: v.to(model.device) for k, v in inputs.items()}
-                with torch.no_grad():
-                    out = model(**inputs, use_cache=True, output_hidden_states=True)
-                decision = self._hook.on_generate(
-                    layer=query_layer,
-                    past_key_values=out.past_key_values,
-                    model_hidden_states=out.hidden_states[query_layer],
+                write_requests = self._build_write_requests_for_item(
+                    chunk_texts, tokenizer, model, query_layer, torch,
                 )
-                if not decision.should_write:
+                write_queue.put((write_requests, item))
+        finally:
+            write_queue.put(None)
+            writer_thread.join()
+
+        if writer_error:
+            raise writer_error["err"]
+
+    def _writer_loop(self, write_queue, error_slot):
+        """Consumer: drains queued write batches, calls
+        `engine.mem_write_batch`, updates side-tables.
+
+        Runs on a dedicated thread for CPU/GPU overlap with the
+        ingest producer. The engine releases the GIL inside
+        `mem_write_batch` via `py.detach()`, so the producer's next
+        forward pass can launch concurrently while writes commit.
+        """
+        try:
+            while True:
+                msg = write_queue.get()
+                if msg is None:
+                    return
+                write_requests, item = msg
+                if write_requests:
+                    cell_ids = self._engine.mem_write_batch(write_requests)
+                    for cell_id in cell_ids:
+                        self._cell_to_item[int(cell_id)] = item
+                self._store.insert(item)
+        except BaseException as exc:  # noqa: BLE001 — re-raised on producer thread
+            error_slot["err"] = exc
+            # Drain remaining queued items so the producer doesn't
+            # block forever on a full queue while we're dying.
+            while True:
+                try:
+                    if write_queue.get_nowait() is None:
+                        return
+                except queue.Empty:
+                    return
+
+    def _build_write_requests_for_item(
+        self,
+        chunk_texts,
+        tokenizer,
+        model,
+        query_layer,
+        torch,
+    ):
+        """Collect WriteRequest tuples for one item's chunks.
+
+        Slice B1 batches chunks `_GPU_BATCH_SIZE` at a time per
+        forward pass; Slice B2 emits the resulting requests as a
+        single `engine.mem_write_batch` per item; Slice D3
+        pre-tokenizes the whole item once and slices `input_ids` /
+        `attention_mask` per batch — saves one tokenizer round-trip
+        per batch.
+        """
+        if not chunk_texts:
+            return []
+
+        # Slice D3 — single tokenizer call per item.
+        item_inputs = tokenizer(
+            chunk_texts,
+            return_tensors="pt",
+            truncation=True,
+            max_length=_CHUNK_TOKENS,
+            padding=True,
+        )
+        item_inputs = {k: v.to(model.device) for k, v in item_inputs.items()}
+
+        write_requests = []
+        chunk_total = item_inputs["input_ids"].shape[0]
+        for batch_start in range(0, chunk_total, _GPU_BATCH_SIZE):
+            batch_end = min(batch_start + _GPU_BATCH_SIZE, chunk_total)
+            decisions = self._forward_pass_batch(
+                item_inputs, batch_start, batch_end, model, query_layer, torch,
+            )
+            for decision in decisions:
+                if (
+                    not decision.should_write
+                    or len(decision.key) == 0
+                    or len(decision.value) == 0
+                ):
                     continue
-                if len(decision.key) == 0 or len(decision.value) == 0:
-                    continue
-                cell_id = self._engine.mem_write(
-                    1, query_layer, decision.key, decision.value, decision.salience, None,
+                write_requests.append(
+                    (
+                        _DEFAULT_WRITE_OWNER,
+                        query_layer,
+                        decision.key,
+                        decision.value,
+                        decision.salience,
+                        _NO_PARENT_CELL_ID,
+                    )
                 )
-                self._cell_to_item[int(cell_id)] = item
-            self._store.insert(item)
+        return write_requests
+
+    def _forward_pass_batch(
+        self,
+        item_inputs,
+        batch_start,
+        batch_end,
+        model,
+        query_layer,
+        torch,
+    ):
+        """One batched forward pass → one `WriteDecision` per chunk.
+
+        Receives slices of the item-wide pre-tokenized tensors.
+        Runs a single forward pass on the slice and dispatches the
+        batch-aware hook per chunk with its own un-padded
+        `seq_len`. The hook reconstructs each chunk's per-token K
+        vector and KV payload exactly as it would under the serial
+        path.
+        """
+        batch_inputs = {
+            key: tensor[batch_start:batch_end] for key, tensor in item_inputs.items()
+        }
+        with torch.no_grad():
+            out = model(**batch_inputs, use_cache=True, output_hidden_states=True)
+
+        batched_hidden = out.hidden_states[query_layer]
+        attention_mask = batch_inputs["attention_mask"]
+        decisions = []
+        for batch_index in range(batched_hidden.shape[0]):
+            chunk_len = int(attention_mask[batch_index].sum().item())
+            decision = self._hook.on_generate(
+                layer=query_layer,
+                past_key_values=out.past_key_values,
+                model_hidden_states=batched_hidden,
+                batch_index=batch_index,
+                seq_len=chunk_len,
+            )
+            decisions.append(decision)
+        return decisions
 
     def query(self, item: BenchmarkItem, top_k: int) -> AdapterQueryResult:
         if self._mode != "native":

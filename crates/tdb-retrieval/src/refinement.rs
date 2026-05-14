@@ -31,6 +31,7 @@
 use tdb_core::OwnerId;
 
 use crate::attention::RetrievalResult;
+use crate::cell_source::CellSource;
 use crate::per_token::{PerTokenRetriever, encode_per_token_keys};
 
 // ── Strategy pattern: trait + concrete strategies ───────────────────────
@@ -45,6 +46,12 @@ pub trait RefinementStrategy: Send + Sync + std::fmt::Debug {
     ///
     /// Semantics are identical to [`apply`]: re-score or re-query the
     /// candidates, returning at most `k` results.
+    ///
+    /// `source`: when `Some`, strategies that need per-cell tokens
+    /// (mean-centered, whitened, PRF) load them lazily via the
+    /// [`CellSource`] instead of relying on the retriever's in-memory
+    /// token store. Engines wired for lazy mode pass `Some`; legacy
+    /// callers that still use the in-memory store pass `None`.
     fn refine(
         &self,
         retriever: &mut PerTokenRetriever,
@@ -52,6 +59,7 @@ pub trait RefinementStrategy: Send + Sync + std::fmt::Debug {
         first_stage: Vec<RetrievalResult>,
         k: usize,
         owner_filter: Option<OwnerId>,
+        source: Option<&dyn CellSource>,
     ) -> Vec<RetrievalResult>;
 
     /// Human-readable name used by Python bindings and diagnostics.
@@ -75,6 +83,7 @@ impl RefinementStrategy for NoOpStrategy {
         first_stage: Vec<RetrievalResult>,
         _k: usize,
         _owner_filter: Option<OwnerId>,
+        _source: Option<&dyn CellSource>,
     ) -> Vec<RetrievalResult> {
         first_stage
     }
@@ -100,8 +109,9 @@ impl RefinementStrategy for MeanCenteredStrategy {
         first_stage: Vec<RetrievalResult>,
         k: usize,
         _owner_filter: Option<OwnerId>,
+        source: Option<&dyn CellSource>,
     ) -> Vec<RetrievalResult> {
-        mean_centered_rescore(retriever, query_key, first_stage, k)
+        mean_centered_rescore(retriever, query_key, first_stage, k, source)
     }
 
     fn name(&self) -> &'static str {
@@ -125,6 +135,7 @@ impl RefinementStrategy for LatentPrfStrategy {
         first_stage: Vec<RetrievalResult>,
         k: usize,
         owner_filter: Option<OwnerId>,
+        source: Option<&dyn CellSource>,
     ) -> Vec<RetrievalResult> {
         latent_prf(
             retriever,
@@ -135,6 +146,7 @@ impl RefinementStrategy for LatentPrfStrategy {
             self.k_prime,
             k,
             owner_filter,
+            source,
         )
     }
 
@@ -158,8 +170,9 @@ impl RefinementStrategy for WhiteningStrategy {
         first_stage: Vec<RetrievalResult>,
         k: usize,
         _owner_filter: Option<OwnerId>,
+        source: Option<&dyn CellSource>,
     ) -> Vec<RetrievalResult> {
-        whitened_rescore(retriever, query_key, first_stage, k)
+        whitened_rescore(retriever, query_key, first_stage, k, source)
     }
 
     fn name(&self) -> &'static str {
@@ -225,10 +238,20 @@ pub fn apply(
 ) -> Vec<RetrievalResult> {
     match mode {
         RefinementMode::None => first_stage,
-        RefinementMode::MeanCentered => mean_centered_rescore(retriever, query_key, first_stage, k),
-        RefinementMode::LatentPrf { alpha, beta, k_prime } => {
-            latent_prf(retriever, query_key, first_stage, alpha, beta, k_prime, k, owner_filter)
+        RefinementMode::MeanCentered => {
+            mean_centered_rescore(retriever, query_key, first_stage, k, None)
         }
+        RefinementMode::LatentPrf { alpha, beta, k_prime } => latent_prf(
+            retriever,
+            query_key,
+            first_stage,
+            alpha,
+            beta,
+            k_prime,
+            k,
+            owner_filter,
+            None,
+        ),
     }
 }
 
@@ -239,6 +262,7 @@ fn mean_centered_rescore(
     query_key: &[f32],
     first_stage: Vec<RetrievalResult>,
     k: usize,
+    source: Option<&dyn CellSource>,
 ) -> Vec<RetrievalResult> {
     if first_stage.is_empty() {
         return first_stage;
@@ -261,7 +285,8 @@ fn mean_centered_rescore(
         .into_iter()
         .map(|res| {
             let mut dots: Vec<f32> = Vec::new();
-            for (stored_token, _owner) in retriever.dequantized_tokens_for_cell(res.cell_id) {
+            for (stored_token, _owner) in retriever.tokens_for_cell_via_source(res.cell_id, source)
+            {
                 if stored_token.len() != dim {
                     continue;
                 }
@@ -289,13 +314,14 @@ fn whitened_rescore(
     query_key: &[f32],
     first_stage: Vec<RetrievalResult>,
     k: usize,
+    source: Option<&dyn CellSource>,
 ) -> Vec<RetrievalResult> {
     if first_stage.is_empty() {
         return first_stage;
     }
     let Some(w_matrix) = retriever.whitening_matrix() else {
         // Corpus too small — fall back to mean-centered.
-        return mean_centered_rescore(retriever, query_key, first_stage, k);
+        return mean_centered_rescore(retriever, query_key, first_stage, k, source);
     };
     // Copy to avoid borrow conflict with retriever methods below.
     let w_matrix = w_matrix.to_vec();
@@ -319,7 +345,8 @@ fn whitened_rescore(
         .into_iter()
         .map(|res| {
             let mut dots: Vec<f32> = Vec::new();
-            for (stored_token, _owner) in retriever.dequantized_tokens_for_cell(res.cell_id) {
+            for (stored_token, _owner) in retriever.tokens_for_cell_via_source(res.cell_id, source)
+            {
                 if stored_token.len() != dim {
                     continue;
                 }
@@ -358,6 +385,7 @@ fn latent_prf(
     k_prime: usize,
     k: usize,
     owner_filter: Option<OwnerId>,
+    source: Option<&dyn CellSource>,
 ) -> Vec<RetrievalResult> {
     if first_stage.is_empty() || k_prime == 0 {
         return first_stage;
@@ -373,7 +401,7 @@ fn latent_prf(
     let mut centroid = vec![0.0_f32; dim];
     let mut count = 0_usize;
     for res in first_stage.iter().take(k_prime) {
-        for (token, _owner) in retriever.dequantized_tokens_for_cell(res.cell_id) {
+        for (token, _owner) in retriever.tokens_for_cell_via_source(res.cell_id, source) {
             if token.len() != dim {
                 continue;
             }
@@ -401,12 +429,17 @@ fn latent_prf(
     let refs: Vec<&[f32]> = expanded.iter().map(Vec::as_slice).collect();
     let expanded_key = encode_per_token_keys(&refs);
 
-    let prf_results = <PerTokenRetriever as crate::retriever::Retriever>::query(
-        retriever,
-        &expanded_key,
-        k,
-        owner_filter,
-    );
+    let prf_results = match source {
+        Some(src) => {
+            <PerTokenRetriever>::query_with_source(retriever, &expanded_key, k, owner_filter, src)
+        }
+        None => <PerTokenRetriever as crate::retriever::Retriever>::query(
+            retriever,
+            &expanded_key,
+            k,
+            owner_filter,
+        ),
+    };
 
     if prf_results.is_empty() {
         return truncate(first_stage, k);
@@ -551,7 +584,7 @@ mod tests {
 
         // Trait dispatch (new).
         let strategy = strategy_from_name("none", None, None, None).unwrap();
-        let trait_result = strategy.refine(&mut r, &q, first_stage.clone(), 3, Some(OWNER));
+        let trait_result = strategy.refine(&mut r, &q, first_stage.clone(), 3, Some(OWNER), None);
 
         let enum_ids: Vec<_> = enum_result.iter().map(|r| r.cell_id).collect();
         let trait_ids: Vec<_> = trait_result.iter().map(|r| r.cell_id).collect();
@@ -562,7 +595,7 @@ mod tests {
         let enum_mc =
             apply(RefinementMode::MeanCentered, &mut r, &q, first_stage2.clone(), 3, Some(OWNER));
         let strategy_mc = strategy_from_name("centered", None, None, None).unwrap();
-        let trait_mc = strategy_mc.refine(&mut r, &q, first_stage2, 3, Some(OWNER));
+        let trait_mc = strategy_mc.refine(&mut r, &q, first_stage2, 3, Some(OWNER), None);
         let enum_mc_ids: Vec<_> = enum_mc.iter().map(|r| r.cell_id).collect();
         let trait_mc_ids: Vec<_> = trait_mc.iter().map(|r| r.cell_id).collect();
         assert_eq!(enum_mc_ids, trait_mc_ids);
@@ -573,8 +606,8 @@ mod tests {
         let mut r = populated_retriever();
         let q = encode_per_token_keys(&[&[0.7_f32, 0.3, 0.1, 0.0][..]]);
         let first = r.query(&q, 3, Some(OWNER));
-        let mc = MeanCenteredStrategy.refine(&mut r, &q, first.clone(), 3, Some(OWNER));
-        let wh = WhiteningStrategy.refine(&mut r, &q, first, 3, Some(OWNER));
+        let mc = MeanCenteredStrategy.refine(&mut r, &q, first.clone(), 3, Some(OWNER), None);
+        let wh = WhiteningStrategy.refine(&mut r, &q, first, 3, Some(OWNER), None);
         let mc_scores: Vec<f32> = mc.iter().map(|r| r.score).collect();
         let wh_scores: Vec<f32> = wh.iter().map(|r| r.score).collect();
         assert_ne!(mc_scores, wh_scores);
@@ -586,7 +619,7 @@ mod tests {
         r.insert(0, OWNER, &encode_per_token_keys(&[&[1.0_f32, 0.0, 0.0, 0.0]]));
         let q = encode_per_token_keys(&[&[1.0_f32, 0.0, 0.0, 0.0][..]]);
         let first = r.query(&q, 1, Some(OWNER));
-        let refined = WhiteningStrategy.refine(&mut r, &q, first, 1, Some(OWNER));
+        let refined = WhiteningStrategy.refine(&mut r, &q, first, 1, Some(OWNER), None);
         assert!(!refined.is_empty());
     }
 

@@ -125,30 +125,58 @@ class HuggingFaceKVHook(TardigradeHook):
         """Encode per-token vectors with Q4-safe sentinel header."""
         return encode_per_token(token_vecs, dim)
 
-    def _extract_kv_payload(self, past_key_values, layer_idx):
-        """Extract full K+V payload from past_key_values for injection."""
+    def _extract_kv_payload(self, past_key_values, layer_idx, batch_index=0, seq_len=None):
+        """Extract full K+V payload from `past_key_values` for injection.
+
+        For unbatched forward passes the default `batch_index=0`
+        preserves the original single-item behavior. For batched
+        forward passes, callers pass the position within the batch
+        and the un-padded `seq_len` so the payload only covers real
+        (non-padded) tokens.
+        """
         layer_cache = past_key_values.layers[layer_idx]
-        k = layer_cache.keys[0]   # (heads, seq, head_dim)
-        v = layer_cache.values[0]
+        k = layer_cache.keys[batch_index]   # (heads, seq, head_dim)
+        v = layer_cache.values[batch_index]
+        if seq_len is not None:
+            k = k[:, :seq_len, :]
+            v = v[:, :seq_len, :]
         h, s, d = k.shape
         kv_dim = h * d
         k_flat = k.permute(1, 0, 2).reshape(s, kv_dim).detach().cpu().numpy().astype(np.float32)
         v_flat = v.permute(1, 0, 2).reshape(s, kv_dim).detach().cpu().numpy().astype(np.float32)
         return np.concatenate([k_flat.ravel(), v_flat.ravel()])
 
-    def on_generate(self, layer, past_key_values=None, hidden_states=None, model_hidden_states=None):
+    def on_generate(
+        self,
+        layer,
+        past_key_values=None,
+        hidden_states=None,
+        model_hidden_states=None,
+        batch_index=0,
+        seq_len=None,
+    ):
         """Store per-token vectors (skip position 0).
 
-        Mode depends on use_hidden_states:
+        Mode depends on `use_hidden_states`:
           False: stores K projections (without RoPE) for Q*K scoring
           True:  stores raw hidden states for symmetric scoring
+
+        Batched callers pass `batch_index` (position within the batch)
+        and `seq_len` (un-padded length for that batch position). With
+        the defaults — `batch_index=0`, `seq_len=None` — behavior
+        matches the original single-item path.
         """
         if past_key_values is None and model_hidden_states is None:
             return WriteDecision(should_write=False)
 
         tokens = None
         if model_hidden_states is not None:
-            h = model_hidden_states[0] if model_hidden_states.ndim == 3 else model_hidden_states
+            if model_hidden_states.ndim == 3:
+                h = model_hidden_states[batch_index]
+            else:
+                h = model_hidden_states
+            if seq_len is not None:
+                h = h[:seq_len]
 
             if self.use_hidden_states:
                 # Raw hidden states — symmetric, no projection
@@ -161,7 +189,9 @@ class HuggingFaceKVHook(TardigradeHook):
         elif past_key_values is not None:
             # Fallback: use K from cache (has RoPE, skip pos 0)
             lc = past_key_values.layers[layer]
-            k = lc.keys[0]
+            k = lc.keys[batch_index]
+            if seq_len is not None:
+                k = k[:, :seq_len, :]
             h, s, d = k.shape
             kv_dim = h * d
             k_flat = k.permute(1, 0, 2).reshape(s, kv_dim)[1:].detach().cpu().numpy().astype(np.float32)
@@ -170,7 +200,7 @@ class HuggingFaceKVHook(TardigradeHook):
         else:
             return WriteDecision(should_write=False)
 
-        flat_kv = self._extract_kv_payload(past_key_values, layer)
+        flat_kv = self._extract_kv_payload(past_key_values, layer, batch_index, seq_len)
 
         norm = float(np.linalg.norm(per_token_key[3:]) / max(len(per_token_key) - 3, 1))
         salience = min(norm * 50.0, 100.0)

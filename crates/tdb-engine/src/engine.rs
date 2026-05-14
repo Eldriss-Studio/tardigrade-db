@@ -695,7 +695,9 @@ impl Engine {
         if is_per_token_query {
             // Encoded per-token queries require max-sim scoring. SLB can fill gaps,
             // but it must not suppress the cold per-token retriever.
-            let cold_results = self.pipeline.query(query_key, k * 2, owner_filter);
+            let source = crate::cell_source_pool::BlockPoolCellSource::new(&self.pool);
+            let cold_results =
+                self.pipeline.query_with_source(query_key, k * 2, owner_filter, Some(&source));
             let mut seen: std::collections::HashSet<CellId> = std::collections::HashSet::new();
             for r in cold_results {
                 if seen.insert(r.cell_id) {
@@ -716,7 +718,9 @@ impl Engine {
 
             // Phase 2: Cold-path pipeline (PerToken + BruteForce) — gets raw query.
             if candidates.len() < k {
-                let cold_results = self.pipeline.query(query_key, k * 2, owner_filter);
+                let source = crate::cell_source_pool::BlockPoolCellSource::new(&self.pool);
+                let cold_results =
+                    self.pipeline.query_with_source(query_key, k * 2, owner_filter, Some(&source));
                 // Deduplicate against SLB results.
                 let seen: std::collections::HashSet<CellId> =
                     candidates.iter().map(|r| r.cell_id).collect();
@@ -730,18 +734,22 @@ impl Engine {
 
         // Optional vague-query refinement: re-score / re-query before governance.
         // NoOpStrategy short-circuits via is_noop() — zero overhead on the default path.
-        if !self.refinement_strategy.is_noop()
-            && is_per_token_query
-            && let Some(per_token) =
+        if !self.refinement_strategy.is_noop() && is_per_token_query {
+            let pool_ref = &self.pool;
+            let strategy = &self.refinement_strategy;
+            if let Some(per_token) =
                 self.pipeline.first_stage_as_mut::<tdb_retrieval::per_token::PerTokenRetriever>()
-        {
-            candidates = self.refinement_strategy.refine(
-                per_token,
-                query_key,
-                candidates,
-                k * 2,
-                owner_filter,
-            );
+            {
+                let source = crate::cell_source_pool::BlockPoolCellSource::new(pool_ref);
+                candidates = strategy.refine(
+                    per_token,
+                    query_key,
+                    candidates,
+                    k * 2,
+                    owner_filter,
+                    Some(&source),
+                );
+            }
         }
 
         // Materialize all candidates with governance-adjusted scores.
@@ -807,10 +815,14 @@ impl Engine {
         }
 
         // Build the encoded key in-place: header + flattened tokens (one allocation).
+        // The `n_tokens` slot is left at 0.0 — it does not survive Q4 round-trip
+        // (see HEADER_SIZE docs in tdb-retrieval/per_token.rs). Decoders infer
+        // `n` from `data.len() / dim`.
+        let _ = n_tokens;
         let mut encoded = Vec::with_capacity(HEADER_SIZE + query_tokens.len());
         encoded.push(HEADER_SENTINEL);
         encoded.resize(N_TOKENS_IDX, 0.0);
-        encoded.push(n_tokens as f32);
+        encoded.push(0.0);
         encoded.push(dim as f32);
         encoded.resize(HEADER_SIZE, 0.0);
         encoded.extend_from_slice(query_tokens);
@@ -1246,7 +1258,9 @@ impl Engine {
         let mut candidates = Vec::new();
 
         if is_per_token {
-            let cold = self.pipeline.query(query_key, k * 4, owner_filter);
+            let source = crate::cell_source_pool::BlockPoolCellSource::new(&self.pool);
+            let cold =
+                self.pipeline.query_with_source(query_key, k * 4, owner_filter, Some(&source));
             let mut seen: std::collections::HashSet<CellId> = std::collections::HashSet::new();
             for r in cold {
                 if seen.insert(r.cell_id) {
@@ -1264,7 +1278,9 @@ impl Engine {
             candidates =
                 if self.slb.is_empty() { Vec::new() } else { self.slb.query(&slb_query, k * 2) };
             if candidates.len() < k {
-                let cold = self.pipeline.query(query_key, k * 2, owner_filter);
+                let source = crate::cell_source_pool::BlockPoolCellSource::new(&self.pool);
+                let cold =
+                    self.pipeline.query_with_source(query_key, k * 2, owner_filter, Some(&source));
                 let seen: std::collections::HashSet<CellId> =
                     candidates.iter().map(|r| r.cell_id).collect();
                 for r in cold {
@@ -1599,17 +1615,61 @@ impl Engine {
         linked_packs.into_iter().collect()
     }
 
-    /// Build the default retrieval pipeline: `PerTokenRetriever` (`Top5Avg`) → `BruteForce`.
+    /// Build the default retrieval pipeline: `PerTokenRetriever` (`Top5Avg`,
+    /// **lazy mode**) → `BruteForce`.
+    ///
+    /// The per-token retriever is constructed in lazy mode: it stores only
+    /// per-cell summaries (~4 KB/cell) and decodes raw tokens on demand via
+    /// the [`BlockPoolCellSource`] handed to it at query time. This makes
+    /// engine memory scale with the corpus's summaries, not with the
+    /// corpus's full per-token data — full `LoCoMo` fits in ~1 GB instead
+    /// of ~28 GB.
     ///
     /// DRY helper shared by `open_with_options` and `refresh()` (Memento rebuild).
     fn build_default_pipeline(config: &PerTokenConfig) -> RetrieverPipeline {
+        let int8_tier_capacity = Self::int8_tier_capacity_from_env();
+        let use_eager = Self::eager_mode_from_env();
         let mut pipeline = RetrieverPipeline::new();
-        pipeline.add_stage(Box::new(tdb_retrieval::per_token::PerTokenRetriever::with_config(
-            ScoringMode::Top5Avg,
-            config.clone(),
-        )));
+        let per_token = if use_eager {
+            tdb_retrieval::per_token::PerTokenRetriever::with_config_and_cache_capacity(
+                ScoringMode::Top5Avg,
+                config.clone(),
+                tdb_retrieval::per_token::DEFAULT_TOKEN_CACHE_CAPACITY,
+            )
+        } else {
+            tdb_retrieval::per_token::PerTokenRetriever::lazy_with_int8_tier_capacity(
+                ScoringMode::Top5Avg,
+                config.clone(),
+                tdb_retrieval::per_token::DEFAULT_TOKEN_CACHE_CAPACITY,
+                int8_tier_capacity,
+            )
+        };
+        pipeline.add_stage(Box::new(per_token));
         pipeline.add_stage(Box::new(tdb_retrieval::attention::BruteForceRetriever::new()));
         pipeline
+    }
+
+    /// Diagnostic escape hatch — set `TDB_PER_TOKEN_EAGER=1` to build
+    /// the per-token retriever in legacy eager mode (in-memory
+    /// `TokenStore`). Used to A/B against the lazy + INT8-tier path
+    /// when investigating recall regressions. Default: lazy mode.
+    fn eager_mode_from_env() -> bool {
+        const ENV_VAR: &str = "TDB_PER_TOKEN_EAGER";
+        matches!(std::env::var(ENV_VAR).as_deref(), Ok("1" | "true"))
+    }
+
+    /// Resolve the INT8 retrieval-tier capacity from the
+    /// `TDB_INT8_TIER_CAPACITY` env var. Falls back to
+    /// [`tdb_retrieval::per_token::DEFAULT_INT8_TIER_CAPACITY`] when
+    /// unset or unparseable. Capacity is in *cells*; each cell
+    /// occupies ~150 KB at Qwen3-0.6B shape.
+    fn int8_tier_capacity_from_env() -> std::num::NonZeroUsize {
+        const ENV_VAR: &str = "TDB_INT8_TIER_CAPACITY";
+        std::env::var(ENV_VAR)
+            .ok()
+            .and_then(|raw| raw.parse::<usize>().ok())
+            .and_then(std::num::NonZeroUsize::new)
+            .unwrap_or(tdb_retrieval::per_token::DEFAULT_INT8_TIER_CAPACITY)
     }
 
     /// Build and activate the Vamana index, adding it as a pipeline stage.
@@ -1617,12 +1677,21 @@ impl Engine {
         let dim = self.key_dim.unwrap_or(128);
         let mut vamana = VamanaIndex::new(dim, DEFAULT_VAMANA_MAX_DEGREE);
 
+        // Defense in depth: an entire 10k+ cell index rebuild must not panic
+        // because a single cell carries a malformed key. Cells whose pooled
+        // representation does not match the established `dim` are skipped
+        // rather than crashing Vamana's dim assertion. Regression coverage:
+        // tests/acceptance_vamana_threshold.rs.
         let cell_ids: Vec<CellId> = self.pool.iter_cell_ids().collect();
         for cell_id in &cell_ids {
             let cell = self.pool.get(*cell_id)?;
             let key = mean_pool_key(&cell.key);
+            if key.len() != dim {
+                continue;
+            }
             vamana.insert(cell.id, &key);
         }
+
         vamana.build();
         vamana.save(&self.dir).map_err(|e| TardigradeError::Io { source: e })?;
 
