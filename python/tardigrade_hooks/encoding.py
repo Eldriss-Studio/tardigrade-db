@@ -23,6 +23,11 @@ DIM_IDX = tardigrade_db.ENCODING_DIM_IDX
 def encode_per_token(token_vecs, dim):
     """Encode per-token vectors with Q4-safe sentinel header.
 
+    Only ``dim`` is stored in the header — it is the abs_max of its Q4 group
+    and survives quantization exactly. ``n_tokens`` is left as 0.0 because Q4
+    would corrupt it; readers compute ``n = data.len() / dim`` instead. See
+    ``tdb-retrieval/per_token.rs::HEADER_SIZE`` for the full contract.
+
     Args:
         token_vecs: numpy array of shape (n_tokens, dim).
         dim: dimension of each token vector.
@@ -30,9 +35,7 @@ def encode_per_token(token_vecs, dim):
     Returns:
         numpy array: [64-byte header | flattened token vectors]
     """
-    n = len(token_vecs)
     header = np.zeros(HEADER_SIZE, dtype=np.float32)
     header[SENTINEL_IDX] = SENTINEL_VALUE
-    header[N_TOKENS_IDX] = float(n)
     header[DIM_IDX] = float(dim)
     return np.concatenate([header, token_vecs.ravel()])

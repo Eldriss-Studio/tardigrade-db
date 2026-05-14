@@ -82,11 +82,13 @@
 //! [MemArt paper]: https://arxiv.org/abs/2409.17264
 
 pub mod attention;
+pub mod cell_source;
 pub mod int8_quant;
 #[doc(hidden)]
 pub mod key_view;
 pub mod per_token;
 pub mod pipeline;
+pub mod quantization;
 pub mod refinement;
 pub mod retriever;
 pub mod simd_distance;

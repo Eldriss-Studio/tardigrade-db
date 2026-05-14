@@ -15,7 +15,7 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
 import tardigrade_db
-from tardigrade_hooks.encoding import HEADER_SIZE, SENTINEL_IDX, N_TOKENS_IDX, DIM_IDX
+from tardigrade_hooks.encoding import HEADER_SIZE, SENTINEL_IDX, DIM_IDX
 from tardigrade_hooks.hf_kv_hook import HuggingFaceKVHook
 from tardigrade_hooks.hook import MemoryCellHandle, WriteDecision
 
@@ -98,12 +98,15 @@ def test_kv_hook_extracts_real_k_projections(gpt2, tokenizer, engine):
     # Per-token encoded: 64-float Q4-safe header + N_tokens * kv_dim.
     kv_dim = gpt2.config.n_head * (gpt2.config.n_embd // gpt2.config.n_head)
     assert len(decision.key) > kv_dim, "Per-token key should be larger than single-token dim"
-    # Decode Q4-safe header: sentinel at [0], n_tokens at [32], dim at [33].
+    # Header contract: sentinel at [0], dim at [33]. n_tokens is NOT stored
+    # in the header (Q4 corrupts it); readers compute n from data length.
     assert decision.key[SENTINEL_IDX] < -1.0e8, "Header should start with sentinel"
-    n_tokens = int(round(decision.key[N_TOKENS_IDX]))
     dim_from_header = int(round(decision.key[DIM_IDX]))
     assert dim_from_header == kv_dim, f"Header dim {dim_from_header} should match kv_dim {kv_dim}"
-    assert len(decision.key) == HEADER_SIZE + n_tokens * kv_dim
+    data_len = len(decision.key) - HEADER_SIZE
+    assert data_len % kv_dim == 0, "Encoded data must be a whole number of tokens"
+    n_tokens = data_len // kv_dim
+    assert n_tokens >= 1, "Per-token key should carry at least one token"
     assert decision.key.dtype == np.float32
 
 
@@ -131,9 +134,9 @@ def test_kv_hook_prefill_sends_encoded_per_token_q_query():
 
     assert recorder.query_key is not None
     assert recorder.query_key[SENTINEL_IDX] < -1.0e8
-    assert int(round(recorder.query_key[N_TOKENS_IDX])) == 2  # skips position 0
     assert int(round(recorder.query_key[DIM_IDX])) == q_dim
-    assert len(recorder.query_key) == HEADER_SIZE + 2 * q_dim
+    # n_tokens is inferred from data length (header field is unreliable through Q4).
+    assert len(recorder.query_key) == HEADER_SIZE + 2 * q_dim  # 3 tokens minus position 0
 
 
 def test_kv_hook_expands_gqa_k_for_retrieval_but_keeps_payload_compact():
@@ -163,8 +166,8 @@ def test_kv_hook_expands_gqa_k_for_retrieval_but_keeps_payload_compact():
     decision = hook.on_generate(layer=0, past_key_values=cache, model_hidden_states=hidden)
 
     assert decision.should_write is True
-    assert int(round(decision.key[N_TOKENS_IDX])) == seq - 1
     assert int(round(decision.key[DIM_IDX])) == q_dim
+    # n_tokens is encoded as data-length / dim, not as a header field.
     assert len(decision.key) == HEADER_SIZE + (seq - 1) * q_dim
     assert len(decision.value) == 2 * seq * kv_dim
 

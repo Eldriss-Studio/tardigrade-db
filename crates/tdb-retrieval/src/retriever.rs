@@ -10,10 +10,12 @@
 //! handles post-filtering when needed.
 
 use std::any::Any;
+use std::collections::HashSet;
 
 use tdb_core::{CellId, OwnerId};
 
 use crate::attention::RetrievalResult;
+use crate::cell_source::CellSource;
 
 /// Strategy interface for retrieval backends.
 ///
@@ -58,5 +60,30 @@ pub trait Retriever: Send + Sync {
     /// Default returns `None`; impls override to expose their concrete type.
     fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
         None
+    }
+
+    /// Query with optional upstream candidate context and a [`CellSource`].
+    ///
+    /// Stages that don't need either of these (SLB, Vamana, brute force)
+    /// keep the default impl, which ignores both parameters and delegates
+    /// to [`Retriever::query`]. Stages that benefit from one or both
+    /// (e.g. `PerTokenRetriever` in lazy mode) override.
+    ///
+    /// `candidates`: the set of cell IDs already yielded by upstream
+    /// stages. Stages that respect this filter will not score cells
+    /// outside the set.
+    ///
+    /// `source`: where to load cell data on demand. Stages that store
+    /// everything in RAM ignore this. Stages that don't store data at
+    /// all (lazy retrievers) require it.
+    fn query_with_source(
+        &mut self,
+        query_key: &[f32],
+        k: usize,
+        owner_filter: Option<OwnerId>,
+        _candidates: Option<&HashSet<CellId>>,
+        _source: Option<&dyn CellSource>,
+    ) -> Vec<RetrievalResult> {
+        self.query(query_key, k, owner_filter)
     }
 }
