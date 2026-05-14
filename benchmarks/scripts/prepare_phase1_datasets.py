@@ -98,7 +98,9 @@ def _locomo_rows(path: Path, context_mode: str) -> list[dict[str, str]]:
                 if not text:
                     continue
                 dia_id = turn.get("dia_id")
-                if isinstance(dia_id, int):
+                # LoCoMo uses string dia_ids like "D1:3" (session 1, turn 3).
+                # Older revisions used plain ints. Accept both.
+                if isinstance(dia_id, (int, str)) and dia_id != "":
                     dia_to_text[dia_id] = text
                 full_turns.append(f"{speaker}: {text}")
 
@@ -113,10 +115,20 @@ def _locomo_rows(path: Path, context_mode: str) -> list[dict[str, str]]:
             evidence_lines: list[str] = []
             if isinstance(evidence_ids, list):
                 for eid in evidence_ids:
-                    if isinstance(eid, int) and eid in dia_to_text:
+                    # Accept both legacy int dia_ids and current string ids ("D1:3").
+                    if isinstance(eid, (int, str)) and eid in dia_to_text:
                         evidence_lines.append(dia_to_text[eid])
 
-            if context_mode == "evidence" and evidence_lines:
+            if context_mode == "evidence":
+                # Oracle mode: an item without evidence has no defined
+                # ground-truth context, so we skip it instead of falling
+                # back to the full conversation. Full-fallback items
+                # produced ~128 chunks each at ingest, dominating the
+                # retrieval space (4 items × 128 chunks = 512 cells in
+                # a 1542-item corpus). Skipping keeps the corpus honest
+                # at the cost of ~0.3% of items.
+                if not evidence_lines:
+                    continue
                 context = "\n".join(dict.fromkeys(evidence_lines)).strip()
             else:
                 context = full_context
