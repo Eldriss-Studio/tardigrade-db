@@ -1,5 +1,35 @@
 # TardigradeDB Baseline: LoCoMo + LongMemEval (2026-05-11)
 
+> **⚠️ RETRACTED — 2026-05-14.** The LoCoMo numbers in this document
+> measure the **lexical fallback adapter** (`_InMemoryStore`
+> word-overlap matching on `context + question`), not the native KV
+> engine. The Apple Silicon machine that produced these numbers had
+> no CUDA, so the bench harness fell back to `in_memory` mode. The
+> 68.2% deterministic score reflects lexical self-retrieval on a
+> corpus where the dataset prep script was silently producing
+> identical contexts across items (string-vs-int bug in
+> `benchmarks/scripts/prepare_phase1_datasets.py`, present since
+> 2026-04-22). Lexical recovered ~66.5% R@1 from unique
+> per-item questions despite the broken contexts; the native engine
+> could not, but that engine was never actually being measured.
+>
+> The full forensic record, the dataset fix, and the honest native
+> engine numbers on the clean dataset (~36% R@1 at 50 items) are in
+> [docs/experiments/2026-05-14-bench-audit.md](../experiments/2026-05-14-bench-audit.md).
+>
+> The "vague-query vocabulary-overlap ceiling" framing below is also
+> retracted — it was drawn from data where every item shared one
+> context, so vocabulary-mismatch between query and context was not
+> a coherent claim.
+>
+> The LongMemEval 90.9% number used the same lexical fallback path
+> and should be re-measured before being re-cited.
+>
+> *The historical record is preserved below for archival reference
+> only. Do not cite these numbers as native-engine performance.*
+
+---
+
 ## Setup
 
 - **Model:** Qwen3-0.6B on MPS (Apple Silicon), float32, eager attention

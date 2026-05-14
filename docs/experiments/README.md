@@ -1,3 +1,21 @@
+> **⚠️ RETRACTED — 2026-05-14.** A bench audit on 2026-05-14 found two dataset-preparation bugs in `benchmarks/scripts/prepare_phase1_datasets.py` (introduced 2026-04-22) that corrupted every LoCoMo run since they were committed. As a consequence, **all LoCoMo-derived entries in this index are retracted**, specifically:
+>
+> - "LoCoMo full benchmark (1,542 items) — 68.2% deterministic, 67.2% LLM-judged" (Completed Experiments table + Proven-findings rows) measured the **lexical fallback adapter**, not the native KV engine. The lexical store's `best_match` returned the verbatim ground_truth for self-retrieval; 68.2% is the lexical adapter's self-retrieval performance, not a measurement of TardigradeDB.
+> - "LLM-judged benchmark confirms gap is real" (LoCoMo 67.2%) — same root cause.
+> - "Latent-space retrieval ceiling identified" / "LoCoMo gap resists all latent-space-only techniques" — the supposed ceiling was measured on a corpus where every item shared the same ~62K-char context. The ceiling claim has no empirical support from these runs.
+> - **All RLS LoCoMo entries** (keyword expansion, embedding expansion, generative 3B, chunked ingestion, LLM agent reformulation naive fusion on LoCoMo and LongMemEval). On the clean dataset, RLS underperforms the no-RLS baseline (none 21.95% → keyword 16.62% → agent 9.29% at 50 items). The "0% improvement" and "-15.3pp" numbers are artifacts of measuring against a broken baseline / lexical fallback.
+> - "ZCA whitening, token reweighting, multi-layer fusion: all 0% improvement" — the LoCoMo invocation of the DeepMind LIMIT paper as theoretical support for an empirical ceiling is unsupported by these runs.
+>
+> **Still valid (unaffected by the bench bug):**
+> - All synthetic-corpus experiments: Two-Agent Memory Cycle, KV Injection Critique & Validation, Sonia Parallel Subagent, Path 1 Synthetic-Fact KV Injection (9/10 gibberish facts), KV Cache Validation (100% recall on hidden states + Top5Avg), 100→5K scale recall.
+> - vLLM connector experiments, Path 2 Memory Prefix Adapter, SGLang investigation, P1/P2/P3, P4.2 Segment Compaction, P5 Maintenance Worker, Python→Rust migration.
+> - Cross-model retrieval (90% same-family, 76.7% cross-family).
+> - Vague-query refinement results on the **100-cell Sonia/synthetic corpus** (mean-centering +31pp moderate, cross-encoder stacking to 68% moderate / 64% vague). These were measured on a clean synthetic corpus, not LoCoMo.
+> - Multi-view consolidation v1/v2, file ingestion.
+> - All Rust/Python test counts and engine performance numbers.
+>
+> Forensic record: [`2026-05-14-bench-audit.md`](2026-05-14-bench-audit.md). Read it before citing or extending anything in this file.
+
 # Experiments
 
 Empirical tests validating TardigradeDB's core thesis: that persistent memory in latent space — using raw KV cache tensors, not text or embeddings — enables a fundamentally different kind of LLM memory.

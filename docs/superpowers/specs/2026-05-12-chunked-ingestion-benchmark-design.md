@@ -1,5 +1,7 @@
 # Chunked Ingestion for Benchmark Adapter + Multi-Config LoCoMo Matrix
 
+> **⚠️ Note — 2026-05-14.** Premise mostly retracted, implementation stands. The motivating "score ratio = 1.000 / 0% improvement across all techniques" observations were measured on the lexical fallback adapter and broken dataset, so the rationale here doesn't hold. The chunked-ingestion implementation (`TextChunker` reuse, `TDB_BENCH_CHUNK_TOKENS`/`OVERLAP` env vars, `_cell_to_item` mapping) is in production and is part of the net-positive bench-adapter stack on clean data (probe 20% → adapter 36% R@1). See [`../../experiments/2026-05-14-bench-audit.md`](../../experiments/2026-05-14-bench-audit.md).
+
 ## Problem
 
 The benchmark adapter truncates LoCoMo's 9K-token conversational contexts

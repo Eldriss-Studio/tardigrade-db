@@ -1,5 +1,7 @@
 # LLM Judge Provider Strategy: Multi-Provider Evaluator for Benchmarks
 
+> **⚠️ Note — 2026-05-14.** Premise retracted, implementation stands. The motivating context (LoCoMo 68.2% / LongMemEval 90.9% baselines that needed a real LLM judge) measured the lexical fallback adapter, not the native engine, so those numbers are retracted. The `JudgeProvider` Strategy + Chain-of-Responsibility design itself is sound and remains in use. See [`../../experiments/2026-05-14-bench-audit.md`](../../experiments/2026-05-14-bench-audit.md).
+
 ## Problem
 
 The benchmark evaluator (`LLMGatedEvaluator`) has two issues:

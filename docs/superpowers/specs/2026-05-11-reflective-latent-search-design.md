@@ -1,5 +1,7 @@
 # Reflective Latent Search (RLS): Agentic Retrieval for TardigradeDB
 
+> **⚠️ Note — 2026-05-14.** The premise of this design — bypassing a 67.2% LoCoMo "vocabulary-mismatch ceiling" via reformulation — is retracted. The baseline measured the lexical fallback adapter, the LIMIT-paper citation as theoretical support is unjustified by our data, and RLS is measured as net-negative (−5pp to −13pp) on a clean dataset. See [`../../experiments/2026-05-14-bench-audit.md`](../../experiments/2026-05-14-bench-audit.md). Preserved below as a historical design artifact.
+
 ## Problem
 
 TardigradeDB's latent-space retrieval hits a theoretical ceiling on

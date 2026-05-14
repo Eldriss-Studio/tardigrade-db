@@ -1,3 +1,12 @@
+> **⚠️ RETRACTED — 2026-05-14 (partial).** The 2026-05-14 bench audit found two dataset-preparation bugs that invalidate LoCoMo-derived numbers in this file:
+>
+> - The 2026-04-22 Tardigrade-vs-Letta rows showing `1.0000` Tardigrade scores were already flagged in this file as **stub adapter / lexical fallback** (see "Important Caveats" below). That caveat stands; the bench audit reinforces it — those `1.0000` rows do not reflect engine quality.
+> - The **2026-05-02 "Tardigrade adapter rewrite" smoke fixture** (6-item, RTX 3070 Ti, native mode: none=0.833, centered=1.000) used the same `prepare_phase1_datasets.py` that contained the LoCoMo evidence-extraction bug. **However**, the smoke fixture is documented as a 6-item sample (the file already says "too small to be statistically meaningful"), so it is best read as a mechanism check rather than a real measurement. Treat the centered=+0.167 delta as anecdotal until re-run on the fixed dataset.
+> - **Any claim or follow-up implying TardigradeDB achieves ~68% on LoCoMo via the native engine is retracted.** Honest 50-item native-engine number on the clean dataset is ~36% R@1 (bench adapter, full feature stack) or ~20% R@1 (minimal probe). The full-corpus number is not yet measured on clean data as of 2026-05-14.
+> - The "Mem0 / Letta head-to-head pending operator setup" block is unaffected mechanically, but a fair three-way comparison must use the **fixed** dataset (post-2026-05-14 `prepare_phase1_datasets.py`).
+>
+> Forensic record: [`../experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md). The "Pre-2026-05-02 stub adapter" caveat below is preserved as-is — it correctly identified the lexical-fallback problem; the new audit extends that finding to the post-rewrite LoCoMo runs as well.
+
 # Benchmark V1 — Observed Results So Far
 
 Last updated: 2026-04-22

@@ -1,5 +1,7 @@
 # LLM Agent Reformulation Strategy — Experiment Design
 
+> **⚠️ Note — 2026-05-14.** Premise retracted. The 68.2% ceiling, the "0% improvement across 8 techniques" tabulation, and the vocabulary-mismatch root cause were all measured against the lexical fallback adapter / broken dataset. On a clean dataset, `LLMAgentReformulationStrategy` (DeepSeek) is measured at −12.7pp vs no-RLS — the hypothesis is disproven. The Strategy implementation itself is wired up (`TDB_RLS_MODE=agent`) but should be considered experimental and default-off. See [`../../experiments/2026-05-14-bench-audit.md`](../../experiments/2026-05-14-bench-audit.md). Preserved below as a historical design artifact.
+
 ## Problem
 
 Qwen3-0.6B LoCoMo retrieval is capped at 68.2%. Exhaustive elimination across 8 techniques — whitening, reweighting, multi-layer fusion, keyword RLS, embedding RLS, generative RLS (Qwen2.5-3B), multi-phrasing, chunked ingestion — all yielded 0% improvement. Root cause confirmed: vocabulary mismatch between queries and stored conversation text. Specific queries hit 100% recall — the latent-space geometry works when vocabulary aligns.
