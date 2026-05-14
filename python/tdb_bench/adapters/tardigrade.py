@@ -331,10 +331,22 @@ class TardigradeAdapter(BenchmarkAdapter):
 
         import torch  # type: ignore
 
-        from tardigrade_hooks.chunker import TextChunker
+        from tardigrade_hooks.chunker import ParagraphBoundaryStrategy, TextChunker
 
         model, tokenizer, query_layer = _load_model_cached()
-        chunker = TextChunker(tokenizer, max_tokens=_CHUNK_TOKENS, overlap_tokens=_CHUNK_OVERLAP)
+        # Phase 1A.2 — ParagraphBoundaryStrategy prefers split at
+        # turn boundaries (\n\n), then sentence, then whitespace.
+        # LongMemEval haystack sessions use \n\n between speaker
+        # turns; LoCoMo evidence is single-sentence and falls
+        # through to whitespace cleanly. The 2026-05-14 audit traced
+        # LongMemEval hub-cell dominance to the unbounded fragment
+        # chunks produced by the previous boundary-unaware splitter.
+        chunker = TextChunker(
+            tokenizer,
+            max_tokens=_CHUNK_TOKENS,
+            overlap_tokens=_CHUNK_OVERLAP,
+            boundary_strategy=ParagraphBoundaryStrategy(),
+        )
 
         # Slice D2 — producer-consumer pipeline.
         #
