@@ -1,5 +1,7 @@
 # Reflective Latent Search (RLS) Implementation Plan
 
+> **⚠️ Note — 2026-05-14.** The premise of this plan — that RLS will help close the gap to a 67.2% LoCoMo baseline — is retracted. The 67.2%/68.2% baseline was a measurement of the lexical fallback adapter, not the native KV engine. Measured against a clean dataset, RLS as implemented (keyword, multi-phrasing, embedding, generative, agent) is **actively harmful** to recall (−5pp to −13pp). See [`../../experiments/2026-05-14-bench-audit.md`](../../experiments/2026-05-14-bench-audit.md). Preserved below as a historical planning artifact.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add Reflective Latent Search to the benchmark adapter so TardigradeDB can reformulate vague queries and re-retrieve in latent space, then measure the impact on LoCoMo (67.2% baseline).

@@ -1,5 +1,28 @@
 # TardigradeDB: LoCoMo + LongMemEval with DeepSeek LLM Judge (2026-05-11)
 
+> **⚠️ RETRACTED — 2026-05-14.** Same retraction as the deterministic
+> baseline doc: the numbers in this document measure the **lexical
+> fallback adapter**, not the native KV engine. The DeepSeek LLM
+> judge was scoring the lexical adapter's question-overlap retrieval
+> on a dataset where every item in a conversation shared the same
+> ~62K-char context (string-vs-int bug in
+> `benchmarks/scripts/prepare_phase1_datasets.py`, present since
+> 2026-04-22).
+>
+> The "LLM judge scored lower than deterministic, so deterministic
+> was generous" framing below is wrong — both evaluators were scoring
+> the lexical adapter's output, which is a different system from
+> what the doc claimed to measure.
+>
+> The "vague-query vocabulary-overlap ceiling is the real bottleneck"
+> conclusion is also unsupported by these runs.
+>
+> Full forensic record: [docs/experiments/2026-05-14-bench-audit.md](../experiments/2026-05-14-bench-audit.md).
+>
+> *Historical record preserved below for archival reference only.*
+
+---
+
 ## Setup
 
 - **Model:** Qwen3-0.6B on MPS (Apple Silicon), float32, eager attention

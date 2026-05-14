@@ -1,5 +1,7 @@
 # Latent-Space Vague Query Refinement: Whitening + Token Reweighting + Multi-Layer Fusion
 
+> **⚠️ Note — 2026-05-14.** The premise — "vague-query R@5 stuck at 60% / LoCoMo 67.2% due to vocabulary overlap" — is retracted. The 67.2% baseline measured the lexical fallback adapter; the vague/moderate vague-query recall numbers were drawn from a corpus where every item shared the same context, so the vocabulary-mismatch framing is unsupported by data. The `RefinementStrategy` refactor (Strategy + Decorator) is sound infrastructure; the target metrics and motivation are invalidated. See [`../../experiments/2026-05-14-bench-audit.md`](../../experiments/2026-05-14-bench-audit.md). Preserved below as a historical design artifact.
+
 ## Problem
 
 TardigradeDB's vague-query recall is stuck at 60% R@5 (LoCoMo 67.2%). The

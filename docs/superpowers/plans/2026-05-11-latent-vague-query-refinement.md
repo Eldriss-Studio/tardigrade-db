@@ -1,5 +1,7 @@
 # Latent-Space Vague Query Refinement Implementation Plan
 
+> **⚠️ Note — 2026-05-14.** The framing of this plan — "vague-query vocabulary mismatch is the retrieval ceiling at 60% R@5 / 67.2% LoCoMo" — is retracted. The underlying baseline measured the lexical fallback adapter, and the vague/moderate/specific recall tiers were drawn from a corpus with identical contexts across items, so "vocabulary mismatch between query and stored content" was not a coherent claim from that data. The `RefinementStrategy` trait refactor itself is sound, but the motivation and target numbers are invalidated. See [`../../experiments/2026-05-14-bench-audit.md`](../../experiments/2026-05-14-bench-audit.md). Preserved below as a historical planning artifact.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Improve vague-query R@5 (currently 60%) with three training-free latent-space techniques: ZCA whitening, token importance reweighting, and multi-layer query fusion.

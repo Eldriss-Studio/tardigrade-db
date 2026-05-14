@@ -1,5 +1,7 @@
 # Two Experiments: Larger Capture Model + Agent-Driven RLS
 
+> **⚠️ Note — 2026-05-14.** Premise retracted. Both experiments are framed against the 68.2% LoCoMo baseline and the "Qwen3-0.6B can't bridge vocabulary gaps" narrative, both of which were measured on the lexical fallback adapter / broken dataset. On a clean dataset, agent-driven RLS (DeepSeek) loses 12.7pp vs no-RLS while adding ~1.7s/query — the opposite of this design's hypothesis. See [`../../experiments/2026-05-14-bench-audit.md`](../../experiments/2026-05-14-bench-audit.md). Preserved below as a historical design artifact.
+
 ## Experiment A: Larger Capture Model
 
 ### Problem

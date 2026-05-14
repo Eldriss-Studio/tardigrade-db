@@ -1,5 +1,7 @@
 # LLM Judge Provider Strategy Implementation Plan
 
+> **⚠️ Note — 2026-05-14.** Premise retracted, implementation stands. This plan was motivated by validating the LoCoMo 68.2% baseline with a real LLM judge; that baseline measured the lexical fallback, not the native engine. The `JudgeProvider` Strategy / Chain-of-Responsibility infrastructure (DeepSeek + OpenAI providers, deterministic fallback) is intact and useful. See [`../../experiments/2026-05-14-bench-audit.md`](../../experiments/2026-05-14-bench-audit.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the hardcoded evaluator with a Strategy-based provider chain so TardigradeDB benchmarks can use DeepSeek (or any LLM) as an impartial judge.

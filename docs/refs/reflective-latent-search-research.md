@@ -1,3 +1,18 @@
+> **⚠️ RETRACTED — 2026-05-14 (motivation section only).** The "Why This Exists" section's empirical justification is invalidated by the 2026-05-14 bench audit:
+>
+> - **"LongMemEval: 88.8% — strong, beats the field"** and **"LoCoMo: 67.2% — below vanilla GPT-4o baseline (74%)"** were measured against the **lexical fallback adapter** on a corrupted LoCoMo dataset, not the native KV engine. They are not measurements of TardigradeDB. The "vocabulary-mismatched ceiling on LoCoMo" framing has no empirical support from those runs.
+> - The DeepMind LIMIT paper (ICLR 2026) is a valid theoretical result, but the claim "we proved this is a mathematical property of vector-space retrieval, not a model quality issue" via TardigradeDB's numbers is retracted — we did not prove that with our data.
+> - **More importantly:** on the clean LoCoMo dataset, all RLS strategies measured to date (keyword, agent/DeepSeek reformulation) **underperform** the no-RLS baseline (-5.3pp to -12.7pp at 50 items). The premise that RLS bridges a vocabulary gap is not supported; in current form RLS is net negative on clean data.
+>
+> **What survives in this doc:**
+> - The **"Vague R@5: 60% on our 10-fact corpus, same 3 queries miss in every configuration"** claim — measured on the synthetic Sonia 10-fact corpus, not LoCoMo. Unaffected by the bench bug (but note: a 10-fact corpus is not a basis for a fundamental-ceiling claim).
+> - The **RLS protocol design** (steps 1-5: RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE), the **engine primitives** section, **protocol layers**, and the **research-references survey** — these are literature review and design, independent of our broken bench numbers.
+> - All external research citations (DeepMind LIMIT, DCI, CRAG, Self-RAG, NeMo, Context-1, MMLF, Agentic RAG Survey) — the papers themselves are unaffected.
+>
+> **The honest current state:** RLS as currently implemented (naive fusion, threshold tuned against the broken baseline) hurts retrieval. The redesign hypotheses in the audit doc — fusion picks wrong items, reformulations dilute the latent signal, threshold mis-calibrated — are the open questions.
+>
+> Forensic record: [`../experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md).
+
 # Reflective Latent Search (RLS): Research Foundation
 
 ## What Is RLS
