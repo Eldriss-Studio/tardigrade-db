@@ -211,6 +211,13 @@ class TardigradeAdapter(BenchmarkAdapter):
     def __init__(self) -> None:
         self._store = _InMemoryStore()
         self._cell_to_item: dict[int, BenchmarkItem] = {}
+        # Diagnostic side-table: cell_id → chunk text. Empty in production
+        # runs; populated when the diagnostic harness opts in via
+        # `enable_chunk_text_tracking()`. Used by Phase 0 of the retrieval
+        # debug plan to identify "which chunk should have been retrieved"
+        # per query.
+        self._cell_to_chunk_text: dict[int, str] = {}
+        self._track_chunk_text: bool = False
         self._engine = None
         self._hook = None
         self._mode = "in_memory"
@@ -362,10 +369,10 @@ class TardigradeAdapter(BenchmarkAdapter):
                     f"chunks={len(chunk_texts)}",
                     flush=True,
                 )
-                write_requests = self._build_write_requests_for_item(
+                write_requests, written_chunks = self._build_write_requests_for_item(
                     chunk_texts, tokenizer, model, query_layer, torch,
                 )
-                write_queue.put((write_requests, item))
+                write_queue.put((write_requests, written_chunks, item))
         finally:
             write_queue.put(None)
             writer_thread.join()
@@ -387,11 +394,18 @@ class TardigradeAdapter(BenchmarkAdapter):
                 msg = write_queue.get()
                 if msg is None:
                     return
-                write_requests, item = msg
+                write_requests, written_chunks, item = msg
                 if write_requests:
                     cell_ids = self._engine.mem_write_batch(write_requests)
-                    for cell_id in cell_ids:
+                    # `cell_ids`, `write_requests`, and `written_chunks`
+                    # share index-order — built together by
+                    # `_build_write_requests_for_item`. Filtering of
+                    # `should_write=False` decisions happens *before* the
+                    # request is appended, so all three lists are aligned.
+                    for cell_id, chunk_text in zip(cell_ids, written_chunks, strict=True):
                         self._cell_to_item[int(cell_id)] = item
+                        if self._track_chunk_text:
+                            self._cell_to_chunk_text[int(cell_id)] = chunk_text
                 self._store.insert(item)
         except BaseException as exc:  # noqa: BLE001 — re-raised on producer thread
             error_slot["err"] = exc
@@ -422,7 +436,7 @@ class TardigradeAdapter(BenchmarkAdapter):
         per batch.
         """
         if not chunk_texts:
-            return []
+            return [], []
 
         # Slice D3 — single tokenizer call per item.
         item_inputs = tokenizer(
@@ -434,14 +448,19 @@ class TardigradeAdapter(BenchmarkAdapter):
         )
         item_inputs = {k: v.to(model.device) for k, v in item_inputs.items()}
 
-        write_requests = []
+        write_requests: list = []
+        # Chunks that actually produced a write. Cells returned from
+        # `mem_write_batch` map 1:1 against this list, in order — the
+        # diagnostic harness uses this to learn which chunk text each
+        # cell_id stored.
+        written_chunk_texts: list[str] = []
         chunk_total = item_inputs["input_ids"].shape[0]
         for batch_start in range(0, chunk_total, _GPU_BATCH_SIZE):
             batch_end = min(batch_start + _GPU_BATCH_SIZE, chunk_total)
             decisions = self._forward_pass_batch(
                 item_inputs, batch_start, batch_end, model, query_layer, torch,
             )
-            for decision in decisions:
+            for offset, decision in enumerate(decisions):
                 if (
                     not decision.should_write
                     or len(decision.key) == 0
@@ -458,7 +477,8 @@ class TardigradeAdapter(BenchmarkAdapter):
                         _NO_PARENT_CELL_ID,
                     )
                 )
-        return write_requests
+                written_chunk_texts.append(chunk_texts[batch_start + offset])
+        return write_requests, written_chunk_texts
 
     def _forward_pass_batch(
         self,
@@ -593,9 +613,19 @@ class TardigradeAdapter(BenchmarkAdapter):
             error=None,
         )
 
+    def enable_chunk_text_tracking(self) -> None:
+        """Opt into populating `_cell_to_chunk_text` during ingestion.
+
+        Diagnostic harness only — Phase 0 of the retrieval debug plan.
+        Adds a small per-cell memory cost (one chunk text string per
+        stored cell). Off by default so production runs aren't taxed.
+        """
+        self._track_chunk_text = True
+
     def reset(self) -> None:
         self._store.clear()
         self._cell_to_item.clear()
+        self._cell_to_chunk_text.clear()
         # Drop the engine and rebuild — items from one dataset must not
         # leak into the next. Cheap because the model stays cached.
         if self._mode == "native":
