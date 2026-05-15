@@ -1661,7 +1661,7 @@ impl Engine {
     /// Resolve the INT8 retrieval-tier capacity from the
     /// `TDB_INT8_TIER_CAPACITY` env var. Falls back to
     /// [`tdb_retrieval::per_token::DEFAULT_INT8_TIER_CAPACITY`] when
-    /// unset or unparseable. Capacity is in *cells*; each cell
+    /// unset or unparsable. Capacity is in *cells*; each cell
     /// occupies ~150 KB at Qwen3-0.6B shape.
     fn int8_tier_capacity_from_env() -> std::num::NonZeroUsize {
         const ENV_VAR: &str = "TDB_INT8_TIER_CAPACITY";

@@ -9,6 +9,8 @@ Brin = "Brin"
 SER = "SER"
 # Akari Asai (Self-RAG author)
 Asai = "Asai"
+# Ned — dog's name in LoCoMo eval dataset Q&A pairs
+Ned = "Ned"
 
 [files]
 extend-exclude = ["Cargo.lock", "*.bin", "*.ptx", "*.cubin"]

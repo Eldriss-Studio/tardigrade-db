@@ -9,7 +9,7 @@
 > - The **RLS protocol design** (steps 1-5: RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE), the **engine primitives** section, **protocol layers**, and the **research-references survey** — these are literature review and design, independent of our broken bench numbers.
 > - All external research citations (DeepMind LIMIT, DCI, CRAG, Self-RAG, NeMo, Context-1, MMLF, Agentic RAG Survey) — the papers themselves are unaffected.
 >
-> **The honest current state:** RLS as currently implemented (naive fusion, threshold tuned against the broken baseline) hurts retrieval. The redesign hypotheses in the audit doc — fusion picks wrong items, reformulations dilute the latent signal, threshold mis-calibrated — are the open questions.
+> **The honest current state:** RLS as currently implemented (naive fusion, threshold tuned against the broken baseline) hurts retrieval. The redesign hypotheses in the audit doc — fusion picks wrong items, reformulations dilute the latent signal, threshold miscalibrated — are the open questions.
 >
 > Forensic record: [`../experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md).
 
