@@ -196,6 +196,35 @@ class TextChunker:
             start_char = pos
             end_char = min(start_char + len(decoded), len(text))
 
+            # Phase 1A.1b — boundary-aware START trim for non-first
+            # chunks. The overlap stride lands chunk N+1's start
+            # ``overlap_tokens`` tokens back into chunk N, which for
+            # any sub-word tokenizer almost always falls mid-word.
+            # Phase 0 diagnostic 2026-05-14 showed those mid-word
+            # starts (especially mid-number, e.g. "0000" inside
+            # "$10,000") produce anomalous hidden states that
+            # dominate retrieval as hub cells. Snap start_char
+            # forward to the next whitespace within a lookahead
+            # window so chunks begin on whole words.
+            is_first = start == 0
+            starts_cleanly = (
+                start_char == 0
+                or text[start_char - 1].isspace()
+            )
+            if not is_first and not starts_cleanly:
+                lookahead_chars = max(
+                    1,
+                    int((end_char - start_char) * BOUNDARY_LOOKBACK_RATIO),
+                )
+                search_limit = min(
+                    start_char + lookahead_chars,
+                    end_char,
+                )
+                for probe in range(start_char, search_limit):
+                    if text[probe].isspace():
+                        start_char = probe + 1
+                        break
+
             # Boundary-aware trim — non-final chunks only, and only
             # when the chunk would otherwise end mid-word. If the next
             # original character is already whitespace (or we're at
