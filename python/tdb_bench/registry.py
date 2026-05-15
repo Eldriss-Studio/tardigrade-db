@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 from tdb_bench.adapters import LettaAdapter, Mem0Adapter, TardigradeAdapter
+from tdb_bench.adapters.retrieve_then_read import RetrieveThenReadAdapter
+from tdb_bench.answerers import build_answerer_from_env
 from tdb_bench.contracts import BenchmarkAdapter, DatasetAdapter, Evaluator
 from tdb_bench.datasets import LoCoMoDatasetAdapter, LongMemEvalDatasetAdapter
 from tdb_bench.evaluators import DeterministicEvaluator, DeepSeekProvider, LLMGatedEvaluator, OpenAIProvider
 from tdb_bench.errors import ConfigError
+
+
+_SYSTEM_TARDIGRADE = "tardigrade"
+_SYSTEM_TARDIGRADE_LLM_GATED = "tardigrade-llm-gated"
+_SYSTEM_MEM0_OSS = "mem0_oss"
+_SYSTEM_LETTA = "letta"
 
 
 class RegistryFactory:
@@ -14,11 +22,18 @@ class RegistryFactory:
 
     @staticmethod
     def create_adapter(system: str, timeout_seconds: int) -> BenchmarkAdapter:
-        if system == "tardigrade":
+        if system == _SYSTEM_TARDIGRADE:
             return TardigradeAdapter()
-        if system == "mem0_oss":
+        if system == _SYSTEM_TARDIGRADE_LLM_GATED:
+            generator, model_label = build_answerer_from_env()
+            return RetrieveThenReadAdapter(
+                inner=TardigradeAdapter(),
+                generator=generator,
+                answerer_model=model_label,
+            )
+        if system == _SYSTEM_MEM0_OSS:
             return Mem0Adapter(timeout_seconds=timeout_seconds)
-        if system == "letta":
+        if system == _SYSTEM_LETTA:
             return LettaAdapter(timeout_seconds=timeout_seconds)
         raise ConfigError(f"Unknown system: {system}")
 
