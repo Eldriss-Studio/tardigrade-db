@@ -211,13 +211,16 @@ class TardigradeAdapter(BenchmarkAdapter):
     def __init__(self) -> None:
         self._store = _InMemoryStore()
         self._cell_to_item: dict[int, BenchmarkItem] = {}
-        # Diagnostic side-table: cell_id → chunk text. Empty in production
-        # runs; populated when the diagnostic harness opts in via
-        # `enable_chunk_text_tracking()`. Used by Phase 0 of the retrieval
-        # debug plan to identify "which chunk should have been retrieved"
-        # per query.
+        # Cell ID → chunk text. Required for chunk-level cross-encoder
+        # reranking — passing parent-item context here was the
+        # 2026-05-15 bug that crushed LongMemEval scoring. Always
+        # populated in production now (small memory cost: one chunk
+        # text reference per cell, typically ~100-500 chars).
+        # The diagnostic harness still calls
+        # `enable_chunk_text_tracking()` for clarity; flag defaults
+        # to True so production reranker has the text it needs.
         self._cell_to_chunk_text: dict[int, str] = {}
-        self._track_chunk_text: bool = False
+        self._track_chunk_text: bool = True
         self._engine = None
         self._hook = None
         self._mode = "in_memory"
@@ -586,16 +589,23 @@ class TardigradeAdapter(BenchmarkAdapter):
             model_hidden_states=out.hidden_states[query_layer],
         )
 
-        # Optional Stage-2 cross-encoder reranking when memo text is available.
+        # Stage-2 cross-encoder reranking on per-CHUNK text.
+        #
+        # Bug fixed 2026-05-15: previously this passed the parent
+        # item's full `context` for every candidate. For LongMemEval
+        # where each item has 50-150 chunks averaging 100-500 chars
+        # each, all same-item chunks received identical reranker
+        # input (the full 25-42KB session text) and therefore
+        # identical scores — the reranker was doing item-level
+        # reranking when it should have been chunk-level. LoCoMo
+        # masked the bug because evidence-only items have 1 chunk
+        # whose text equals the item context. See
+        # `docs/experiments/2026-05-14-bench-audit.md` Phase 1B.
         if self._reranker is not None and handles:
             handles = self._reranker.rerank(
                 query_text=item.question,
                 candidates=handles,
-                get_text=lambda h: (
-                    self._cell_to_item[int(h.cell_id)].context
-                    if int(h.cell_id) in self._cell_to_item
-                    else None
-                ),
+                get_text=lambda h: self._cell_to_chunk_text.get(int(h.cell_id)),
             )
 
         latency_ms = (time.perf_counter() - start) * 1000.0
