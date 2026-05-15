@@ -115,8 +115,17 @@ def run_dataset(adapter: TardigradeAdapter, items: list[BenchmarkItem],
           flush=True)
 
     records: list[dict] = []
-    rank_histogram = Counter()
-    not_in_top_k = 0
+    # CHUNK-level histogram: rank of the specific chunk our overlap
+    # heuristic picks as "the right one." Underestimates for items
+    # whose ground-truth doesn't appear verbatim in any chunk
+    # (~27% of LongMemEval per forensic 2026-05-15).
+    chunk_rank_histogram = Counter()
+    chunk_not_in_top_k = 0
+    # ITEM-level histogram: rank of the FIRST cell from the right
+    # item to appear in top-K. Matches the production bench scoring
+    # (top-1's mapped item's ground_truth wins or loses).
+    item_rank_histogram = Counter()
+    item_not_in_top_k = 0
 
     model, tokenizer, query_layer = _load_model()
     device = _model_device()
@@ -126,6 +135,7 @@ def run_dataset(adapter: TardigradeAdapter, items: list[BenchmarkItem],
         expected_cell = find_expected_chunk(
             item, adapter._cell_to_chunk_text, cells_for_item,
         )
+        cells_set = set(cells_for_item)
 
         # Use hook.on_prefill directly to control top-K — the production
         # adapter forces k=5 via the hook constructor.
@@ -148,45 +158,83 @@ def run_dataset(adapter: TardigradeAdapter, items: list[BenchmarkItem],
             adapter._hook.k = old_k
 
         retrieved_cell_ids = [int(h.cell_id) for h in handles]
-        expected_rank = None
+
+        # Chunk-level: rank of the heuristic-picked "expected" chunk
+        chunk_rank: int | None = None
         if expected_cell is not None and expected_cell in retrieved_cell_ids:
-            expected_rank = retrieved_cell_ids.index(expected_cell)
+            chunk_rank = retrieved_cell_ids.index(expected_cell)
+
+        # Item-level: rank of the FIRST cell from the right item
+        item_rank: int | None = None
+        for rank, cid in enumerate(retrieved_cell_ids):
+            if cid in cells_set:
+                item_rank = rank
+                break
 
         records.append({
             "item_id": item.item_id,
             "n_cells_for_item": len(cells_for_item),
             "expected_cell": expected_cell,
-            "expected_rank": expected_rank,
+            "chunk_rank": chunk_rank,
+            "item_rank": item_rank,
             "retrieved_top10": retrieved_cell_ids[:10],
         })
 
-        if expected_rank is None:
-            not_in_top_k += 1
+        if chunk_rank is None:
+            chunk_not_in_top_k += 1
         else:
             for bucket in RANK_BUCKETS:
-                if expected_rank < bucket:
-                    rank_histogram[bucket] += 1
+                if chunk_rank < bucket:
+                    chunk_rank_histogram[bucket] += 1
+                    break
+        if item_rank is None:
+            item_not_in_top_k += 1
+        else:
+            for bucket in RANK_BUCKETS:
+                if item_rank < bucket:
+                    item_rank_histogram[bucket] += 1
                     break
 
         if (i + 1) % 100 == 0:
             print(f"[{dataset_name}] {i + 1}/{len(items)} queried", flush=True)
 
     n = len(items)
-    histogram_pct = {
-        f"<{b}": rank_histogram[b] / n if n else 0.0 for b in RANK_BUCKETS
-    }
-    histogram_pct[f">={RANK_BUCKETS[-1]}_or_missing"] = not_in_top_k / n if n else 0.0
+
+    def _make_pct(counts, miss_count):
+        pct = {f"<{b}": counts[b] / n if n else 0.0 for b in RANK_BUCKETS}
+        pct[f">={RANK_BUCKETS[-1]}_or_missing"] = miss_count / n if n else 0.0
+        return pct
+
+    def _make_cumulative(counts):
+        return {
+            f"R@{b}": sum(counts[bb] for bb in RANK_BUCKETS if bb <= b) / n
+            for b in RANK_BUCKETS
+        } if n else {}
 
     summary = {
         "n": n,
         "ingest_seconds": ingest_secs,
-        "rank_histogram_counts": dict(rank_histogram),
-        "not_in_top_k": not_in_top_k,
-        "rank_histogram_pct": histogram_pct,
-        "cumulative_in_top_k_pct": {
-            f"R@{b}": sum(rank_histogram[bb] for bb in RANK_BUCKETS if bb <= b) / n
-            for b in RANK_BUCKETS
-        } if n else {},
+        # CHUNK-level (heuristic-dependent — see method note)
+        "chunk_rank_histogram_counts": dict(chunk_rank_histogram),
+        "chunk_not_in_top_k": chunk_not_in_top_k,
+        "chunk_rank_histogram_pct": _make_pct(
+            chunk_rank_histogram, chunk_not_in_top_k
+        ),
+        "chunk_cumulative_in_top_k_pct": _make_cumulative(chunk_rank_histogram),
+        # ITEM-level (matches production bench scoring)
+        "item_rank_histogram_counts": dict(item_rank_histogram),
+        "item_not_in_top_k": item_not_in_top_k,
+        "item_rank_histogram_pct": _make_pct(
+            item_rank_histogram, item_not_in_top_k
+        ),
+        "item_cumulative_in_top_k_pct": _make_cumulative(item_rank_histogram),
+        # Backward-compat keys (deprecated; equal to chunk_* above)
+        "rank_histogram_counts": dict(chunk_rank_histogram),
+        "not_in_top_k": chunk_not_in_top_k,
+        "rank_histogram_pct": _make_pct(
+            chunk_rank_histogram, chunk_not_in_top_k
+        ),
+        "cumulative_in_top_k_pct": _make_cumulative(chunk_rank_histogram),
     }
 
     return {"summary": summary, "records": records}
