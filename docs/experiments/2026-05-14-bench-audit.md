@@ -247,7 +247,7 @@ worth testing if RLS is to be salvaged:
    "When did Caroline go to LGBTQ support group?" with synonyms
    changes the Q-side hidden states in ways that don't move closer
    to the K-side stored representation.
-3. **Confidence threshold is mis-calibrated.** It was tuned
+3. **Confidence threshold is miscalibrated.** It was tuned
    (1.5 → 1.10) against the broken baseline, so the calibration is
    meaningless.
 
