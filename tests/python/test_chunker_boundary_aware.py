@@ -250,3 +250,38 @@ class TestSubWordTokenizerBoundaryAwareness:
                 f"chunk {c.chunk_index} starts on fragment "
                 f"{first_word!r}; head={c.text[:25]!r}"
             )
+
+    def test_overlap_does_not_create_mid_word_starts(self):
+        """Phase 1A.1b: with non-zero overlap, each chunk after the
+        first starts ``overlap_tokens`` tokens BEFORE the previous
+        chunk's clean end. Going back into the middle of the previous
+        chunk's content lands mid-word for any sub-word tokenizer.
+
+        Phase 0 diagnostic (2026-05-14): the LongMemEval hub cells
+        were all chunks starting with numeric fragments
+        (``0000 is...``, ``000 miles...``) — produced by the overlap
+        landing inside a number like ``$10,000``. End-boundary trim
+        (Phase 1A.1) didn't fix this; start-boundary snap does.
+        """
+        text = "wonder marvel splash quartz blazon thrush galaxy " * 12
+        chunker = TextChunker(
+            self._CharPairTokenizer(),
+            max_tokens=14,
+            overlap_tokens=4,  # non-zero overlap — the bug trigger
+            boundary_strategy=WhitespaceBoundaryStrategy(),
+        )
+        chunks = chunker.chunk(text)
+
+        assert len(chunks) > 1, "expected multiple chunks for overlap"
+
+        valid_words = {"wonder", "marvel", "splash", "quartz",
+                       "blazon", "thrush", "galaxy"}
+        for c in chunks[1:]:
+            tokens = c.text.split()
+            if not tokens:
+                continue
+            first_word = tokens[0]
+            assert first_word in valid_words, (
+                f"chunk {c.chunk_index} starts on overlap fragment "
+                f"{first_word!r}; head={c.text[:25]!r}"
+            )
