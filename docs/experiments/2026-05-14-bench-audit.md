@@ -304,6 +304,145 @@ conclusions, not the broader engineering work.
 
 ---
 
+## Phase 0 diagnostic + Phase 1A chunker fixes (2026-05-14 → 2026-05-15)
+
+Detailed in `docs/superpowers/plans/2026-05-14-retrieval-debug-plan.md`. This section
+records the measured results.
+
+### Phase 0 — per-query rank diagnostic
+
+Built `scripts/probe_rank_diagnostic.py` that, for each query,
+records the rank at which the "expected" chunk (proxy: max
+ground-truth-token overlap) appears in the latent retriever's top-K.
+Bypasses the cross-encoder reranker so we can see the raw retrieval
+signal.
+
+**LoCoMo (1533 items, top-K=100):**
+
+| Rank | Cumulative R@K |
+|---|---|
+| R@1 | 5.87% |
+| R@5 | 19.83% |
+| R@10 | 27.40% |
+| R@25 | 38.69% |
+| R@50 | 50.24% |
+| R@100 | 65.56% |
+| Outside top-100 | 34.44% |
+
+The cross-encoder reranker lifts deterministic-eval bench score from
+5.87% (raw R@1) to 29.62% — a 5× boost by pulling the right chunk
+from rank 5-100 to rank 1. Reranker does nearly all the recall
+work; the 34% of items where the right chunk isn't in top-100 are
+the headroom Phase 1 needs to address.
+
+**LongMemEval (500 items, top-K=25 due to compute cost at full top-K):**
+
+| Rank | Cumulative R@K |
+|---|---|
+| R@1 | 0% |
+| R@5 | 0% |
+| R@10 | 0% |
+| R@25 | 0% |
+| Outside top-25 | 100% |
+
+**Catastrophic — the expected chunk never appears in top-25.**
+Forensic inspection (`scripts/probe_hub_cells.py`) showed only 9
+unique cells appeared in top-1 across all 500 queries; cell 225
+alone was in top-10 of 99.2% of queries. A handful of "hub cells"
+dominate all retrievals regardless of query content.
+
+All identified hub cells started with mid-word fragments — typically
+mid-number — e.g., `"0000 is a great option..."`, `"000 miles..."`,
+`"88 as a rough estimate..."`, `"000 PQMs..."`. Pattern traced to
+the chunker producing fragment chunks that carry anomalous hidden
+states which score against any query.
+
+### Phase 1A.1 — chunker END boundary fix
+
+`TextChunker._split_tokens` (`python/tardigrade_hooks/chunker.py`)
+accepted a `BoundaryStrategy` in `__init__` but never called it
+inside the splitter. Chunks were sliced purely by token count.
+Fix: invoke `self._boundary.find_split` on every non-final chunk
+whose char-space end would otherwise fall mid-word.
+
+Also added `ParagraphBoundaryStrategy` — prefers `\n\n` (turn
+boundary in conversational transcripts) → sentence end → whitespace.
+Wired as default in the bench adapter.
+
+**Re-measured diagnostic with end-trim only:**
+
+LoCoMo: R@25 38.69% → **54.79%** (+16.1pp middle-rank lift).
+
+LongMemEval: still **0% R@25**. Hub-cell pattern unchanged in
+shape — 8 cells in 87-100% of top-10s, just different cell IDs
+(13940, 24108, 23874, etc.). All still numeric-fragment starts.
+
+The end-only fix changed cell *ends* but not cell *starts*. Each
+non-first chunk's start is determined by overlap-token rollback
+into the previous chunk — which lands mid-word almost every time
+for sub-word tokenizers.
+
+### Phase 1A.1b — chunker START boundary fix
+
+Forward-snap chunk `start_char` to the next whitespace within the
+`BOUNDARY_LOOKBACK_RATIO`-sized window when the preceding character
+is alphanumeric. Mirrors the end-trim's lookback logic. Non-zero
+overlap no longer produces mid-word starts.
+
+**Re-measured diagnostic with both ends and starts trimmed:**
+
+| Dataset | Metric | Broken | End-only | **Start-trim (Phase 1A.1b)** |
+|---|---|---|---|---|
+| LoCoMo | R@25 | 38.69% | 54.79% | **54.67%** |
+| LongMemEval | R@1 | 0% | 0% | **0%** |
+| LongMemEval | R@5 | 0% | 0% | **0.2%** |
+| LongMemEval | R@10 | 0% | 0% | **29.4%** |
+| LongMemEval | R@25 | 0% | 0% | **39.2%** |
+| LongMemEval | unique cells in top-10 | 19 | 21 | **1685** |
+
+**The fragment hypothesis was correct.** Fixing chunk starts moved
+LongMemEval R@25 from 0% to 39.2%, and top-10 cell diversity from
+19 distinct cells to 1685 (80× more diverse). The hub-cell
+catastrophe is broken.
+
+### Residual finding — numeric-token anisotropy
+
+After both ends and starts are trim-aware, 5 cells still appear in
+99.8% of LongMemEval top-10s:
+
+- cell 3606: `"55-inch 4K UHD TV..."`
+- cell 19047: `"11 kg (24 lbs)..."`
+- cell 17411: `"99.9% dust-free..."`
+- cell 16350: `"99.9% dust-free..."` (duplicate from variant item)
+- cell 4260: `"22. Avengers: Age of Ultron..."`
+
+These chunks start at clean word boundaries (no mid-word fragments)
+but the words themselves are **numbers**. Numeric BPE tokens
+produce anomalous high-norm hidden states regardless of chunk
+cleanliness — genuine latent-space anisotropy. The hook already
+skips position 0 (BOS attention sink); position 1 may carry a
+similar but less-skipped outlier signal for numeric-leading
+chunks.
+
+This explains why LongMemEval R@10 caps at 29.4% rather than
+reaching 50-60%: 5 of every 10 top-10 slots are occupied by these
+residual hubs, leaving only 5 "real" slots for actual content.
+
+**Two candidate interventions for the next slice:**
+
+1. **ZCA whitening** — already implemented in
+   `crates/tdb-retrieval/src/refinement.rs::WhitenedRescore`.
+   Removes the strongest correlated directions in the latent
+   space; if the "number-token direction" is one of them,
+   whitening will defuse the residual hubs. Activated via
+   `TDB_REFINEMENT_MODE=whitened`. Zero new code.
+2. **Skip position 1 in addition to position 0** in the hook. If
+   numeric-leading chunks have position-1 attention-sink behavior,
+   skipping it kills the anisotropy at source. ~3 lines of code
+   in `python/tardigrade_hooks/hf_kv_hook.py`.
+
+---
+
 ## Recommendations going forward
 
 1. **Run the full 1533-item LoCoMo bench on the clean dataset** with
