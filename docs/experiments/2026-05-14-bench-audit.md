@@ -443,6 +443,129 @@ residual hubs, leaving only 5 "real" slots for actual content.
 
 ---
 
+## Phase 1B — Reranker chunk-text bug (the biggest single win, 2026-05-15)
+
+After the Phase 0 + Phase 1A work landed and an item-level recall
+diagnostic was added (see below), forensic investigation revealed
+the bench's cross-encoder reranker had been operating on the wrong
+text input for every query. The fix is a single line; the impact
+on LongMemEval is ~20× the previous score.
+
+### The bug
+
+In `TardigradeAdapter.query` the `get_text` callback for the
+cross-encoder reranker returned the **parent item's full
+`context`**, not the chunk text:
+
+```python
+get_text=lambda h: self._cell_to_item[int(h.cell_id)].context  # BUG
+```
+
+For LongMemEval items with 50-150 chunks averaging 100-500 chars,
+all same-item chunks received identical 25-42KB reranker input and
+therefore identical cross-encoder scores. The reranker was doing
+**item-level reranking** when it needed to be **chunk-level**. It
+couldn't pick the answer-bearing chunk from among the same item's
+candidates.
+
+LoCoMo masked the bug because evidence-only items have one chunk
+per item — `chunk_text == item.context`, so the reranker
+accidentally worked. Only LongMemEval's many-chunks-per-item
+structure exposed it.
+
+### Item-level recall diagnostic — the smoking gun
+
+Before finding the reranker bug we extended
+`scripts/probe_rank_diagnostic.py` to compute **two** R@K metrics:
+
+- **Chunk-level R@K** — rank of the heuristic-picked "expected"
+  chunk (max ground-truth-token overlap). Underestimates because
+  27% of LongMemEval items have zero ground-truth-token overlap
+  with any chunk (the answer requires inference, not lookup).
+- **Item-level R@K** — rank of the FIRST cell from the right item
+  to appear in top-K. Matches the production bench scoring
+  (`answer = top-1.mapped_item.ground_truth`).
+
+LongMemEval re-measured at top-K=25, with whitening enabled:
+
+| Rank | Chunk-level | **Item-level** |
+|---|---|---|
+| R@1 | 0% | 0.4% |
+| R@10 | 29.0% | **68.4%** |
+| R@25 | 39.2% | **83.8%** |
+| Outside top-25 | 60.8% | **16.2%** |
+
+**The retrieval signal was finding the right item's cells in top-25
+of 84% of queries already.** Bench scored 3-5% because the reranker
+couldn't surface the right chunk from among same-item candidates —
+they all looked identical to it.
+
+### Fix + measurement
+
+The fix replaces `_cell_to_item[h.cell_id].context` with
+`_cell_to_chunk_text[h.cell_id]`. The diagnostic tracking flag is
+flipped to default-on so production has the chunk-text side table
+the reranker now requires (small per-cell memory cost: one chunk
+text reference per cell).
+
+**50-item PoC, whitened refinement, before vs after:**
+
+| Dataset | Before (broken reranker) | **After (fixed reranker)** | Δ |
+|---|---|---|---|
+| LoCoMo (50) | ~30% | **37.95%** | +8pp |
+| LongMemEval (50) | ~5% | **93.60%** | **+88.6pp** |
+| Combined | ~17% | **65.78%** | +49pp |
+
+Per-bin distribution on the 50-item LongMemEval subset:
+46/50 items (92.0%) achieved exact ground-truth match; 3/50 (6.0%)
+missed; 1 partial. If 93.6% holds at full corpus scale (500),
+TardigradeDB matches or beats Letta's published 83.2% on
+LongMemEval.
+
+### Why LoCoMo barely moves
+
+The fix is a no-op for LoCoMo evidence-only items (1 chunk per
+item, so chunk text equals item context). LoCoMo lift comes
+entirely from whitening (+2pp) and minor stochastic variation. The
+LoCoMo ceiling with our current pipeline is now structural — see
+the cross-encoder model limitation below.
+
+### Cross-encoder LoCoMo limitation — case study
+
+Even with the fix, LoCoMo's 50-item subset caps at ~38%. A direct
+test traced this to the cross-encoder model itself making bad
+choices on conversational + temporal queries:
+
+- Query: "When did Caroline apply to adoption agencies?"
+- Cell 55 (RIGHT): "Hi Melanie! ...I took the first step towards
+  becoming a mom — I applied to adoption agencies!..." — score -3.08
+- Cell 71 (WRONG): "The sign was just a precaution... Wishing you
+  the best on your adoption journey!" — score **-2.12** (higher,
+  ranks above the right answer)
+
+`cross-encoder/ms-marco-MiniLM-L-6-v2` (the production reranker as
+of this audit) is biased toward conversationally-affirming tone
+over factual question-answering, a known limitation of
+MS-MARCO-trained rerankers on dialogue text. Direct verification:
+running the cross-encoder on the same query+chunks reproduces the
+wrong ranking — the bug is in the model, not in our code.
+
+**Recommended fix (research-grounded, not measured yet):** swap to
+`IAAR-Shanghai/MemReranker-0.6B` (arXiv:2605.06132, May 2026), a
+0.6B Qwen3-Reranker-distilled cross-encoder explicitly trained on
+LoCoMo and LongMemEval task structure with "answer density and
+signal-to-noise ratio" supervision targeting the exact failure mode
+above. The paper reports +4.4 MAP on LoCoMo and +4.7 MAP on
+LongMemEval over `BAAI/bge-reranker-v2-m3`; the lift over
+ms-marco-MiniLM-L-6-v2 is inferred (not benchmarked directly) but
+large. Apache 2.0, fits ~1.5 GB VRAM at BF16. See
+`docs/refs/external-references.md` §A3h for full citations.
+
+A/B against the 50-item LoCoMo subset is the next slice before
+locking in a default change.
+
+---
+
 ## Recommendations going forward
 
 1. **Run the full 1533-item LoCoMo bench on the clean dataset** with
