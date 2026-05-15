@@ -566,6 +566,253 @@ locking in a default change.
 
 ---
 
+## Phase 1B.2 — Hardcoded `k=5` in hook starved the reranker at scale
+
+The 50-item PoC's 93.6% LongMemEval was misleadingly optimistic. The
+full-corpus bench launched immediately after — same code, same fix —
+tanked back to ~3% LongMemEval by query 100/500.
+
+Root cause: `HuggingFaceKVHook` is instantiated in
+`TardigradeAdapter._init_native` with `k=5` hardcoded. The reranker
+saw only 5 candidates from latent retrieval regardless of corpus
+size. The item-level R@5 diagnostic at full LongMemEval was 1.2%
+(right-item cells rarely make it into top-5 at 25K-cell scale),
+while R@25 was 83.8%. The PoC succeeded at 50 items because at
+small corpus, top-5 still contained the right cells; the full
+bench failed because at 500-item scale, hub cells crowd top-5.
+
+**Fix:** parameterize via `TDB_RETRIEVER_TOP_K` env var (default
+25). The reranker now reorders the top-25 from latent and returns
+top_k=5 from the bench config. ~5× slower per query, but recall
+lifts dramatically per the diagnostic.
+
+This was a knowable error — the item-level R@K data was on screen
+when the full bench was launched. The k=5 hardcoding wasn't
+connected to it. Both bugs (chunk-text + hardcoded k) compounded
+into a single "PoC said 93%, bench said 3%" surprise.
+
+---
+
+## Phase 1B.3 — Reranker model shootout (2026-05-15)
+
+After the chunk-text fix and k=25 patch, LoCoMo capped at ~38%
+because the production reranker (`ms-marco-MiniLM-L-6-v2`) made
+systematically bad choices on dialogue + temporal queries
+(documented case: "When did Caroline apply to adoption agencies?"
+— wrong chunk picked).
+
+### Setup
+
+Direct case study: feed the failing query + its 5 most-relevant
+chunks through four candidate rerankers. The right chunk
+(cell 55, text "Hi Melanie!... I applied to adoption agencies!")
+must rank above the convincingly-affirming distractor (cell 71,
+text "...Wishing you the best on your adoption journey!...").
+
+### Results
+
+| Model | Params | Right rank | Top-1 picked | Note |
+|---|---|---|---|---|
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` | 22M | 3rd | cell 71 (wrong) | Current production model |
+| `BAAI/bge-reranker-v2-m3` | 568M | 3rd | cell 82 (wrong) | Conversational affirmation bias |
+| `mixedbread-ai/mxbai-rerank-base-v2` | 500M | 2nd | cell 71 (wrong) | Closer but still missed |
+| **`Qwen/Qwen3-Reranker-0.6B`** | 600M | **1st** | **cell 55 (RIGHT)** | Clear 4-point margin |
+
+Only Qwen3-Reranker-0.6B got the case study correct. The
+instruction-aware Qwen3-Reranker architecture is the base from
+which MemReranker (the dialogue-distilled model that's
+unfortunately private) was built. Per the MemReranker paper's
+Table 5, Qwen3-Reranker-0.6B scores **0.6427 LoCoMo MAP** —
+significantly above BGE-v2-m3's 0.6708 [sic — Qwen3-RR lower
+in paper, but it's the only one to pass our case study].
+
+### 50+50 PoC (whitened refinement, fixed chunker, chunk-text reranker)
+
+| Config | LoCoMo | LongMemEval | Overall |
+|---|---|---|---|
+| MiniLM, k=5 | 37.95% | 93.60% | 65.78% |
+| MiniLM, k=25 | 31.87% | 96.00% | 63.93% |
+| **Qwen3-RR, k=25** | **35.54%** | 92.13% | 63.83% |
+
+The case-study win didn't dominate aggregate LoCoMo. Likely
+explanation: temporal questions are only one slice of LoCoMo
+(~20% per LongMemEval's category split, similar in LoCoMo). The
+other categories (single-hop, multi-hop, open-domain) may not
+exhibit the same conversational-affirmation failure mode that
+MiniLM has — so swapping the reranker doesn't help on those.
+
+No single reranker dominates across both datasets at our scale:
+- MiniLM-k=5 wins on small-corpus LoCoMo (top-5 sufficient)
+- MiniLM-k=25 wins on LongMemEval (more candidates = better picks)
+- Qwen3-RR-k=25 is a compromise (decent LoCoMo, slightly worse LongMemEval)
+
+A single full-corpus bench at k=25 with each reranker is needed to
+pick the production default. Decision deferred pending the
+duplicate-context investigation below — that may dominate LoCoMo
+more than reranker choice does.
+
+### MemReranker availability correction
+
+The earlier Phase 1B narrative recommended `IAAR-Shanghai/MemReranker-0.6B`
+as the next swap. **Retract.** Investigation 2026-05-15 found:
+
+- The model repo returns **HTTP 401** (private, not gated by
+  license click-through). The IAAR-Shanghai org's public model
+  listing contains MemReranker-4B but no 0.6B entry.
+- The MemReranker paper claims a "(0.6B/4B) family" but the
+  authors deliberately released only 4B openly; 0.6B is API-only
+  via their commercial Memos Rerank service.
+- MemReranker-4B (8 GB at BF16) does not fit our 8 GB VRAM
+  alongside Qwen3-0.6B.
+- The paper's claim that MemReranker-0.6B "beats GPT-4o-mini" is
+  directionally true on LongMemEval (0.7538 vs 0.5684 MAP) but
+  **statistically tied** on LoCoMo (0.7150 vs 0.7151).
+
+**Updated recommendation:** use `Qwen/Qwen3-Reranker-0.6B` —
+Apache 2.0, fits VRAM, is the base of MemReranker, and is the
+only model in our shootout that passed the dialogue case study.
+For a production-quality MemReranker-0.6B you'd either need to
+use IAAR's commercial Memos API (external dependency) or fine-
+tune Qwen3-Reranker yourself from the recipe in the paper.
+
+---
+
+## Phase 1B.4 — LoCoMo duplicate-context discovery (the bench-scoring artifact)
+
+Investigation prompted by persistently low LoCoMo scores
+(~30-38%) across reranker choices and configurations. If
+retrieval is doing 55% R@25 item-level, why does the bench cap so
+low?
+
+### Finding: 27.6% of LoCoMo items share their context
+
+| Items sharing context | Count of contexts | Items affected |
+|---|---|---|
+| 2 items | 162 contexts | 324 items |
+| 3 items | 30 contexts | 90 items |
+| 4 items | 1 context | 4 items |
+| 5 items | 1 context | 5 items |
+| **Total duplicates** | **194 contexts** | **423/1533 = 27.6%** |
+
+Example (5-way duplicate, one shared context):
+
+> Context: "Hey John! Long time no chat — I adopted a pup from a
+> shelter in Stamford last week and my days have been so much
+> happier..."
+
+| Question | Ground truth |
+|---|---|
+| "Does James live in Connecticut?" | "Likely yes" |
+| "In which state is the shelter?" | "Connecticut." |
+| "When did James adopt Ned?" | "first week of April 2022" |
+| "What did James adopt in April 2022?" | "a pup" |
+| "What is the name of the pup?" | "Ned" |
+
+These five items have **the same evidence text** but **five
+different questions and ground truths**. When latent retrieval
+correctly surfaces this context, `cell_to_item` maps the cell to
+**one** of the five items (whichever owned the cell at ingest
+time). The bench's `answer = mapped.ground_truth` then picks
+*that* item's GT — and scores 0 on the other four queries even
+though retrieval was *correct*.
+
+### Math
+
+For perfect retrieval on duplicate-context items, the deterministic
+bench scoring caps at:
+
+- 5-way dupes: 1/5 = 20% per item
+- 3-way: 33%
+- 2-way: 50%
+
+Aggregated across the 27.6% of LoCoMo items affected, this is
+worth ~10-15 percentage points of LoCoMo bench score lost to
+evaluation-method artifact, not retrieval quality.
+
+### This is neither a retrieval nor a reranker problem
+
+It's an **answer extraction** problem. The bench adapter's
+`answer = mapped.ground_truth` pattern collapses N-way duplicates
+to one. Real RAG systems do not do this — they pass retrieved
+evidence + question to an LLM to generate the answer text.
+
+### Research synthesis (2026-05-15 sub-agent)
+
+A focused research pass confirmed the duplicate-context problem
+has a standard fix in the IR/QA literature, and every LoCoMo
+leaderboard system uses it.
+
+**The LoCoMo paper's official protocol is `retrieve → LLM-generate
+short answer → F1/BLEU + LLM-as-Judge`.** Per the LoCoMo paper
+(Maharana et al., ACL 2024) and the snap-research/locomo GitHub
+repo's evaluation scripts (`evaluate_gpts.sh`, `evaluate_rag_gpts.sh`),
+the answer is *generated* from retrieved evidence by a generator
+LLM, then scored by an LLM judge. The paper even contains the
+load-bearing example: ground truth "Alice was born in March" vs
+generated "Alice is born in July" — both score high on F1/BLEU
+despite being semantically opposite, which is why the paper
+mandates the LLM judge.
+
+**Every leaderboard system uses retrieve-then-LLM-generate-then-LLM-judge:**
+
+- **Mem0** ([arXiv:2504.19413](https://arxiv.org/abs/2504.19413)) —
+  `gpt-4o-mini` generator + `gpt-4o-mini` judge.
+- **Memobase** — same pattern, GPT-4o judge, 75.78% LLM-Judge headline.
+- **ByteRover 2.0** ([blog](https://www.byterover.dev/blog/benchmark-ai-agent-memory))
+  — three-stage Retrieve → Justify (Gemini 3 generates answer) →
+  Judge (Gemini 3 scores). Their 92.2% is LLM-Judge over
+  LLM-generated answers.
+- **MemMachine v0.2** — GPT-4.1 judge.
+
+**None of these systems treat duplicate-context items specially.**
+The N-way duplicate problem dissolves naturally because the
+generator LLM reads the *question* and produces a different
+answer string for each one. TardigradeDB's
+`answer = mapped.ground_truth` is the non-standard step.
+
+**Independent caveats from the literature** (worth flagging):
+
+- [dial481/locomo-audit](https://github.com/dial481/locomo-audit)
+  found 6.4% of LoCoMo gold answers are wrong (ceiling is 93.57%),
+  the LLM judge accepts 62.81% of intentionally-wrong but
+  vague-but-topical answers, third-party reproductions of
+  EverMemOS hit 38.38% vs claimed 92.32%, and 446 adversarial
+  questions (22.5%) are silently skipped by published eval code.
+- Zep retracted their 84% → 58.44% LoCoMo claim after fixing
+  their own eval ([getzep/zep-papers#5](https://github.com/getzep/zep-papers/issues/5)).
+- The LoCoMo leaderboard is methodologically noisy in directions
+  that align with this audit's stance — be cautious citing it.
+
+**LongMemEval is different.** The LongMemEval paper confirms each
+question has a unique, non-shared chat history. TardigradeDB's
+93%+ on LongMemEval is not vulnerable to the duplicate-context
+artifact — there is none to exploit.
+
+### Three options + verdict
+
+Synthesized from the research:
+
+| Option | What | Effort | Verdict |
+|---|---|---|---|
+| (a) `answer = chunk_text` | Return retrieved chunk text, score GT-tokens against it | Free | **Insufficient.** Works for span-style GTs ("Bach and Mozart"), fails on inference/temporal ("first week of April 2022"). Locks us to scoring well only on single-hop. |
+| (b) LLM-gated retrieve-then-read | Pass retrieved evidence + question to LLM, generate answer, LLM-judge against GT | Bench has `llm_gated` mode; needs adapter to feed evidence; ~$1-3 per full LoCoMo run at gpt-4o-mini pricing | **Mandatory for comparable LoCoMo scoring.** Matches the LoCoMo paper's official protocol and every leaderboard system. |
+| (c) Dedupe LoCoMo at prep | Merge items sharing context | Changes the corpus, invalidates cross-system comparisons | **Wrong fix per literature.** Generator LLM is supposed to disambiguate; deduping the questions skips the disambiguation that's the whole point of the task. |
+
+**Verdict:** option (b). Until we implement retrieve-then-read,
+**we should publish the current bench scores as a retrieval
+diagnostic** (R@k, item-level — BEIR-style), not as a LoCoMo
+Judge score. Citing them as "LoCoMo Judge" without the generator
++ judge stages would misrepresent the metric.
+
+Honest interim framing:
+
+- LoCoMo R@k retrieval diagnostic — comparable to Engram's R@5=93.9%
+  approach ([snap-research/locomo#38](https://github.com/snap-research/locomo/issues/38)).
+- LoCoMo Judge — not yet measured. TardigradeDB needs the LLM-gated
+  adapter wiring before this number can be claimed.
+
+---
+
 ## Recommendations going forward
 
 1. **Run the full 1533-item LoCoMo bench on the clean dataset** with

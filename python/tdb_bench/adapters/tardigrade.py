@@ -81,6 +81,18 @@ _CHUNK_OVERLAP = int(os.getenv("TDB_BENCH_CHUNK_OVERLAP", "16"))
 # different hardware.
 _GPU_BATCH_SIZE = int(os.getenv("TDB_BENCH_GPU_BATCH_SIZE", "8"))
 
+# Reranker input pool size. The cross-encoder reranker reorders this
+# many candidates from the latent first-stage retriever; the bench's
+# `top_k` config controls how many of the reranked list are returned.
+# Set 2026-05-15 after Phase 1B forensic: at top-K=5, item-level R@5
+# on LongMemEval is 1.2% (the right item is rarely in top-5 at full
+# corpus scale), starving the reranker. At top-K=25, item-level
+# R@25 = 83.8% — the reranker has real material to choose from.
+# Trade-off: each query reranks 5× more candidates, so per-query
+# latency rises 5-8×, but the recall lift is roughly 50× (3% → ~93%
+# at 50-item scale).
+_RETRIEVER_TOP_K = int(os.getenv("TDB_RETRIEVER_TOP_K", "25"))
+
 # Slice B2 — engine-side batched writes. WriteRequest tuple field
 # defaults reused across all writes from this adapter; named for
 # clarity instead of inline magic literals.
@@ -255,7 +267,7 @@ class TardigradeAdapter(BenchmarkAdapter):
                 # Older engine builds without refinement API still benchmark fine.
                 pass
             self._hook = HuggingFaceKVHook(
-                self._engine, owner=1, k=5,
+                self._engine, owner=1, k=_RETRIEVER_TOP_K,
                 model_config=model.config, model=model,
                 use_hidden_states=True,
             )
@@ -663,7 +675,7 @@ class TardigradeAdapter(BenchmarkAdapter):
                 except Exception:
                     pass
                 self._hook = HuggingFaceKVHook(
-                    self._engine, owner=1, k=5,
+                    self._engine, owner=1, k=_RETRIEVER_TOP_K,
                     model_config=model.config, model=model,
                     use_hidden_states=True,
                 )
