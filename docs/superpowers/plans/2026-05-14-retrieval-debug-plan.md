@@ -429,6 +429,134 @@ not the retrieval signal.
 
 ---
 
+## Phase 5 — Chunker performance: offset-mapping tokenizer integration
+
+**Goal:** Eliminate the per-chunk tokenizer.encode round-trip the
+boundary-aware splitter currently does to recover consumed-token
+counts. Use HF `PreTrainedTokenizerFast`'s `return_offsets_mapping`
+to map character positions directly to token indices, removing the
+2026-05-14 perf regression (LongMemEval ingest 8 min → 50 min after
+the Phase 1A.1 fix).
+
+**Why:** The Phase 1A.1 splitter calls
+`self._tokenizer.encode(chunk_text)` once per chunk to learn how many
+tokens the trimmed text actually contained. For LongMemEval where
+the paragraph boundary trim fires on ~50% of chunks, this adds
+~50 ms × 26K chunks = ~22 min of tokenizer overhead. A char-ratio
+estimate (Option B in 2026-05-14 conversation) is "good enough" for
+splitter convergence and is a viable short-term mitigation, but
+introduces ~1-2 token inaccuracy in `Chunk.token_count`. The exact
+fix uses tokenizer offset_mapping.
+
+**When to enter:** Phase 1A is shipped and recall targets met.
+Performance regression doesn't block functional progress; this is
+the cleanup commit.
+
+### Background
+
+HF Fast tokenizers (`PreTrainedTokenizerFast`) support
+`tokenizer(text, return_offsets_mapping=True)` which returns a list
+of `(start_char, end_char)` per token. Once you have offset_mapping
+for the whole text, you can:
+
+1. Locate the chunk's start char position
+2. Locate the chunk's hard-end char position (`start_char + max_tokens_worth_of_chars`)
+3. Use the boundary strategy to find a clean break ≤ hard-end
+4. Binary-search the offset_mapping to map the boundary char position
+   back to a token index — no re-encoding required
+
+The current `_split_tokens` works in token space first and char
+space second; Phase 5 inverts that to work in char space using
+offset_mapping as the bridge.
+
+### Slice 5A — `FastTokenizerAdapter` and offset-mapping pre-compute
+
+**What:** Wrap any tokenizer that supports `return_offsets_mapping`
+in a thin adapter that exposes `tokens_with_offsets(text) ->
+list[(token, start_char, end_char)]`. For tokenizers without fast
+support (test fixtures with `_WordTokenizer`), fall back to the
+current re-encode path — preserves existing tests.
+
+**Pattern:** **Adapter** + **Capability detection** via
+`hasattr(tokenizer, "encode") and getattr(tokenizer,
+"is_fast", False)`.
+
+**AT-5A** (Python,
+`tests/python/test_chunker_offset_mapping.py`):
+
+```
+GIVEN  a FastTokenizerAdapter wrapping Qwen3 tokenizer (real HF Fast)
+WHEN   tokens_with_offsets(text) is called
+THEN   the returned offsets cover the whole text without gaps
+AND    the token at each offset position matches the tokenizer's
+       own encode/decode round-trip
+```
+
+### Slice 5B — Splitter consumes offset_mapping directly
+
+**What:** Refactor `_split_tokens` to:
+
+1. Call `self._tokenizer.encode(text, return_offsets_mapping=True)`
+   once at the start of `chunk()` instead of `encode(text)`.
+2. Iterate in char space: start_char advances by the boundary-aware
+   stride; the boundary strategy returns a char position; binary-
+   search offset_mapping for the token range that fits.
+3. No per-chunk `encode(chunk_text)` calls.
+
+**Pattern:** **Strategy** (boundary) + **Iterator** (token-by-token
+char-space iteration via offset_mapping).
+
+**AT-5B** (Python,
+`tests/python/test_chunker_offset_mapping.py`):
+
+```
+GIVEN  Qwen3 tokenizer and a 5KB LongMemEval-like transcript
+WHEN   chunked once with the offset-mapping path and once with the
+       re-encode path
+THEN   both produce identical chunk text and identical
+       (start_char, end_char) for every chunk
+AND    the offset-mapping path is ≥5× faster end-to-end
+```
+
+### Slice 5C — Adapter wiring and fallback for non-fast tokenizers
+
+**What:** `TextChunker.__init__` detects whether the tokenizer is
+fast. If yes, the offset-mapping path is used. If no, the legacy
+re-encode path is used. Preserves the `_WordTokenizer` test
+fixture and other non-fast tokenizers.
+
+**Pattern:** **Strategy** at chunker construction; **Null Object**
+for the offset-mapping fallback (no-op adapter that triggers the
+legacy path).
+
+**AT-5C** (Python):
+
+```
+GIVEN  a TextChunker constructed with the test _WordTokenizer
+WHEN   chunked
+THEN   same output as today (no behavioral change for non-fast
+       tokenizers)
+```
+
+### Phase 5 gating
+
+**Target:** LongMemEval ingest time returns to ≤10 min (matching
+the pre-Phase 1A.1 baseline of 8 min); LoCoMo ingest ≤2 min;
+recall numbers identical to the re-encode path (no behavioral
+regression).
+
+If hit → ship. Performance restored, behavior unchanged.
+
+### Out of scope for Phase 5
+
+- Streaming tokenization (chunking text larger than fits in memory).
+  Defer to a separate workstream if/when corpus items exceed
+  hundreds of KB per item.
+- Multi-process tokenization. The HF Fast path is already C++ and
+  fast enough.
+
+---
+
 ## Reliability checklist (per CLAUDE.md)
 
 - **Durability contract:** unchanged in Phases 0-2; Phase 3 introduces
@@ -454,6 +582,9 @@ Mandatory metrics updates for each phase:
 - Phase 3: same + projection-head training metrics (final
   contrastive loss, validation recall).
 - Phase 4: same + dense retriever forward-pass latency.
+- Phase 5: chunker ingest time per dataset (baseline vs offset-
+  mapping path); chunk-output identity verification (offset-mapping
+  path must produce identical chunks to re-encode path).
 
 ---
 
@@ -518,11 +649,14 @@ Mandatory metrics updates for each phase:
 | 3A | 2-3 days | Training infrastructure | AT-3A | `torch` (already present), retrieval data loader |
 | 3B | 2-5 days | Training on held-out, evaluation | AT-3B | held-out split |
 | 4A | 1-2 days | `DenseEmbeddingRetriever` | AT-4A | `sentence-transformers` or HF transformers (already present) |
+| 5A-5C | 1-2 days | `FastTokenizerAdapter` + offset-mapping splitter path | AT-5A, AT-5B, AT-5C | none (HF Fast tokenizer already in use) |
 
 Total: Phase 0+1 in 2-4 days. Phase 2 adds 1-2 days. Phase 3 adds
-4-8 days. Phase 4 adds 1-2 days. The plan stops at the first
-phase that delivers the target — most realistic shipping outcome
-is Phase 1 or Phase 1+2.
+4-8 days. Phase 4 adds 1-2 days. Phase 5 adds 1-2 days (perf
+cleanup, no functional change). The plan stops at the first phase
+that delivers the recall target — most realistic shipping outcome
+is Phase 1 or Phase 1+2 — and Phase 5 closes out the perf
+regression introduced by Phase 1A.1 once recall is in a good place.
 
 ---
 
@@ -534,6 +668,9 @@ is Phase 1 or Phase 1+2.
 4. If Phase 2 needed: 2A → 2B → re-bench.
 5. If Phase 3 needed: 3A on synthetic → 3B on held-out → re-bench.
 6. If Phase 4 needed: 4A → re-bench → docs reframe.
+7. Phase 5 — offset-mapping splitter, only after the recall target
+   for the active phase is hit. Pure perf, no behavior change;
+   safe to ship independently.
 
 Each phase ends with a forensic update to
 `docs/experiments/2026-05-14-bench-audit.md` recording the
