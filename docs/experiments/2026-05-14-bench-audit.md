@@ -35,6 +35,14 @@ turned out to be net-positive once measured against honest data.
    recorded in prior docs were measuring the lexical fallback or a
    broken dataset; the honest verdict is that RLS as currently
    implemented hurts retrieval, not "is neutral".
+5. **The bench adapter was scoring a different task than every
+   LoCoMo leaderboard system.** `answer = mapped.ground_truth`
+   collapses LoCoMo's 27.6% duplicate-context items and is not the
+   protocol the LoCoMo paper, Mem0, Memobase, ByteRover, or MemMachine
+   use. The retrieve→LLM-generate→LLM-judge pipeline (Phase 1B.5)
+   now ships with `--system tardigrade-llm-gated`, validated
+   end-to-end against DeepSeek on the smoke corpus. The full-corpus
+   LoCoMo Judge number is one ~$0.57 + ~1hr GPU job away.
 
 ---
 
@@ -810,6 +818,109 @@ Honest interim framing:
   approach ([snap-research/locomo#38](https://github.com/snap-research/locomo/issues/38)).
 - LoCoMo Judge — not yet measured. TardigradeDB needs the LLM-gated
   adapter wiring before this number can be claimed.
+
+---
+
+## Phase 1B.5 — LLM-gated retrieve-then-read adapter shipped (2026-05-15)
+
+Implements Phase 1B.4's mandated fix: the new `RetrieveThenReadAdapter`
+Decorator wraps any `BenchmarkAdapter` and replaces the
+`answer = mapped.ground_truth` shortcut with a real LLM-generated
+answer from the retrieved evidence. The harness's existing
+`evaluator.answerer_model` and `prompts.answer` config slots were
+already plumbed for this pipeline — only the adapter implementation
+was missing.
+
+### Design pattern stack
+
+| Pattern | Component | Role |
+|---|---|---|
+| Decorator | `RetrieveThenReadAdapter` | Wraps `BenchmarkAdapter`; replaces inner `answer` with generated string. |
+| Strategy | `AnswerGenerator` protocol + `DeepSeekAnswerer` / `OpenAIAnswerer` / `MockAnswerGenerator` | Vendor-agnostic; swap by env var. |
+| Template Method | `PromptBuilder`, `OpenAICompatibleAnswerer` | Frozen prompt skeleton (versioned via `PROMPT_TEMPLATE_VERSION`); shared OpenAI-compatible HTTP shape. |
+| Repository | `EvidenceFormatter` | Filters empties, caps to `LLM_GATE_EVIDENCE_TOP_K`, preserves rank. |
+| Decorator | `RetryingGenerator` | Bounded exponential backoff; raises `GeneratorExhausted` on exhaustion (per-item failure, not run abort). |
+| Decorator | `CachedAnswerGenerator` | Disk-backed Cache-Aside keyed `(model, prompt_hash, template_version)`. |
+| Factory Method | `build_answerer_from_env` | Assembles `Retry → [Cache] → Provider` chain from env vars. |
+| Null Object | `NoOpAnswerGenerator` | Returns `""`; lets the adapter's no-evidence path be tested without an API. |
+
+### Provider economics (per full 1533-item LoCoMo run)
+
+| Provider | Input | Output | **Per run** | Comparable to |
+|---|---|---|---|---|
+| **DeepSeek-Chat (V3)** — default | $0.27/MTok | $1.10/MTok | **~$0.57** | (this work) |
+| gpt-4o-mini | $0.15/MTok | $0.60/MTok | ~$0.31 | Mem0's published setup |
+| Claude Haiku 4.5 | $1.00/MTok | $5.00/MTok | ~$2.25 | — |
+
+DeepSeek picked as default — already keyed in `.env.bench`, ~half the
+cost of Claude Haiku, and DeepSeek-V3 benchmarks near gpt-4o-mini on
+QA-style tasks (DeepSeek-V3 paper, GSM8K/MMLU). gpt-4o-mini remains
+one env-var swap away for Mem0-comparable published numbers.
+
+### Env contract
+
+```
+TDB_LLM_GATE_PROVIDER  = deepseek | openai | mock  (default: deepseek)
+TDB_LLM_GATE_MODEL     = override the provider's default model name
+TDB_LLM_GATE_CACHE_DIR = enable disk-backed response cache when set
+```
+
+### Bench invocation
+
+```bash
+PYTHONPATH=python python -m tdb_bench run --mode full \
+  --system tardigrade-llm-gated \
+  --config python/tdb_bench/config/default.json \
+  --output target/bench-llm-gated.json
+```
+
+### End-to-end validation (live DeepSeek, ~$0.003)
+
+Smoke run on the 6-item fixture corpus:
+
+| dataset | Q | generated A | GT | judge |
+|---|---|---|---|---|
+| locomo | "Where did Alice move?" | "Berlin." | "Berlin" | 1.00 |
+| locomo | "What is Bob's favorite language?" | "Rust" | "Rust" | 1.00 |
+| locomo | "What is the project codename?" | "Tardigrade." | "Tardigrade" | 1.00 |
+| longmemeval | (3 items) | — | — | 1.00 × 3 |
+
+Adapter metadata records `answerer_model=deepseek-chat`,
+`prompt_template_version=v1-2026-05-15`. LLM-as-Judge runs via the
+existing `DeepSeekProvider` chain — `evaluator_mode=llm_deepseek`.
+Answers are model-generated (note the trailing periods on "Berlin." /
+"Tardigrade." which are model tics, not GT verbatim).
+
+### ATDD inventory
+
+71 new tests across 8 files. 68 non-live pass on any host; 3 live
+DeepSeek tests gated by `@pytest.mark.live_api`.
+
+| Test file | Tests | What it pins |
+|---|---|---|
+| `test_llm_gating_prompt.py` | 16 | `PromptBuilder` determinism, instruction presence, `MockAnswerGenerator` recording, Null Object behavior |
+| `test_llm_gating_evidence.py` | 10 | filter empties/None/whitespace, dedupe adjacent, cap top-k, rank preservation |
+| `test_llm_gating_adapter.py` | 13 | Decorator replaces `answer`, passes through `evidence`, sums latency, propagates failures, caps evidence at prompt level only |
+| `test_llm_gating_retry.py` | 7 | retry recovers transient, exhausts on persistent, exponential backoff observed, `GeneratorExhausted` on exhaustion |
+| `test_llm_gating_cache.py` | 7 | hit/miss semantics, persistence across instances, model + template-version invalidation |
+| `test_llm_gating_factory.py` | 10 | env-driven provider selection, model overrides, retry always wraps, cache only when dir env set |
+| `test_llm_gating_registry.py` | 5 | `RegistryFactory.create_adapter("tardigrade-llm-gated")` returns Decorator over `TardigradeAdapter`; end-to-end smoke with mock |
+| `test_llm_gating_deepseek_live.py` | 3 (live) | real DeepSeek round-trip; cost <$0.001/run |
+
+Full Python suite: 485 passed, 11 deselected, 0 regressions.
+
+### What this *does not* yet measure
+
+The 50+50 PoC and full-corpus reranker shootout numbers above were
+generated under deterministic scoring (the broken `answer =
+mapped.ground_truth` path). The LLM-gated path has only been
+smoke-validated on 6 fixture items. **The headline LoCoMo Judge
+number against Mem0/Memobase/ByteRover requires a full 1533-item run
+under the LLM-gated adapter — currently a ~$0.57 + ~1hr GPU job.**
+
+Plan record: `~/.claude/plans/llm-gated-evaluation.md`.
+
+Commit: `2ba1429`.
 
 ---
 
