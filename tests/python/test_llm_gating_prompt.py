@@ -79,6 +79,35 @@ class TestPromptBuilder:
         # Cache keys depend on this — must be readable from the builder.
         assert PromptBuilder().template_version() == PROMPT_TEMPLATE_VERSION
 
+    def test_permits_inference_from_evidence(self):
+        # Phase 1B audit 2026-05-16 #94 — the v1 prompt's strict
+        # "only the evidence below" wording caused IDK refusals on
+        # items needing trivial inference (paraphrase, multi-line
+        # combination, relative-date resolution). The v2 wording
+        # permits cautious inference. The strict "only the evidence"
+        # phrase must be gone, and an inference-permitting cue must
+        # be present.
+        prompt = PromptBuilder().build(question=_Q, evidence=_E).lower()
+        assert "only the evidence below" not in prompt
+        # Any of these signals the relaxation is in place.
+        assert any(
+            cue in prompt
+            for cue in ("combine", "paraphrase", "resolve", "may")
+        )
+
+    def test_still_permits_refusal_when_evidence_lacks_answer(self):
+        # The relaxation must NOT remove the IDK escape hatch — without
+        # it the model hallucinates on out-of-evidence questions.
+        prompt = PromptBuilder().build(question=_Q, evidence=_E).lower()
+        assert "i don't know" in prompt
+
+    def test_mentions_session_date_resolution(self):
+        # Pairs with the full-conv-mode date-header injection
+        # (commit a9ecf20). The prompt must teach the model how to
+        # use those headers, otherwise the dates are dead bytes.
+        prompt = PromptBuilder().build(question=_Q, evidence=_E).lower()
+        assert "session" in prompt and "date" in prompt
+
 
 class TestMockAnswerGenerator:
     def test_returns_configured_answer(self):
