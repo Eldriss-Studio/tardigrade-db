@@ -86,7 +86,9 @@ class TestRetrieveThenReadDecoratorReplacesAnswer:
 
         assert result.answer == "GENERATED"
 
-    def test_evidence_passes_through_unchanged(self):
+    def test_evidence_passes_through_when_under_cap(self):
+        # 3 chunks < outer top_k=5 → cap is a no-op; this test still
+        # proves "Decorator does not mangle or reorder inner evidence."
         inner = _StubAdapter(evidence=["alpha", "beta", "gamma"])
         outer = RetrieveThenReadAdapter(inner=inner, generator=MockAnswerGenerator("x"))
 
@@ -94,7 +96,11 @@ class TestRetrieveThenReadDecoratorReplacesAnswer:
 
         assert result.evidence == ["alpha", "beta", "gamma"]
 
-    def test_inner_query_called_once_with_same_args(self):
+    def test_inner_query_called_once_with_same_item(self):
+        # The outer top_k is intentionally widened to LLM_GATE_INNER_TOP_K
+        # inside the Decorator; this test now pins the item-identity
+        # passthrough (the widening invariant lives in
+        # TestRetrieveThenReadDecoratorInnerBudget).
         inner = _StubAdapter()
         outer = RetrieveThenReadAdapter(inner=inner, generator=MockAnswerGenerator("x"))
         item = _item()
@@ -102,9 +108,8 @@ class TestRetrieveThenReadDecoratorReplacesAnswer:
         outer.query(item, top_k=7)
 
         assert len(inner.query_calls) == 1
-        called_item, called_top_k = inner.query_calls[0]
+        called_item, _ = inner.query_calls[0]
         assert called_item == item
-        assert called_top_k == 7
 
     def test_generator_receives_prompt_with_question_and_evidence(self):
         inner = _StubAdapter(evidence=["chunk-A", "chunk-B"])
@@ -210,25 +215,83 @@ class TestRetrieveThenReadDecoratorPassThrough:
         assert "prompt_template_version" in meta
 
 
-class TestRetrieveThenReadDecoratorEvidenceCapping:
-    def test_evidence_capped_in_prompt_but_not_in_result(self):
-        # 12 evidence items; LLM_GATE_EVIDENCE_TOP_K = 10.
-        # Prompt should contain 10; AdapterQueryResult.evidence should
-        # carry all the inner adapter returned so downstream evaluator
-        # has full retrieval context for scoring.
-        evidence = [f"chunk-{i}" for i in range(12)]
+class TestRetrieveThenReadDecoratorEvidenceCapBothSides:
+    """Slice E2 + E3 combined: evidence is capped on BOTH sides of the
+    Decorator — the prompt sees up to ``LLM_GATE_PROMPT_TOP_K`` and the
+    serialized ``result.evidence`` is capped to the runner's ``top_k`` for
+    fair JSON reporting alongside non-gated systems.
+    """
+
+    def test_serialized_evidence_capped_to_outer_top_k(self):
+        evidence = [f"chunk-{i}" for i in range(25)]
+        inner = _StubAdapter(evidence=evidence)
+        outer = RetrieveThenReadAdapter(inner=inner, generator=MockAnswerGenerator("x"))
+
+        result = outer.query(_item(), top_k=5)
+
+        assert len(result.evidence) == 5
+        assert result.evidence == [f"chunk-{i}" for i in range(5)]
+
+    def test_prompt_evidence_capped_to_prompt_top_k(self):
+        # LLM_GATE_PROMPT_TOP_K = 10 (default).
+        evidence = [f"chunk-{i}" for i in range(25)]
         inner = _StubAdapter(evidence=evidence)
         gen = MockAnswerGenerator(canned="x")
         outer = RetrieveThenReadAdapter(inner=inner, generator=gen)
 
-        result = outer.query(_item(), top_k=5)
+        outer.query(_item(), top_k=5)
 
-        assert len(result.evidence) == 12  # unchanged passthrough
-        assert "chunk-0" in gen.last_prompt
-        assert "chunk-9" in gen.last_prompt
-        # chunk-10 and chunk-11 should NOT appear (capped at 10).
-        assert "chunk-10" not in gen.last_prompt
-        assert "chunk-11" not in gen.last_prompt
+        for i in range(10):
+            assert f"chunk-{i}" in gen.last_prompt
+        for i in range(10, 25):
+            assert f"chunk-{i}" not in gen.last_prompt
+
+
+class TestRetrieveThenReadDecoratorInnerBudget:
+    """Slice E1: the Decorator owns its retrieval budget and asks the
+    inner adapter for ``LLM_GATE_INNER_TOP_K`` chunks regardless of the
+    outer ``top_k`` the runner passes in.
+    """
+
+    def test_inner_query_widened_to_inner_top_k(self):
+        from tdb_bench.answerers.constants import LLM_GATE_INNER_TOP_K
+
+        inner = _StubAdapter()
+        outer = RetrieveThenReadAdapter(inner=inner, generator=MockAnswerGenerator("x"))
+
+        outer.query(_item(), top_k=5)
+
+        assert len(inner.query_calls) == 1
+        _, called_top_k = inner.query_calls[0]
+        assert called_top_k == LLM_GATE_INNER_TOP_K
+
+
+class TestRetrieveThenReadDecoratorEnvOverrides:
+    """Slice E4: per-run knobs without touching the bench profile."""
+
+    def test_inner_top_k_env_override(self, monkeypatch):
+        monkeypatch.setenv("TDB_LLM_GATE_INNER_TOP_K", "12")
+        inner = _StubAdapter()
+        outer = RetrieveThenReadAdapter(inner=inner, generator=MockAnswerGenerator("x"))
+
+        outer.query(_item(), top_k=5)
+
+        _, called_top_k = inner.query_calls[0]
+        assert called_top_k == 12
+
+    def test_prompt_top_k_env_override(self, monkeypatch):
+        monkeypatch.setenv("TDB_LLM_GATE_PROMPT_TOP_K", "4")
+        evidence = [f"chunk-{i}" for i in range(20)]
+        inner = _StubAdapter(evidence=evidence)
+        gen = MockAnswerGenerator(canned="x")
+        outer = RetrieveThenReadAdapter(inner=inner, generator=gen)
+
+        outer.query(_item(), top_k=5)
+
+        for i in range(4):
+            assert f"chunk-{i}" in gen.last_prompt
+        for i in range(4, 20):
+            assert f"chunk-{i}" not in gen.last_prompt
 
 
 class TestRetrieveThenReadDecoratorSubstitutability:
