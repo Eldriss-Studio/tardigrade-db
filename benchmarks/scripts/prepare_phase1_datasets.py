@@ -239,13 +239,20 @@ def _locomo_rows(
                 if isinstance(cat, int)
                 else _UNKNOWN_CATEGORY
             )
-            # gold_evidence: dated turn texts for the retriever to
-            # surface. Powers the audit-resistant retrieval-only
-            # metrics (#88) computed in parallel with the LLM-Judge
-            # score. Empty list when source carries no evidence
-            # references — runner skips such rows from retrieval
-            # averages.
-            gold_evidence = list(dict.fromkeys(evidence_lines))
+            # gold_evidence: raw turn text (no `[date]` wrapper, no
+            # speaker prefix) for the retriever to surface. Raw form
+            # is a substring of both evidence-mode (`[date] turn`)
+            # and full-mode (`[session N — date]\nSpeaker: turn`)
+            # contexts, so substring-based retrieval metrics work in
+            # either dataset revision. Powers the audit-resistant
+            # retrieval-only headline (#88). Empty list when source
+            # carries no evidence references.
+            gold_raw_texts: list[str] = []
+            if isinstance(evidence_ids, list):
+                for eid in evidence_ids:
+                    if isinstance(eid, (int, str)) and eid in dia_to_text:
+                        gold_raw_texts.append(dia_to_text[eid])
+            gold_evidence = list(dict.fromkeys(gold_raw_texts))
             rows.append(
                 {
                     "id": f"locomo-{sample_id}-q{idx:04d}",
