@@ -72,7 +72,8 @@ OUT="${1:-target/bench-challenger-smoke30.json}"
 
 PYTHONPATH=python python -u -m tdb_bench run --mode challenger \
   --config target/bench-challenger-smoke30-config.json \
-  --output "${OUT}"
+  --output "${OUT}" \
+  --workers "${TDB_BENCH_WORKERS:-8}"
 
 python3 - <<PY
 import json

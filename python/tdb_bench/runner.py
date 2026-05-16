@@ -7,8 +7,10 @@ import math
 import platform
 import random
 import subprocess
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -19,6 +21,30 @@ from tdb_bench.fairness import validate_fairness
 from tdb_bench.models import RunResultV1
 from tdb_bench.registry import RegistryFactory
 from tdb_bench.schema import validate_run_result_v1
+
+
+# Default worker count for the parallel runner codepath. Workers > 1
+# dispatches each (item, system) tuple to a ThreadPoolExecutor; the
+# engine's Arc<Mutex<>> + TardigradeAdapter._gpu_lock serialize the
+# GPU section while LLM calls (~93% of per-item wall time) run in
+# parallel. 1 preserves the existing sequential codepath.
+DEFAULT_WORKERS = 1
+WORKERS_ENV = "TDB_BENCH_WORKERS"
+
+
+def _resolve_workers(explicit: int | None) -> int:
+    """Pick explicit > env > default."""
+    if explicit is not None and explicit >= 1:
+        return explicit
+    raw = os.getenv(WORKERS_ENV, "").strip()
+    if raw:
+        try:
+            n = int(raw)
+            if n >= 1:
+                return n
+        except ValueError:
+            pass
+    return DEFAULT_WORKERS
 
 
 @dataclass
@@ -52,8 +78,10 @@ class BenchmarkRunner:
         datasets: list[str] | None = None,
         repeat: int = 1,
         seeds: list[int] | None = None,
+        workers: int | None = None,
     ) -> RunResultV1:
         profile = self._profile(mode)
+        resolved_workers = _resolve_workers(workers)
         if repeat < 1:
             raise ValueError("repeat must be >= 1")
         resolved_seeds = self._resolve_seeds(base_seed=profile.seed, repeat=repeat, seeds=seeds)
@@ -94,6 +122,7 @@ class BenchmarkRunner:
                 adapters=adapters,
                 evaluator=evaluator,
                 dataset_meta=dataset_meta,
+                workers=resolved_workers,
             )
             for row in run_items:
                 row["replicate"] = run_index
@@ -133,6 +162,7 @@ class BenchmarkRunner:
         adapters: dict[str, Any],
         evaluator: Any,
         dataset_meta: dict[str, dict],
+        workers: int = DEFAULT_WORKERS,
     ) -> list[dict[str, Any]]:
         items_out: list[dict[str, Any]] = []
         for dataset_cfg in profile.datasets:
@@ -175,70 +205,209 @@ class BenchmarkRunner:
                     adapter_ingest_failures[system_name] = f"INGEST_FAILED: {exc}"
 
             _total = len(loaded_items)
-            _scored_count = 0
-            _score_sum = 0.0
-            for _idx, item in enumerate(loaded_items, 1):
+            if workers > 1:
+                ds_items = self._process_parallel(
+                    loaded_items=loaded_items,
+                    adapters=adapters,
+                    adapter_ingest_failures=adapter_ingest_failures,
+                    evaluator=evaluator,
+                    top_k=profile.top_k,
+                    workers=workers,
+                    dataset_total=_total,
+                )
+            else:
+                ds_items = self._process_sequential(
+                    loaded_items=loaded_items,
+                    adapters=adapters,
+                    adapter_ingest_failures=adapter_ingest_failures,
+                    evaluator=evaluator,
+                    top_k=profile.top_k,
+                    dataset_total=_total,
+                )
+            items_out.extend(ds_items)
+        return items_out
+
+    # ─── Phase orchestration ──────────────────────────────────────────
+
+    def _process_sequential(
+        self,
+        *,
+        loaded_items: list[Any],
+        adapters: dict[str, Any],
+        adapter_ingest_failures: dict[str, str],
+        evaluator: Any,
+        top_k: int,
+        dataset_total: int,
+    ) -> list[dict[str, Any]]:
+        """Existing single-threaded path. workers=1 preserves prior behavior."""
+        items_out: list[dict[str, Any]] = []
+        _scored_count = 0
+        _score_sum = 0.0
+        for _idx, item in enumerate(loaded_items, 1):
+            for system_name, adapter in adapters.items():
+                row, scored_delta = self._process_one(
+                    item=item,
+                    system_name=system_name,
+                    adapter=adapter,
+                    evaluator=evaluator,
+                    top_k=top_k,
+                    failures=adapter_ingest_failures,
+                )
+                items_out.append(row)
+                if scored_delta is not None:
+                    _scored_count += 1
+                    _score_sum += scored_delta
+                    _avg = _score_sum / _scored_count
+                    print(
+                        f"[{_idx}/{dataset_total}] {item.dataset}/{item.item_id} "
+                        f"score={scored_delta:.2f} avg={_avg:.4f} "
+                        f"latency={row['latency_ms']:.0f}ms",
+                        flush=True,
+                    )
+        return items_out
+
+    def _process_parallel(
+        self,
+        *,
+        loaded_items: list[Any],
+        adapters: dict[str, Any],
+        adapter_ingest_failures: dict[str, str],
+        evaluator: Any,
+        top_k: int,
+        workers: int,
+        dataset_total: int,
+    ) -> list[dict[str, Any]]:
+        """Multi-threaded path. Each (item, adapter) tuple is dispatched
+        to a ThreadPoolExecutor. The adapter's internal GPU lock + the
+        engine's Arc<Mutex<>> serialize Rust+torch calls; LLM calls
+        run in parallel across threads.
+
+        Output is sorted by (dataset, item_id, system) so results are
+        order-deterministic regardless of completion order.
+        """
+        items_out: list[dict[str, Any]] = []
+        progress_lock = threading.Lock()
+        scored_count = 0
+        score_sum = 0.0
+        completed_idx = 0
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {}
+            for item in loaded_items:
                 for system_name, adapter in adapters.items():
-                    if system_name in adapter_ingest_failures:
-                        q = None
-                    else:
-                        try:
-                            q = adapter.query(item=item, top_k=profile.top_k)
-                        except Exception as exc:  # pragma: no cover - network/system variability
-                            q = None
-                            adapter_ingest_failures[system_name] = f"QUERY_FAILED: {exc}"
+                    fut = ex.submit(
+                        self._process_one,
+                        item=item,
+                        system_name=system_name,
+                        adapter=adapter,
+                        evaluator=evaluator,
+                        top_k=top_k,
+                        failures=adapter_ingest_failures,
+                    )
+                    futures[fut] = item
 
-                    if q is None:
-                        row = {
-                            "item_id": item.item_id,
-                            "dataset": item.dataset,
-                            "system": system_name,
-                            "status": "failed",
-                            "latency_ms": 0.0,
-                            "question": item.question,
-                            "answer": "",
-                            "ground_truth": item.ground_truth,
-                            "evidence": [],
-                            "error": adapter_ingest_failures[system_name],
-                            "score": 0.0,
-                            "judgment": "failed_adapter_error",
-                            "evaluator_mode": "none",
-                        }
-                        items_out.append(row)
-                        continue
-
-                    row = {
-                        "item_id": item.item_id,
-                        "dataset": item.dataset,
-                        "system": system_name,
-                        "status": q.status,
-                        "latency_ms": round(float(q.latency_ms), 6),
-                        "question": item.question,
-                        "answer": q.answer,
-                        "ground_truth": item.ground_truth,
-                        "evidence": q.evidence,
-                        "error": q.error,
-                    }
-                    if q.status == "ok":
-                        scored = evaluator.score(item=item, answer=q.answer, evidence=q.evidence)
-                        row["score"] = scored.score
-                        row["judgment"] = scored.judgment
-                        row["evaluator_mode"] = scored.evaluator_mode
-                        _scored_count += 1
-                        _score_sum += scored.score
-                        _avg = _score_sum / _scored_count
+            for fut in as_completed(futures):
+                row, scored_delta = fut.result()
+                items_out.append(row)
+                with progress_lock:
+                    completed_idx += 1
+                    if scored_delta is not None:
+                        scored_count += 1
+                        score_sum += scored_delta
+                        _avg = score_sum / scored_count
                         print(
-                            f"[{_idx}/{_total}] {item.dataset}/{item.item_id} "
-                            f"score={scored.score:.2f} avg={_avg:.4f} "
-                            f"latency={q.latency_ms:.0f}ms",
+                            f"[{completed_idx}/{dataset_total}] "
+                            f"{row['dataset']}/{row['item_id']} "
+                            f"score={scored_delta:.2f} avg={_avg:.4f} "
+                            f"latency={row['latency_ms']:.0f}ms",
                             flush=True,
                         )
-                    else:
-                        row["score"] = 0.0
-                        row["judgment"] = q.status
-                        row["evaluator_mode"] = "none"
-                    items_out.append(row)
+
+        # Deterministic order so the run JSON is diff-friendly.
+        items_out.sort(key=lambda r: (r["dataset"], r["item_id"], r["system"]))
         return items_out
+
+    @staticmethod
+    def _process_one(
+        *,
+        item: Any,
+        system_name: str,
+        adapter: Any,
+        evaluator: Any,
+        top_k: int,
+        failures: dict[str, str],
+    ) -> tuple[dict[str, Any], float | None]:
+        """Run adapter.query + evaluator.score for one (item, system).
+
+        Returns ``(row_dict, scored_delta_or_None)``. Safe to call
+        concurrently — the adapter's internal locks serialize shared
+        state; LLM calls are network-bound.
+        """
+        if system_name in failures:
+            return (
+                {
+                    "item_id": item.item_id,
+                    "dataset": item.dataset,
+                    "system": system_name,
+                    "status": "failed",
+                    "latency_ms": 0.0,
+                    "question": item.question,
+                    "answer": "",
+                    "ground_truth": item.ground_truth,
+                    "evidence": [],
+                    "error": failures[system_name],
+                    "score": 0.0,
+                    "judgment": "failed_adapter_error",
+                    "evaluator_mode": "none",
+                },
+                None,
+            )
+
+        try:
+            q = adapter.query(item=item, top_k=top_k)
+        except Exception as exc:  # pragma: no cover — network/system variability
+            failures[system_name] = f"QUERY_FAILED: {exc}"
+            return (
+                {
+                    "item_id": item.item_id,
+                    "dataset": item.dataset,
+                    "system": system_name,
+                    "status": "failed",
+                    "latency_ms": 0.0,
+                    "question": item.question,
+                    "answer": "",
+                    "ground_truth": item.ground_truth,
+                    "evidence": [],
+                    "error": failures[system_name],
+                    "score": 0.0,
+                    "judgment": "failed_adapter_error",
+                    "evaluator_mode": "none",
+                },
+                None,
+            )
+
+        row = {
+            "item_id": item.item_id,
+            "dataset": item.dataset,
+            "system": system_name,
+            "status": q.status,
+            "latency_ms": round(float(q.latency_ms), 6),
+            "question": item.question,
+            "answer": q.answer,
+            "ground_truth": item.ground_truth,
+            "evidence": q.evidence,
+            "error": q.error,
+        }
+        if q.status == "ok":
+            scored = evaluator.score(item=item, answer=q.answer, evidence=q.evidence)
+            row["score"] = scored.score
+            row["judgment"] = scored.judgment
+            row["evaluator_mode"] = scored.evaluator_mode
+            return row, scored.score
+        row["score"] = 0.0
+        row["judgment"] = q.status
+        row["evaluator_mode"] = "none"
+        return row, None
 
     def _profile(self, mode: str) -> ProfileConfig:
         raw = self.config["profiles"][mode]

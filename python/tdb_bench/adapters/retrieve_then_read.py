@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 
 from tdb_bench.answerers import (
     AnswerGenerator,
@@ -64,6 +65,22 @@ from tdb_bench.answerers.constants import (
 )
 from tdb_bench.contracts import BenchmarkAdapter
 from tdb_bench.models import AdapterQueryResult, BenchmarkItem
+
+
+@dataclass(frozen=True)
+class RetrievalResult:
+    """Output of the *retrieve* half of the two-phase pipeline.
+
+    The runner's parallel codepath calls :meth:`RetrieveThenReadAdapter.retrieve`
+    sequentially (GPU-bound) and then dispatches
+    :meth:`RetrieveThenReadAdapter.generate_answer` calls to a thread pool
+    (LLM-bound). This dataclass carries the state between the two phases.
+    """
+
+    inner_evidence: list[str]
+    inner_status: str
+    inner_error: str | None
+    retrieval_latency_ms: float
 
 
 _NO_EVIDENCE_ERROR = "no_evidence_for_generation"
@@ -117,22 +134,46 @@ class RetrieveThenReadAdapter(BenchmarkAdapter):
         merged["prompt_top_k"] = str(self._prompt_top_k)
         return merged
 
-    # --- decorated query ---
+    # --- decorated query (two-phase, composable) ---
 
-    def query(self, item: BenchmarkItem, top_k: int) -> AdapterQueryResult:
-        # Widen the inner call — the Decorator's private retrieval budget.
+    def retrieve(self, item: BenchmarkItem, top_k: int) -> RetrievalResult:  # noqa: ARG002
+        """Phase 1: GPU-bound retrieval. Safe to call serially with a GPU lock."""
         inner = self._inner.query(item, self._inner_top_k)
-        if inner.status != "ok":
-            return inner
+        return RetrievalResult(
+            inner_evidence=inner.evidence,
+            inner_status=inner.status,
+            inner_error=inner.error,
+            retrieval_latency_ms=inner.latency_ms,
+        )
+
+    def generate_answer(
+        self,
+        *,
+        item: BenchmarkItem,
+        inner_evidence: list[str],
+        inner_status: str,
+        inner_error: str | None,
+        retrieval_latency_ms: float,
+        outer_top_k: int,
+    ) -> AdapterQueryResult:
+        """Phase 2: LLM-bound answer generation. Safe to call concurrently."""
+        if inner_status != "ok":
+            return AdapterQueryResult(
+                answer="",
+                evidence=_cap_evidence(inner_evidence, outer_top_k),
+                latency_ms=retrieval_latency_ms,
+                status=inner_status,
+                error=inner_error,
+            )
 
         prompt_evidence = self._evidence_formatter.format(
-            inner.evidence, top_k=self._prompt_top_k
+            inner_evidence, top_k=self._prompt_top_k
         )
         if not prompt_evidence:
             return AdapterQueryResult(
                 answer="",
-                evidence=_cap_evidence(inner.evidence, top_k),
-                latency_ms=inner.latency_ms,
+                evidence=_cap_evidence(inner_evidence, outer_top_k),
+                latency_ms=retrieval_latency_ms,
                 status="failed",
                 error=_NO_EVIDENCE_ERROR,
             )
@@ -147,8 +188,8 @@ class RetrieveThenReadAdapter(BenchmarkAdapter):
             gen_ms = (time.perf_counter() - gen_start) * 1000.0
             return AdapterQueryResult(
                 answer="",
-                evidence=_cap_evidence(inner.evidence, top_k),
-                latency_ms=inner.latency_ms + gen_ms,
+                evidence=_cap_evidence(inner_evidence, outer_top_k),
+                latency_ms=retrieval_latency_ms + gen_ms,
                 status="failed",
                 error=f"{_GENERATOR_FAILED_PREFIX}:{type(exc).__name__}",
             )
@@ -156,10 +197,26 @@ class RetrieveThenReadAdapter(BenchmarkAdapter):
 
         return AdapterQueryResult(
             answer=answer,
-            evidence=_cap_evidence(inner.evidence, top_k),
-            latency_ms=inner.latency_ms + gen_ms,
+            evidence=_cap_evidence(inner_evidence, outer_top_k),
+            latency_ms=retrieval_latency_ms + gen_ms,
             status="ok",
             error=None,
+        )
+
+    def query(self, item: BenchmarkItem, top_k: int) -> AdapterQueryResult:
+        """Convenience composition of :meth:`retrieve` and :meth:`generate_answer`.
+
+        Preserves the original single-call contract for the
+        non-parallel runner codepath and the existing tests.
+        """
+        ret = self.retrieve(item, top_k)
+        return self.generate_answer(
+            item=item,
+            inner_evidence=ret.inner_evidence,
+            inner_status=ret.inner_status,
+            inner_error=ret.inner_error,
+            retrieval_latency_ms=ret.retrieval_latency_ms,
+            outer_top_k=top_k,
         )
 
 

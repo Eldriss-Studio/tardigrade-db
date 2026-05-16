@@ -59,7 +59,8 @@ echo ""
 
 PYTHONPATH=python python -u -m tdb_bench run --mode challenger \
   --config python/tdb_bench/config/default.json \
-  --output "${OUT}"
+  --output "${OUT}" \
+  --workers "${TDB_BENCH_WORKERS:-8}"
 
 echo ""
 echo "=== [$(date -Iseconds)] CHALLENGER RUN COMPLETE ==="

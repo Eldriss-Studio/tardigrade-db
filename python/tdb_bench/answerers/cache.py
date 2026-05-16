@@ -24,6 +24,8 @@ human can ``cat`` any cache entry to see what the model returned.
 from __future__ import annotations
 
 import hashlib
+import os
+import threading
 from pathlib import Path
 
 from .base import AnswerGenerator
@@ -54,7 +56,23 @@ class CachedAnswerGenerator(AnswerGenerator):
         if cache_file.exists():
             return cache_file.read_text(encoding="utf-8")
         answer = self._inner.generate(prompt)
-        cache_file.write_text(answer, encoding="utf-8")
+        # Atomic write: tmp file in same dir, then rename. POSIX rename
+        # is atomic; protects concurrent threads from observing a
+        # half-written cache file. The pid+tid suffix prevents two
+        # threads from clobbering each other's tmp files.
+        tmp = cache_file.with_suffix(
+            f".tmp.{os.getpid()}.{threading.get_ident()}"
+        )
+        tmp.write_text(answer, encoding="utf-8")
+        try:
+            os.replace(tmp, cache_file)
+        except OSError:
+            # Another thread already won the race; we still return our
+            # answer, the cache file is consistent either way.
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
         return answer
 
 
