@@ -333,6 +333,91 @@ class TestCategoryFilter:
         assert rows[0]["question"] == "Q1"
 
 
+class TestCategoryEmittedInRow:
+    """Each output row carries a ``category`` field so the runner can
+    aggregate scores per category (single-hop / multi-hop / temporal /
+    open-domain / adversarial). Phase 1B audit 2026-05-16 #89.
+    LoCoMo categories map integer→name via the leaderboard convention
+    (see ``_LOCOMO_CATEGORY_NAMES`` in the prep script).
+    """
+
+    def test_locomo_row_carries_category_name(self, tmp_path: Path):
+        payload = [
+            {
+                "sample_id": "cat-emit",
+                "conversation": {
+                    "speaker_a": "A",
+                    "speaker_b": "B",
+                    "session_1_date_time": _DATE_S1,
+                    "session_1": [
+                        {"dia_id": "D1:1", "speaker": "A", "text": "Some text."}
+                    ],
+                },
+                "qa": [
+                    {"question": "Q1", "answer": "a", "evidence": ["D1:1"], "category": 1},
+                    {"question": "Q3", "answer": "b", "evidence": ["D1:1"], "category": 3},
+                    {"question": "Q4", "answer": "c", "evidence": ["D1:1"], "category": 4},
+                ],
+            }
+        ]
+        src = tmp_path / "catnames.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+        rows = prep._locomo_rows(src, context_mode="evidence")
+
+        # Names match the leaderboard convention.
+        cats = {r["question"]: r["category"] for r in rows}
+        assert cats["Q1"] == "single_hop"
+        assert cats["Q3"] == "temporal"
+        assert cats["Q4"] == "open_domain"
+
+    def test_locomo_row_without_category_falls_back_to_unknown(self, tmp_path: Path):
+        payload = [
+            {
+                "sample_id": "nocat",
+                "conversation": {
+                    "speaker_a": "A",
+                    "speaker_b": "B",
+                    "session_1_date_time": _DATE_S1,
+                    "session_1": [{"dia_id": "D1:1", "speaker": "A", "text": "x"}],
+                },
+                # No `category` key on the QA.
+                "qa": [{"question": "Q?", "answer": "x", "evidence": ["D1:1"]}],
+            }
+        ]
+        src = tmp_path / "nocat.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+        rows = prep._locomo_rows(src, context_mode="evidence")
+        assert rows[0]["category"] == "unknown"
+
+    def test_longmemeval_row_carries_question_type_as_category(self, tmp_path: Path):
+        payload = [
+            {
+                "question_id": "lm-1",
+                "question": "Q1",
+                "answer": "A1",
+                "question_type": "temporal-reasoning",
+                "haystack_sessions": [
+                    [{"role": "user", "content": "hello"}],
+                ],
+            },
+            {
+                "question_id": "lm-2",
+                "question": "Q2",
+                "answer": "A2",
+                # No question_type field.
+                "haystack_sessions": [
+                    [{"role": "user", "content": "hello"}],
+                ],
+            },
+        ]
+        src = tmp_path / "lme.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+        rows = prep._longmemeval_rows(src, max_context_chars=0)
+        cats = {r["question"]: r["category"] for r in rows}
+        assert cats["Q1"] == "temporal-reasoning"
+        assert cats["Q2"] == "unknown"
+
+
 class TestSessionWithoutDateStillBuilds:
     def test_missing_session_date_falls_back_to_undated_evidence(self, tmp_path: Path):
         # Defensive: if a session_N_date_time key is absent for some

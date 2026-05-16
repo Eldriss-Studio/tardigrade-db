@@ -1,0 +1,123 @@
+"""ATDD: per-(dataset, category) aggregation in the bench runner.
+
+LoCoMo single_hop, multi_hop, temporal, open_domain, adversarial are
+different abilities — system A may beat system B overall while losing
+the temporal slice. The runner must surface that split so the audit
+doc can attribute movement to a real cause. Same shape applies to
+LongMemEval's ``question_type``.
+
+Pin the contract on the static aggregation helper directly so the
+test is hermetic — no adapter or evaluator wiring needed. Phase 1B
+audit 2026-05-16 #89.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
+
+from tdb_bench.runner import BenchmarkRunner  # noqa: E402
+
+
+_SYS = "sys-under-test"
+
+
+def _row(
+    *,
+    dataset: str,
+    category: str,
+    score: float,
+    status: str = "ok",
+    system: str = _SYS,
+) -> dict:
+    return {
+        "item_id": f"{dataset}-{category}-{score}",
+        "dataset": dataset,
+        "category": category,
+        "system": system,
+        "status": status,
+        "score": score,
+    }
+
+
+class TestPerCategoryBreakdownGrouping:
+    def test_groups_keyed_by_dataset_slash_category(self):
+        items = [
+            _row(dataset="locomo", category="single_hop", score=1.0),
+            _row(dataset="locomo", category="single_hop", score=0.0),
+            _row(dataset="locomo", category="temporal", score=1.0),
+        ]
+        out = BenchmarkRunner._per_category_breakdown(items, _SYS)
+        assert set(out.keys()) == {"locomo/single_hop", "locomo/temporal"}
+
+    def test_avg_score_only_counts_ok_status(self):
+        items = [
+            _row(dataset="locomo", category="single_hop", score=1.0),
+            _row(dataset="locomo", category="single_hop", score=0.0, status="failed"),
+        ]
+        out = BenchmarkRunner._per_category_breakdown(items, _SYS)
+        # n counts everything, ok counts ok-status only, avg averages ok.
+        assert out["locomo/single_hop"]["n"] == 2
+        assert out["locomo/single_hop"]["ok"] == 1
+        assert out["locomo/single_hop"]["avg_score"] == 1.0
+
+    def test_locomo_temporal_and_longmemeval_temporal_reasoning_are_separate(self):
+        # Bug guard: the prefix must keep different-dataset slices
+        # apart even when they share a category name suffix.
+        items = [
+            _row(dataset="locomo", category="temporal", score=1.0),
+            _row(dataset="longmemeval", category="temporal-reasoning", score=0.0),
+        ]
+        out = BenchmarkRunner._per_category_breakdown(items, _SYS)
+        assert "locomo/temporal" in out
+        assert "longmemeval/temporal-reasoning" in out
+        assert out["locomo/temporal"]["avg_score"] == 1.0
+        assert out["longmemeval/temporal-reasoning"]["avg_score"] == 0.0
+
+    def test_filters_out_other_systems(self):
+        items = [
+            _row(dataset="locomo", category="single_hop", score=1.0, system=_SYS),
+            _row(dataset="locomo", category="single_hop", score=0.0, system="other"),
+        ]
+        out = BenchmarkRunner._per_category_breakdown(items, _SYS)
+        # Only the focus system's rows count.
+        assert out["locomo/single_hop"]["n"] == 1
+        assert out["locomo/single_hop"]["avg_score"] == 1.0
+
+    def test_missing_category_falls_back_to_unknown(self):
+        items = [
+            {
+                "item_id": "x",
+                "dataset": "locomo",
+                "system": _SYS,
+                "status": "ok",
+                "score": 0.5,
+                # No "category" key.
+            },
+        ]
+        out = BenchmarkRunner._per_category_breakdown(items, _SYS)
+        assert "locomo/unknown" in out
+
+    def test_empty_input_returns_empty_dict(self):
+        assert BenchmarkRunner._per_category_breakdown([], _SYS) == {}
+
+
+class TestPerCategoryBreakdownAttachedToSystemsPayload:
+    """End-to-end check that `_aggregates` wires `by_category` into
+    each system's payload."""
+
+    def test_systems_payload_carries_by_category(self):
+        items = [
+            _row(dataset="locomo", category="single_hop", score=1.0),
+            _row(dataset="locomo", category="temporal", score=0.0),
+        ]
+        # _aggregates is an instance method but doesn't touch self
+        # state; construct a runner only enough to call it.
+        runner = BenchmarkRunner.__new__(BenchmarkRunner)
+        agg = runner._aggregates(items)
+        assert "by_category" in agg["systems"][_SYS]
+        breakdown = agg["systems"][_SYS]["by_category"]
+        assert breakdown["locomo/single_hop"]["avg_score"] == 1.0
+        assert breakdown["locomo/temporal"]["avg_score"] == 0.0

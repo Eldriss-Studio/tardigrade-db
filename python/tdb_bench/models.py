@@ -8,13 +8,21 @@ from typing import Any
 
 @dataclass(frozen=True)
 class BenchmarkItem:
-    """Normalized dataset item."""
+    """Normalized dataset item.
+
+    ``category`` is optional metadata used by the runner's per-category
+    aggregate (e.g., LoCoMo single_hop / multi_hop / temporal /
+    open_domain / adversarial; LongMemEval ``question_type``). Defaults
+    to ``"unknown"`` so legacy fixtures without the field still flow
+    through the pipeline.
+    """
 
     item_id: str
     dataset: str
     context: str
     question: str
     ground_truth: str
+    category: str = "unknown"
 
 
 @dataclass(frozen=True)
