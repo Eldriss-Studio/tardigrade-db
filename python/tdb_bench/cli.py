@@ -23,7 +23,7 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     run = sub.add_parser("run")
-    run.add_argument("--mode", required=True, choices=["smoke", "full"])
+    run.add_argument("--mode", required=True, choices=["smoke", "full", "challenger"])
     run.add_argument("--config", required=True)
     run.add_argument("--output", required=True)
     run.add_argument("--system", action="append", default=[])
