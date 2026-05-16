@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-16
 **Author of this pass:** research audit for TardigradeDB
-**Companion docs:** [`docs/experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md), [`docs/positioning/latency_first.md`](../positioning/latency_first.md), `~/.claude/plans/i-want-a-definitive-majestic-bear.md`
+**Companion docs:** [`docs/experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md), [`docs/positioning/latency_first.md`](../positioning/latency_first.md)
 **Status:** authoritative for "what does the industry do, and what are we doing differently."
 
 ## 1 — Executive verdict

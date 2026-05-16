@@ -57,9 +57,9 @@ export TARDIGRADE_OWNER=1
 4. After all layers complete, `wait_for_save()` writes a complete KV pack to TardigradeDB
 5. The pack is Q4 quantized and persisted to disk
 
-### Load Path (on new requests) — Planned
+### Load Path (on new requests) — Partial Implementation
 
-The load path (injecting stored KV into new requests) requires semantic matching between the incoming query and stored memories. This is under development:
+Per the status table below, the load-path primitives are implemented and unit-tested (block format conversion, semantic-match retrieval-key, GPU tensor copy via `start_load_kv` with a mock context, trace-linked retrieval via `mem_read_pack_with_trace_boost`). What's still in development is integration into the full vLLM scheduler→worker path under real concurrent load. The flow is:
 
 1. When a new request arrives, `get_num_new_matched_tokens()` will query TardigradeDB
 2. If a matching memory is found, its stored KV will be loaded into vLLM's paged buffer

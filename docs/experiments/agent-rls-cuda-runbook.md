@@ -14,7 +14,7 @@ Run the LLM agent reformulation experiment on a CUDA GPU (RTX 3070 Ti or similar
 
 ## What This Tests
 
-DeepSeek-chat generates vocabulary-bridged query reformulations (e.g., "athletic achievements" → "ultramarathon", "marathon training"). The experiment measures whether this breaks the 68.2% LoCoMo ceiling.
+DeepSeek-chat generates vocabulary-bridged query reformulations (e.g., "athletic achievements" → "ultramarathon", "marathon training"). The experiment measures whether this moves the honest baseline on clean LoCoMo (the prior "68.2% ceiling" framing was retracted on 2026-05-14 — it measured the lexical fallback on a corrupted dataset; honest native-engine baseline is ~21.95% R@1 at 50-item scale).
 
 Two modes available — run both for comparison:
 
@@ -85,7 +85,7 @@ export DEEPSEEK_API_KEY=$(grep DEEPSEEK_API_KEY .env.bench | cut -d= -f2)
 
 ## Test 1: In-Memory Mode (lexical, same as Mac baseline)
 
-This replicates the 68.2% baseline environment but with agent reformulation.
+This replicates the previous in-memory / lexical-fallback environment (the one that produced the retracted 68.2% number) but with agent reformulation. Useful only as a sanity check that the runbook plumbing works; do not interpret the score as a TardigradeDB measurement.
 
 ```bash
 TDB_RLS_MODE=agent TDB_BENCH_FORCE_FALLBACK=1 \
@@ -98,7 +98,7 @@ PYTHONPATH=python python -m tdb_bench run --mode full --system tardigrade \
   --output target/bench-agent-rls-inmemory.json
 ```
 
-**Baseline comparison:** LoCoMo 68.2%, LongMemEval 88.8% (without reformulation).
+**Baseline comparison:** ~~LoCoMo 68.2%, LongMemEval 88.8% (without reformulation).~~ **[RETRACTED 2026-05-14 — those numbers were the lexical fallback on a corrupted dataset, not the native engine.]** Clean-data native-engine baseline (50-item subset, no RLS): ~21.95% R@1 on LoCoMo. See [`2026-05-14-bench-audit.md`](2026-05-14-bench-audit.md).
 
 ## Test 2: Native Mode (latent-space KV retrieval)
 

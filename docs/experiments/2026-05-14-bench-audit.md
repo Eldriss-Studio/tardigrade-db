@@ -971,8 +971,7 @@ widening, dated prep) and zero LoCoMo score movement past ~7 %. The
 small-model + naive-retrieval + strict-prompt stack cannot compete
 on LoCoMo Judge against GPT-4o-class leaderboard systems.
 
-Pivoted to a two-track plan
-([`~/.claude/plans/i-want-a-definitive-majestic-bear.md`](../../home/flagrare/.claude/plans/i-want-a-definitive-majestic-bear.md)):
+Pivoted to a two-track plan (tracked below in § Recommendations going forward):
 
 * **Track A** — reframe positioning on latency / footprint / KV-native
   API where TardigradeDB legitimately wins. Documented in

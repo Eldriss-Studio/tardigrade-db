@@ -17,36 +17,36 @@
 
 ## What Is RLS
 
-Reflective Latent Search is TardigradeDB's answer to the vector-space retrieval
-ceiling. Instead of making the similarity metric smarter (we proved that
-whitening, reweighting, and multi-layer fusion all produce 0% improvement),
-RLS lets the **agent reason about what to retrieve** and try multiple
+Reflective Latent Search was TardigradeDB's proposed answer to a vector-space retrieval
+ceiling believed (at the time) to exist on LoCoMo. Whitening, reweighting, and multi-layer fusion all produced 0% improvement on the **10-fact synthetic Sonia corpus**; the extrapolation that this proved a fundamental LoCoMo ceiling is retracted (see 2026-05-14 audit — those LoCoMo runs measured the lexical fallback adapter on a corrupted dataset). RLS lets the **agent reason about what to retrieve** and try multiple
 approaches — while keeping all retrieval in latent space.
 
 The name: **Reflective** (the agent evaluates its own results and decides
 whether to try again), **Latent** (retrieval stays on KV tensors, no text
 search), **Search** (iterative, not single-shot).
 
-## Why This Exists
+## Why This Exists — Premise Retracted 2026-05-14
 
-TardigradeDB's latent-space retrieval hits a theoretical ceiling on
+> ⚠️ The motivating numbers below were retracted on 2026-05-14. They are preserved here as historical context for the design decision; do not act on them. Forensic record: [`../experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md).
+
+TardigradeDB's latent-space retrieval was believed to hit a theoretical ceiling on
 vocabulary-mismatched queries:
 
-- **LongMemEval: 88.8%** — strong, beats the field. These queries have
-  vocabulary overlap with stored memories.
-- **LoCoMo: 67.2%** — below vanilla GPT-4o baseline (74%). These queries
-  are conversational, vague, vocabulary-mismatched.
-- **Vague R@5: 60%** on our 10-fact corpus. Same 3 queries miss in every
-  configuration we tested.
+- ~~**LongMemEval: 88.8%** — strong, beats the field. These queries have
+  vocabulary overlap with stored memories.~~ **[RETRACTED 2026-05-14 — lexical fallback on corrupted dataset.]**
+- ~~**LoCoMo: 67.2%** — below vanilla GPT-4o baseline (74%). These queries
+  are conversational, vague, vocabulary-mismatched.~~ **[RETRACTED 2026-05-14 — same root cause.]**
+- **Vague R@5: 60%** on our 10-fact synthetic Sonia corpus. Same 3 queries miss in every
+  configuration we tested. *(This 10-fact synthetic result is unaffected by the audit, but a 10-fact corpus is not a basis for a fundamental-ceiling claim.)*
 
-DeepMind's LIMIT paper (ICLR 2026) proved this is a **mathematical property
+~~DeepMind's LIMIT paper (ICLR 2026) proved this is a **mathematical property
 of vector-space retrieval**, not a model quality issue. The sign-rank of the
-relevance matrix bounds what any fixed-dimension vector space can retrieve.
+relevance matrix bounds what any fixed-dimension vector space can retrieve.~~ **[RETRACTED 2026-05-14 — the LIMIT paper is a valid theoretical result, but the claim that *our* numbers prove the ceiling holds for TardigradeDB on LoCoMo has no empirical support.]**
 
-The DCI paper (May 2026) showed the solution: don't make retrieval smarter —
+The DCI paper (May 2026) showed an alternative philosophy: don't make retrieval smarter —
 **increase the resolution of the interface** between the agent and the corpus.
-DCI uses grep/file reads. RLS uses **the agent's own forward pass** on
-reformulated queries — staying latent-native.
+DCI uses grep/file reads. RLS would use **the agent's own forward pass** on
+reformulated queries — staying latent-native. On clean data, all RLS modes measured to date underperform the no-RLS baseline; the design preserved below is for historical reference.
 
 ## How RLS Works
 
