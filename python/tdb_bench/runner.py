@@ -419,6 +419,22 @@ class BenchmarkRunner:
         row["retrieval_metrics"] = compute_retrieval_metrics(
             gold=list(gold), retrieved=list(q.evidence), ks=_RETRIEVAL_KS,
         )
+        # Answer-text retrieval (Phase 1B.10 research recommendation,
+        # task #101). The evidence-text metric above measures "did we
+        # find the LoCoMo-marked supporting context"; this metric
+        # measures "did we put a chunk containing the answer text in
+        # the LLM's window". LoCoMo's `evidence` field marks
+        # supporting context, not answer-bearing turns — ~80% of
+        # sampled items have answer text in a different turn than
+        # the marked evidence. This sidecar predicts LLM-Judge
+        # better than the evidence metric. We keep both: evidence
+        # is audit-resistant (ENGRAM-style); answer-text is
+        # downstream-predictive.
+        row["answer_text_metrics"] = compute_retrieval_metrics(
+            gold=[item.ground_truth] if item.ground_truth else [],
+            retrieved=list(q.evidence),
+            ks=_RETRIEVAL_KS,
+        )
 
         if q.status == "ok":
             scored = evaluator.score(item=item, answer=q.answer, evidence=q.evidence)
@@ -512,6 +528,9 @@ class BenchmarkRunner:
                 "failed": int(per_system_status[system].get("failed", 0)),
                 "by_category": self._per_category_breakdown(items, system),
                 "retrieval": self._retrieval_aggregate(items, system),
+                "answer_text_retrieval": self._answer_text_aggregate(
+                    items, system
+                ),
             }
 
         return {"systems": systems_payload}
@@ -529,17 +548,44 @@ class BenchmarkRunner:
         counted. Returns ``{"n": <rows scored>, "recall@k": ..., ...}``.
         Phase 1B audit 2026-05-16 #88 — audit-resistant headline.
         """
+        return BenchmarkRunner._mean_retrieval_metrics(
+            items, system, row_field="retrieval_metrics",
+        )
+
+    @staticmethod
+    def _answer_text_aggregate(
+        items: list[dict[str, Any]], system: str
+    ) -> dict[str, Any]:
+        """Average Recall@k / NDCG@k for the answer-text retrieval metric.
+
+        Parallel to :meth:`_retrieval_aggregate` but reads the
+        ``answer_text_metrics`` row field — substring-match of
+        ``BenchmarkItem.ground_truth`` against retrieved chunks.
+        Phase 1B audit 2026-05-16 #101 — downstream-predictive metric
+        that complements the audit-resistant evidence-text metric.
+        """
+        return BenchmarkRunner._mean_retrieval_metrics(
+            items, system, row_field="answer_text_metrics",
+        )
+
+    @staticmethod
+    def _mean_retrieval_metrics(
+        items: list[dict[str, Any]], system: str, *, row_field: str
+    ) -> dict[str, Any]:
+        """Shared implementation of recall@k / ndcg@k averaging.
+
+        Skips NaN rows (gold-less items) so the denominator only
+        counts rows that have something to measure. Real-zero rows
+        (gold present, retriever missed) are counted.
+        """
         buckets: dict[str, list[float]] = defaultdict(list)
         n_scored = 0
         for row in items:
             if row.get("system") != system:
                 continue
-            metrics = row.get("retrieval_metrics")
+            metrics = row.get(row_field)
             if not isinstance(metrics, dict):
                 continue
-            # Gold-less rows emit NaN for every metric. Probe any
-            # recall@k value present — if it's NaN the row has no
-            # gold to score, skip the whole row.
             recall_vals = [v for k, v in metrics.items() if k.startswith("recall@")]
             if not recall_vals:
                 continue
