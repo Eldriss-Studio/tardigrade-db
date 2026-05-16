@@ -5,7 +5,7 @@
 //! via `mem_write` and then queried with a token from that same cell,
 //! the engine returns the originating cell at rank 0 with high recall.
 //!
-//! This is the regression test for the LoCoMo collapse (68% → 3.3%)
+//! This is the regression test for the `LoCoMo` collapse (68% → 3.3%)
 //! caused by the lazy cutover before the INT8 retrieval tier landed.
 //! Without the tier, scoring went through the Q4 archival path and
 //! the outlier-channel crush dropped recall to noise. With the tier,

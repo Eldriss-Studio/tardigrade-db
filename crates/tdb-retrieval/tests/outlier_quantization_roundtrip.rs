@@ -1,23 +1,23 @@
 //! AT-A2 — Outlier-shaped INT8 round-trip canary.
 //!
-//! **This is the acceptance test that would have caught the LoCoMo
+//! **This is the acceptance test that would have caught the `LoCoMo`
 //! recall regression** (68% → 3.3%) introduced by the lazy
 //! `PerTokenRetriever` cutover before it reached production.
 //!
 //! Background: LLM hidden states develop "activation outlier"
 //! channels — a small number of dims whose magnitudes are 10-100×
 //! the rest (Dettmers et al., 2022, [arXiv:2208.07339][llm-int8]).
-//! Plain group-wise Q4_0 (32-float groups, one f32 scale, 4-bit
+//! Plain group-wise `Q4_0` (32-float groups, one f32 scale, 4-bit
 //! signed [-7, 7]) collapses the non-outlier dims to zero whenever
-//! an outlier shares a group with them: scale = abs_max/7, so any
-//! value below abs_max/14 rounds to 0.
+//! an outlier shares a group with them: scale = `abs_max/7`, so any
+//! value below `abs_max/14` rounds to 0.
 //!
 //! Empirical finding (this file): **plain INT8 group quantization
 //! is sufficient** to preserve outlier-shaped tokens at cosine ≥
 //! 0.99. INT8 has 127 levels per side vs Q4's 7, and the half-step
 //! is small enough that non-outlier values remain resolvable even
-//! when an outlier dominates the group abs_max. Per-channel
-//! pre-scaling (SmoothQuant pattern) is not required at this scale
+//! when an outlier dominates the group `abs_max`. Per-channel
+//! pre-scaling (`SmoothQuant` pattern) is not required at this scale
 //! of outlier dominance — INT8 alone handles it.
 //!
 //! Slice A2 of the retrieval correctness fix
@@ -48,8 +48,8 @@ fn lcg_advance(state: &mut u64) -> f32 {
     (*state >> RANDOM_SHIFT) as f32 / RANDOM_SCALE_DENOM
 }
 
-/// One token: outlier dim at OUTLIER_MAGNITUDE, all other dims
-/// uniform in [-REGULAR_HALF_RANGE, REGULAR_HALF_RANGE].
+/// One token: outlier dim at `OUTLIER_MAGNITUDE`, all other dims
+/// uniform in [-`REGULAR_HALF_RANGE`, `REGULAR_HALF_RANGE`].
 fn outlier_shaped_token(seed: u64) -> Vec<f32> {
     let mut state = seed.wrapping_add(1);
     let mut token = vec![0.0_f32; FIXTURE_DIM];

@@ -3,7 +3,7 @@
 //! strategy, and inverse-scales on dequantization.
 //!
 //! This is the `SmoothQuant` pattern applied to *storage* rather than
-//! inference. After dividing each dim by σ[d], every channel has
+//! inference. After dividing each dim by σ\[d\], every channel has
 //! roughly unit range — the activation-outlier channel no longer
 //! dominates its quantization group, and non-outlier dims retain
 //! their resolution.

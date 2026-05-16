@@ -1445,7 +1445,7 @@ mod tests {
     /// Regression: decoder must recover `n` from `data.len() / d` even when the
     /// `n_tokens` header slot has been corrupted by Q4 quantization.
     ///
-    /// Q4_0 quantizes 32 floats per group with `scale = `abs_max` / 7`. In header
+    /// `Q4_0` quantizes 32 floats per group with `scale = ``abs_max`` / 7`. In header
     /// group 1, `dim` (1024) dominates `n_tokens` (127), giving scale=146.29,
     /// which rounds `n_tokens` to 1 and reconstructs it as 146.28572. The
     /// decoder must treat the `n_tokens` slot as informational and trust only
@@ -1472,7 +1472,10 @@ mod tests {
         assert_eq!(n, N, "n must be inferred from data.len() / d, not from header");
         assert_eq!(d, D);
         assert_eq!(data.len(), N * D);
-        assert_eq!(data[0], 0.0);
-        assert_eq!(data[data.len() - 1], (N * D - 1) as f32);
+        #[allow(clippy::float_cmp)] // integer-valued payload; bit-exact round-trip
+        {
+            assert_eq!(data[0], 0.0);
+            assert_eq!(data[data.len() - 1], (N * D - 1) as f32);
+        }
     }
 }

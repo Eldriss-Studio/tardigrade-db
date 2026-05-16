@@ -1,6 +1,6 @@
 //! Acceptance test: Vamana activation survives realistic-scale ingest.
 //!
-//! Regression for the panic discovered while running the LoCoMo benchmark on
+//! Regression for the panic discovered while running the `LoCoMo` benchmark on
 //! CUDA: crossing the Vamana activation threshold (10,000 cells) panicked the
 //! engine because stored per-token encoded keys could not be re-pooled into
 //! fixed-dim vectors. Root cause was Q4 quantization corrupting the

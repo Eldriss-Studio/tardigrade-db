@@ -42,8 +42,11 @@ fn encoded_per_token_key_survives_q4_roundtrip() {
     let encoded = encode_per_token_keys(&refs);
 
     assert_eq!(encoded.len(), HEADER_SIZE + N * D);
-    assert_eq!(encoded[0], HEADER_SENTINEL);
-    assert_eq!(encoded[DIM_IDX], D as f32);
+    #[allow(clippy::float_cmp)] // integer-valued sentinels; bit-exact
+    {
+        assert_eq!(encoded[0], HEADER_SENTINEL);
+        assert_eq!(encoded[DIM_IDX], D as f32);
+    }
 
     let quantized = Q4::quantize(&encoded);
     let dequantized = Q4::dequantize(&quantized);
