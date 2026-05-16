@@ -6,6 +6,8 @@ TardigradeDB is a from-scratch, LLM-native memory kernel designed as the persist
 
 > **Status: experimental prototype.** APIs, on-disk formats, and guarantees may change. Current results are from controlled experiments and benchmarks.
 
+> **Positioning:** see [`docs/positioning/latency_first.md`](../positioning/latency_first.md) for the measured-latency / footprint / KV-native-API axes TardigradeDB legitimately competes on (sub-millisecond p99 retrieval at 5K cells, 751 B per cell on disk). LoCoMo Judge scoring is a separate in-flight initiative, not the current claim.
+
 **What Works Today**
 
 1. **Persistent Quantized KV Storage:**

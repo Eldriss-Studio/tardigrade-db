@@ -16,6 +16,7 @@ TardigradeDB is not a traditional database with tables and indexes, nor a vector
 
 ## Quick Links
 
+- **Positioning (latency · footprint · KV-native API):** [docs/positioning/latency_first.md](docs/positioning/latency_first.md)
 - Experiments log: [docs/experiments/README.md](docs/experiments/README.md)
 - Benchmark narrative: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/index.html)
 - Observed benchmark results so far: [https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html)
