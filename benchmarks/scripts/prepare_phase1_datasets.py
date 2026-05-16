@@ -71,6 +71,21 @@ def _normalize_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _session_index_from_dia_id(dia_id: Any) -> int | None:
+    """Extract the session number from a LoCoMo dia_id ("D1:3" → 1).
+
+    Returns ``None`` for any malformed/legacy form so callers can fall
+    back to date-less evidence rather than crash.
+    """
+    if not isinstance(dia_id, str) or not dia_id.startswith("D"):
+        return None
+    head = dia_id[1:].split(":", 1)[0]
+    try:
+        return int(head)
+    except ValueError:
+        return None
+
+
 def _locomo_rows(path: Path, context_mode: str) -> list[dict[str, str]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     rows: list[dict[str, str]] = []
@@ -79,14 +94,30 @@ def _locomo_rows(path: Path, context_mode: str) -> list[dict[str, str]]:
         sample_id = str(sample.get("sample_id", "unknown"))
         conv = sample.get("conversation", {})
 
-        dia_to_text: dict[int, str] = {}
+        dia_to_text: dict[Any, str] = {}
+        dia_to_session: dict[Any, int] = {}
         full_turns: list[str] = []
         session_keys = sorted(
             [k for k in conv.keys() if k.startswith("session_") and not k.endswith("_date_time")],
             key=lambda x: int(x.split("_")[1]),
         )
+        # Session dates power the temporal-question fix (audit 2026-05-15
+        # Phase 1B.6): evidence lines like "I went yesterday" can't resolve
+        # against ground-truth dates like "7 May 2023" without the session
+        # date prefixed. Missing keys map to ``None`` so date-less
+        # fallback still ingests.
+        session_dates: dict[int, str] = {}
+        for sk in session_keys:
+            try:
+                idx = int(sk.split("_")[1])
+            except (IndexError, ValueError):
+                continue
+            date = _normalize_text(conv.get(f"{sk}_date_time"))
+            if date:
+                session_dates[idx] = date
 
         for session_key in session_keys:
+            session_idx = int(session_key.split("_")[1])
             turns = conv.get(session_key, [])
             if not isinstance(turns, list):
                 continue
@@ -102,6 +133,10 @@ def _locomo_rows(path: Path, context_mode: str) -> list[dict[str, str]]:
                 # Older revisions used plain ints. Accept both.
                 if isinstance(dia_id, (int, str)) and dia_id != "":
                     dia_to_text[dia_id] = text
+                    # Trust dia_id parsing first, fall back to session_idx
+                    # (matters for legacy int dia_ids that don't encode session).
+                    parsed_session = _session_index_from_dia_id(dia_id)
+                    dia_to_session[dia_id] = parsed_session if parsed_session is not None else session_idx
                 full_turns.append(f"{speaker}: {text}")
 
         full_context = "\n".join(full_turns).strip()
@@ -117,7 +152,12 @@ def _locomo_rows(path: Path, context_mode: str) -> list[dict[str, str]]:
                 for eid in evidence_ids:
                     # Accept both legacy int dia_ids and current string ids ("D1:3").
                     if isinstance(eid, (int, str)) and eid in dia_to_text:
-                        evidence_lines.append(dia_to_text[eid])
+                        text = dia_to_text[eid]
+                        sidx = dia_to_session.get(eid)
+                        date = session_dates.get(sidx) if sidx is not None else None
+                        evidence_lines.append(
+                            f"[{date}] {text}" if date else text
+                        )
 
             if context_mode == "evidence":
                 # Oracle mode: an item without evidence has no defined
