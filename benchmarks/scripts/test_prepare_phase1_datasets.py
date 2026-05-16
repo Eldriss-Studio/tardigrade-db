@@ -418,6 +418,80 @@ class TestCategoryEmittedInRow:
         assert cats["Q2"] == "unknown"
 
 
+class TestGoldEvidenceEmittedInRow:
+    """Each row carries ``gold_evidence: list[str]`` — the source
+    snippets the retriever is supposed to surface. Powers the
+    retrieval-only metrics (#88, ENGRAM-style audit) in parallel with
+    the LLM-Judge score."""
+
+    def test_locomo_gold_evidence_is_list_of_dated_turn_texts(self, tmp_path: Path):
+        src = _synthetic_locomo(tmp_path)
+        rows = prep._locomo_rows(src, context_mode="evidence")
+        # Q1: evidence ["D1:1"]; turn text "I went to a LGBTQ support
+        # group yesterday and it was powerful." with session date.
+        assert isinstance(rows[0]["gold_evidence"], list)
+        assert len(rows[0]["gold_evidence"]) == 1
+        assert "LGBTQ support group" in rows[0]["gold_evidence"][0]
+        # Date is prefixed onto gold snippets too — keeps the gold and
+        # the retrieved chunks in the same vocabulary for substring
+        # match.
+        assert _DATE_S1 in rows[0]["gold_evidence"][0]
+
+    def test_locomo_full_mode_still_emits_gold_evidence(self, tmp_path: Path):
+        # Full-context mode preserves gold-evidence so the retrieval
+        # metric remains computable when running the challenger
+        # profile.
+        src = _synthetic_locomo(tmp_path)
+        rows = prep._locomo_rows(src, context_mode="full")
+        for row in rows:
+            assert "gold_evidence" in row
+            assert len(row["gold_evidence"]) >= 1
+
+    def test_longmemeval_gold_evidence_from_answer_sessions(self, tmp_path: Path):
+        payload = [
+            {
+                "question_id": "lm-1",
+                "question": "Q",
+                "answer": "A",
+                "answer_session_ids": ["sess-1"],
+                "haystack_session_ids": ["sess-0", "sess-1"],
+                "haystack_sessions": [
+                    [{"role": "user", "content": "no answer here"}],
+                    [{"role": "user", "content": "the right answer is in this turn"}],
+                ],
+            }
+        ]
+        src = tmp_path / "lme_gold.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+        rows = prep._longmemeval_rows(src, max_context_chars=0)
+        assert len(rows) == 1
+        gold = rows[0]["gold_evidence"]
+        assert isinstance(gold, list)
+        # The answer session's content is in the gold list.
+        assert any("right answer is in this turn" in g for g in gold)
+        # The non-answer session is NOT.
+        assert not any("no answer here" in g for g in gold)
+
+    def test_longmemeval_without_answer_sessions_emits_empty_gold(self, tmp_path: Path):
+        # Defensive: source variants without answer_session_ids should
+        # still ingest (LLM-Judge still works) but skip retrieval
+        # metrics (gold=[] → NaN, runner drops from aggregate).
+        payload = [
+            {
+                "question_id": "lm-2",
+                "question": "Q",
+                "answer": "A",
+                "haystack_sessions": [
+                    [{"role": "user", "content": "hello"}],
+                ],
+            }
+        ]
+        src = tmp_path / "lme_nogold.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+        rows = prep._longmemeval_rows(src, max_context_chars=0)
+        assert rows[0]["gold_evidence"] == []
+
+
 class TestSessionWithoutDateStillBuilds:
     def test_missing_session_date_falls_back_to_undated_evidence(self, tmp_path: Path):
         # Defensive: if a session_N_date_time key is absent for some

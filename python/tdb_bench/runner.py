@@ -18,9 +18,18 @@ from typing import Any
 
 from tdb_bench.errors import DatasetUnavailableError
 from tdb_bench.fairness import validate_fairness
+from tdb_bench.metrics import compute_retrieval_metrics
 from tdb_bench.models import RunResultV1
 from tdb_bench.registry import RegistryFactory
 from tdb_bench.schema import validate_run_result_v1
+
+
+# k-values for the retrieval-only headline. Aligned with ENGRAM's
+# standard reporting (Lewis et al., 2023) and the LongMemEval paper's
+# Top-K choice — k=10 is the leaderboard convention for "did we
+# retrieve it at all", k=5 for "did we put it in the prompt window",
+# k=1 for "did we pin it as the most relevant chunk."
+_RETRIEVAL_KS: tuple[int, ...] = (1, 5, 10)
 
 
 # Default worker count for the parallel runner codepath. Workers > 1
@@ -402,6 +411,15 @@ class BenchmarkRunner:
             "evidence": q.evidence,
             "error": q.error,
         }
+        # Retrieval metrics are computed whenever the adapter returned
+        # evidence — they don't depend on the LLM-Judge score, so we
+        # surface them on both `ok` and answerer-failure paths so the
+        # retrieval-only headline isn't biased by answerer outages.
+        gold = getattr(item, "gold_evidence", ())
+        row["retrieval_metrics"] = compute_retrieval_metrics(
+            gold=list(gold), retrieved=list(q.evidence), ks=_RETRIEVAL_KS,
+        )
+
         if q.status == "ok":
             scored = evaluator.score(item=item, answer=q.answer, evidence=q.evidence)
             row["score"] = scored.score
@@ -493,9 +511,48 @@ class BenchmarkRunner:
                 "skipped": int(per_system_status[system].get("skipped", 0)),
                 "failed": int(per_system_status[system].get("failed", 0)),
                 "by_category": self._per_category_breakdown(items, system),
+                "retrieval": self._retrieval_aggregate(items, system),
             }
 
         return {"systems": systems_payload}
+
+    @staticmethod
+    def _retrieval_aggregate(
+        items: list[dict[str, Any]], system: str
+    ) -> dict[str, Any]:
+        """Average Recall@k / NDCG@k across rows for ``system``.
+
+        Rows whose item has no gold evidence emit NaN metrics from
+        :func:`compute_retrieval_metrics`. Those rows are excluded from
+        the average — they have nothing to measure and would skew the
+        denominator. Rows with empty retrieved evidence (real-zero) are
+        counted. Returns ``{"n": <rows scored>, "recall@k": ..., ...}``.
+        Phase 1B audit 2026-05-16 #88 — audit-resistant headline.
+        """
+        buckets: dict[str, list[float]] = defaultdict(list)
+        n_scored = 0
+        for row in items:
+            if row.get("system") != system:
+                continue
+            metrics = row.get("retrieval_metrics")
+            if not isinstance(metrics, dict):
+                continue
+            # Gold-less rows emit NaN for every metric. Probe any
+            # recall@k value present — if it's NaN the row has no
+            # gold to score, skip the whole row.
+            recall_vals = [v for k, v in metrics.items() if k.startswith("recall@")]
+            if not recall_vals:
+                continue
+            if any(isinstance(v, float) and math.isnan(v) for v in recall_vals):
+                continue
+            n_scored += 1
+            for key, val in metrics.items():
+                if isinstance(val, float) and not math.isnan(val):
+                    buckets[key].append(val)
+        out: dict[str, Any] = {"n": n_scored}
+        for key, vals in sorted(buckets.items()):
+            out[key] = round(sum(vals) / len(vals), 6) if vals else 0.0
+        return out
 
     @staticmethod
     def _per_category_breakdown(

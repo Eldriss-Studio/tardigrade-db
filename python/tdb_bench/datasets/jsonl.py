@@ -32,6 +32,12 @@ class JsonlDatasetAdapter(DatasetAdapter):
                 if not line:
                     continue
                 raw = json.loads(line)
+                gold_raw = raw.get("gold_evidence", [])
+                gold = (
+                    tuple(str(g) for g in gold_raw)
+                    if isinstance(gold_raw, list)
+                    else ()
+                )
                 items.append(
                     BenchmarkItem(
                         item_id=str(raw["id"]),
@@ -40,6 +46,7 @@ class JsonlDatasetAdapter(DatasetAdapter):
                         question=str(raw["question"]),
                         ground_truth=str(raw["ground_truth"]),
                         category=str(raw.get("category", "unknown")),
+                        gold_evidence=gold,
                     )
                 )
                 if max_items and len(items) >= max_items:
