@@ -573,15 +573,7 @@ class TardigradeAdapter(BenchmarkAdapter):
             handles = self._rls.query(item.question, top_k=top_k)
             latency_ms = (time.perf_counter() - start) * 1000.0
 
-            evidence: list[str] = []
-            answer = ""
-            for h in handles[: max(1, top_k)]:
-                mapped = self._cell_to_item.get(int(h.cell_id))
-                if mapped is None:
-                    continue
-                evidence.append(mapped.context)
-                if not answer:
-                    answer = mapped.ground_truth
+            evidence, answer = self._build_evidence_and_answer(handles, top_k)
             if not answer:
                 return AdapterQueryResult(
                     answer="", evidence=[], latency_ms=latency_ms,
@@ -635,15 +627,7 @@ class TardigradeAdapter(BenchmarkAdapter):
 
         latency_ms = (time.perf_counter() - start) * 1000.0
 
-        evidence: list[str] = []
-        answer = ""
-        for h in handles[: max(1, top_k)]:
-            mapped = self._cell_to_item.get(int(h.cell_id))
-            if mapped is None:
-                continue
-            evidence.append(mapped.context)
-            if not answer:
-                answer = mapped.ground_truth
+        evidence, answer = self._build_evidence_and_answer(handles, top_k)
         if not answer:
             return AdapterQueryResult(
                 answer="",
@@ -659,6 +643,38 @@ class TardigradeAdapter(BenchmarkAdapter):
             status="ok",
             error=None,
         )
+
+    def _build_evidence_and_answer(
+        self, handles: list, top_k: int
+    ) -> tuple[list[str], str]:
+        """Map ranked cell handles to ``(evidence, answer)``.
+
+        Evidence is the actual **chunk text** for each retrieved cell
+        — *not* the parent item's full context. Smoke #4 (Phase 1B
+        audit 2026-05-16 #97) traced the LLM-Judge answerer bottleneck
+        to this exact path emitting parent-item contexts: 5 retrieved
+        chunks → 5 copies of the entire 62K-char conversation in the
+        prompt, far exceeding DeepSeek's 64K context. The reranker
+        already used ``_cell_to_chunk_text``; the evidence path
+        followed the same fix.
+
+        Falls back to the parent item's ``context`` only when chunk
+        text isn't tracked (e.g. the lexical-RLS fallback path that
+        never ingests via the chunker). Answer comes from the
+        ground_truth of the first matching item — same as before.
+        """
+        evidence: list[str] = []
+        answer = ""
+        for h in handles[: max(1, top_k)]:
+            cell_id = int(h.cell_id)
+            mapped = self._cell_to_item.get(cell_id)
+            if mapped is None:
+                continue
+            chunk_text = self._cell_to_chunk_text.get(cell_id)
+            evidence.append(chunk_text if chunk_text else mapped.context)
+            if not answer:
+                answer = mapped.ground_truth
+        return evidence, answer
 
     def enable_chunk_text_tracking(self) -> None:
         """Opt into populating `_cell_to_chunk_text` during ingestion.
