@@ -37,11 +37,35 @@ LLM_GATE_MAX_TOKENS = 256
 # hits are valid.
 LLM_GATE_TEMPERATURE = 0.0
 
-# How many retrieved evidence chunks feed the prompt. 10 picked
+# How many candidates the RetrieveThenReadAdapter (Decorator) asks
+# the inner adapter to retrieve, regardless of the bench's
+# evaluator-reporting top_k. The Decorator owns this budget privately
+# below the fairness-validator's abstraction line: every system still
+# receives the bench's symmetric top_k from the runner, but the
+# Decorator widens its own internal call so the LLM actually has
+# material to answer from.
+#
+# 25 chosen because measured item-level R@25 ≈ 84% on LoCoMo vs R@5
+# ≈ 30% (Phase 1B.2 audit, 2026-05-15). This is the retrieval-recall
+# ceiling the LLM can possibly reason over. Bumping further yields
+# diminishing returns and pushes prompt size up.
+#
+# Override per-run via TDB_LLM_GATE_INNER_TOP_K.
+LLM_GATE_INNER_TOP_K = 25
+
+# How many of the retrieved chunks reach the LLM prompt. 10 picked
 # because (a) LoCoMo questions typically need 1-3 supporting cells
 # and 10 gives room for misranking, (b) at ~500 tokens per chunk this
 # stays inside DeepSeek's 64K context with comfortable headroom.
-LLM_GATE_EVIDENCE_TOP_K = 10
+#
+# Override per-run via TDB_LLM_GATE_PROMPT_TOP_K.
+LLM_GATE_PROMPT_TOP_K = 10
+
+# Back-compat alias for one release. Existing callers continue to
+# work; new code should import LLM_GATE_PROMPT_TOP_K directly because
+# the name unambiguously distinguishes "prompt-evidence budget" from
+# "inner-retrieval budget" (LLM_GATE_INNER_TOP_K).
+LLM_GATE_EVIDENCE_TOP_K = LLM_GATE_PROMPT_TOP_K
 
 # --- HTTP behavior ---
 
