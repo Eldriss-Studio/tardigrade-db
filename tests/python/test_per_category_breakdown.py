@@ -162,6 +162,57 @@ class TestRetrievalAggregateAttachedToSystemsPayload:
         assert agg["recall@5"] == 1.0
 
 
+class TestAnswerTextRetrievalAggregate:
+    """Phase 1B.10 research recommendation #101: a parallel
+    answer-text retrieval metric that substring-matches the
+    BenchmarkItem.ground_truth against retrieved chunks, rather
+    than evidence text. Predicts LLM-Judge better than the
+    evidence-text metric because the answer text is what the
+    LLM needs in its window."""
+
+    @staticmethod
+    def _row_with_answer(score: float, metrics: dict | None) -> dict:
+        return {
+            "item_id": f"ar-{score}",
+            "dataset": "locomo",
+            "category": "single_hop",
+            "system": _SYS,
+            "status": "ok",
+            "score": score,
+            "answer_text_metrics": metrics,
+        }
+
+    def test_answer_text_aggregate_averages_present_metrics(self):
+        from tdb_bench.runner import BenchmarkRunner
+        items = [
+            self._row_with_answer(1.0, {"recall@5": 1.0, "ndcg@5": 1.0}),
+            self._row_with_answer(0.0, {"recall@5": 0.0, "ndcg@5": 0.0}),
+        ]
+        agg = BenchmarkRunner._answer_text_aggregate(items, _SYS)
+        assert agg["n"] == 2
+        assert agg["recall@5"] == 0.5
+        assert agg["ndcg@5"] == 0.5
+
+    def test_answer_text_aggregate_excludes_nan(self):
+        from tdb_bench.runner import BenchmarkRunner
+        items = [
+            self._row_with_answer(1.0, {"recall@5": 1.0, "ndcg@5": 1.0}),
+            self._row_with_answer(
+                1.0, {"recall@5": float("nan"), "ndcg@5": float("nan")},
+            ),
+        ]
+        agg = BenchmarkRunner._answer_text_aggregate(items, _SYS)
+        assert agg["n"] == 1
+        assert agg["recall@5"] == 1.0
+
+    def test_answer_text_aggregate_filters_other_systems(self):
+        from tdb_bench.runner import BenchmarkRunner
+        row_us = self._row_with_answer(1.0, {"recall@5": 1.0, "ndcg@5": 1.0})
+        row_other = {**row_us, "system": "other"}
+        agg = BenchmarkRunner._answer_text_aggregate([row_us, row_other], _SYS)
+        assert agg["n"] == 1
+
+
 class TestPerCategoryBreakdownAttachedToSystemsPayload:
     """End-to-end check that `_aggregates` wires `by_category` into
     each system's payload."""
