@@ -1169,6 +1169,158 @@ template version).
 
 ---
 
+## Phase 1B.10 — Chunk-text-evidence bug + honest retrieval baseline (2026-05-16, end-of-day)
+
+**TL;DR.** Every LoCoMo score we measured between Phase 1B.5 and
+Phase 1B.9 was inflated by a measurement artifact: the bench
+adapter was emitting the **parent item's entire 62K-char
+conversation** as evidence instead of the retrieved chunk text. The
+LLM saw the whole conversation truncated by DeepSeek, read the
+answer from the visible portion, and the retrieval recall metric
+returned 1.0 because the gold turn was trivially a substring of the
+parent context. Today's session ran six smokes that progressively
+peeled the artifact away. The honest LoCoMo score on a 30-item
+smoke is **0.22 LLM-Judge, 17% R@5** — substantially below the
+0.42-0.65 numbers cited in Phase 1B.5-1B.9. The architecture is
+honest now; the score reflects real retrieval performance.
+
+### Session timeline — 10 commits
+
+| Commit | Task | Effect |
+|---|---|---|
+| `a9ecf20` | #93 | LoCoMo full-conv mode emits `[session N — date]` headers |
+| `791bea8` | #94 | v2 answerer prompt: permits cautious inference |
+| `bfd248a` | #96 | Reranker `threading.Lock` — fixes 0.42→0.38 parallel drift |
+| `dad324d` | #89 | Per-(dataset, category) breakdown in aggregates |
+| `e7f6209` | #88 | Recall@k / NDCG@k retrieval-only headline |
+| `e443dd8` | — | Gold = raw turn text (substring works on both modes) |
+| `f0fb531` | — | LongMemEval gold = per-turn, not per-session |
+| `8b8b3a7` | — | LLM prompt window: top-10 → top-20 |
+| **`64be483`** | **#97** | **Evidence = chunk text, not parent context (the big one)** |
+| `31e711e` | #98 | Dedup retrieved evidence by chunk text |
+
+### Smoke trail
+
+| Smoke | LoCoMo avg | R@5 | What it measured |
+|---|---|---|---|
+| #1 (#88 initial) | 0.453 | 0.0 | Gold dated, chunks session-headered — never substring-matched |
+| #2 (gold=raw turn) | 0.471 | 0.500 | LoCoMo R@5 = 1.0 trivially (parent context substring) |
+| #3 (per-turn LME gold) | 0.475 | 0.483 | Half-honest — LoCoMo still artefactual, LME real-ish |
+| #4 (top-20 widening) | 0.497 | 0.484 | -10pp LME IDK; LoCoMo refusals stable |
+| **#5 (chunk-text fix)** | **0.378** | **0.172** | **First honest number — LLM sees only chunks** |
+| #6 (dedup) | 0.360 | 0.172 | Dedup confirmed retrieval is the bottleneck, not duplicates |
+
+### What the artifact actually was
+
+`TardigradeAdapter._build_evidence_and_answer` did:
+
+```python
+for h in handles[:top_k]:
+    mapped = self._cell_to_item.get(h.cell_id)
+    evidence.append(mapped.context)   # ← parent item full context
+```
+
+`mapped.context` is the *entire LoCoMo conversation*, ~62K chars on
+full-conv mode. Top-5 retrieval → 5 copies of the same 62K-char
+text. Top-20 widening → 20 copies (~1.25M chars; DeepSeek truncates
+at 64K). The reranker had been fixed weeks earlier to use
+`_cell_to_chunk_text` (see project memory note on the
+reranker-chunk-text bug), but the evidence-return path was missed.
+
+Effect on every metric:
+
+- **LLM-Judge:** the LLM saw the entire conversation truncated to
+  64K and was lucky enough to find the answer in the visible
+  portion. Inflated by ~25pp.
+- **Recall@k:** the substring match `gold_text in retrieved_text`
+  trivially returned True because the gold turn is always inside
+  the parent conversation. Inflated to ~1.0.
+
+Fix at commit `64be483`: extract `_build_evidence_and_answer`
+helper. Use `_cell_to_chunk_text[cell_id]` first; fall back to
+`mapped.context` only when chunk text isn't tracked (lexical-RLS
+fallback path). Both query call sites use the helper. 7 ATs pin
+the contract.
+
+### Secondary bug: duplicate chunks (commit `31e711e`)
+
+LoCoMo's `prepare_phase1_datasets.py` emits one row per QA. All
+QAs from the same conversation share `context`. The bench adapter
+ingests each row independently → the same chunks get written N
+times under distinct cell IDs. Smoke #5 (post chunk-text fix)
+showed top-5 returning 5 copies of the same chunk text.
+
+Band-aid: dedup at `_build_evidence_and_answer` with a
+`seen_texts: set[str]`. Skip cells whose chunk text already
+appeared, continue scanning until top_k *distinct* chunks
+collected. Score went 0.257 → 0.220 (within n=30 noise) —
+proving the duplicates weren't the bottleneck.
+
+Structural fix queued as task #98: dedup at ingestion by
+`(context_hash, chunk_text)` so each chunk is written once.
+
+### The 9 fixes evaluated honestly
+
+| Fix | What we hoped | What we measured |
+|---|---|---|
+| Full-conv date headers | +20-30pp on temporal | Temporal still 0.0 (n=4) — too few items to tell |
+| v2 prompt (cautious inference) | -10pp IDK rate | LoCoMo IDK unchanged at 30-57%; LME IDK -10pp |
+| Reranker thread-safety | Prevents 0.42→0.38 drift | Confirmed — workers=8 stable |
+| Per-category breakdown | Makes attribution possible | Working — shows single_hop=0.30, multi_hop=0.23, temporal=0.0 |
+| Retrieval headline | Audit-resistant signal | Working — R@5=0.17 is the real signal |
+| Top-20 widening | -27pp LoCoMo IDK | LoCoMo IDK unchanged; LME IDK -10pp |
+| Chunk-text evidence | Honest measurement | -34pp LoCoMo (artifact unmasked) |
+| Per-turn LME gold | LME retrieval measurable | Working — R@5 contribution visible |
+| Retrieval dedup | Cleaner LLM view | Same retrieval, marginally worse LLM score |
+
+Net: real engineering improvements; honest numbers below the
+artefactual headline. Track A positioning (latency/footprint/KV-
+native API) survives unchanged because none of those claims
+depended on LoCoMo retrieval. Track B "compete on LoCoMo Judge"
+is now visibly harder than the prior headline suggested.
+
+### Per-category breakdown (smoke #6)
+
+```
+locomo/single_hop:   0.300  (n=10)
+locomo/multi_hop:    0.225  (n=16)
+locomo/temporal:     0.000  (n=4)
+longmemeval/temporal-reasoning: 0.500 (n=30)
+```
+
+LongMemEval substantially out-scores LoCoMo on the honest
+adapter — opposite of the prior headline. Hypothesis: LME has
+unique haystacks per question, so the duplicate-chunk problem
+doesn't apply; the LLM-gated pipeline works as designed.
+
+### Commits relevant to Phase 1B.10
+
+`a9ecf20`, `791bea8`, `bfd248a`, `dad324d`, `e7f6209`, `e443dd8`,
+`f0fb531`, `8b8b3a7`, `64be483`, `31e711e`.
+
+### Next steps
+
+The honest 17% R@5 is the actual bottleneck. Plausible directions:
+
+1. **Investigate retrieval keys.** Qwen3-1.7B KV at the query
+   layer may not encode the right semantics for "find the turn
+   containing X" against chunked dialogue. Try alternative key
+   strategies (different layer, different model).
+2. **Try a stronger reranker.** `ms-marco-MiniLM-L-6-v2` is
+   trained on web search queries, not dialogue. Memory notes
+   point to `Qwen3-Reranker-0.6B` as the recommended dialogue
+   reranker.
+3. **Widen inner top-k.** Currently 25; pushing to 50 or 100
+   gives the reranker more candidates.
+4. **Hybrid (lexical + dense) retrieval.** ENGRAM and most
+   production conversational-memory systems use hybrid.
+5. **Track A doubles down.** Stop trying to win LoCoMo with
+   this stack. Document the limitation; ship the positioning.
+
+Task #100 will research option 1-4 properly before changing code.
+
+---
+
 ## Recommendations going forward
 
 1. **Run the full 1533-item LoCoMo bench on the clean dataset** with
