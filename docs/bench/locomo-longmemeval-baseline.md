@@ -39,19 +39,21 @@
 - **Top-k:** 5
 - **Seed:** 42
 
-## Results
+## Results — RETRACTED 2026-05-14
 
-| Benchmark | Score | Items | Failed | Skipped |
-|-----------|-------|-------|--------|---------|
-| **LoCoMo** | **68.2%** | 1,542 | 0 | 0 |
-| **LongMemEval** | **90.9%** | 500 | 0 | 0 |
-| **Combined** | **73.8%** | 2,042 | 0 | 0 |
+> ⚠️ Every score below was **retracted on 2026-05-14**. The run used the lexical fallback adapter on a corpus corrupted by a dataset-prep bug in `benchmarks/scripts/prepare_phase1_datasets.py`. The numbers do not measure the native KV engine. See [`docs/experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md) for the forensic record and clean-data re-measurements.
 
-## Comparison to Field (Published Numbers)
+| Benchmark | Score | Items | Failed | Skipped | Status |
+|-----------|-------|-------|--------|---------|--------|
+| LoCoMo | ~~68.2%~~ | 1,542 | 0 | 0 | ⚠️ RETRACTED 2026-05-14 |
+| LongMemEval | ~~90.9%~~ | 500 | 0 | 0 | ⚠️ RETRACTED 2026-05-14 |
+| Combined | ~~73.8%~~ | 2,042 | 0 | 0 | ⚠️ RETRACTED 2026-05-14 |
+
+## Comparison to Field (Published Numbers) — RETRACTED
 
 | System | LoCoMo | LongMemEval | Source |
 |--------|--------|-------------|--------|
-| **TardigradeDB** | **68.2%** | **90.9%** | This run (deterministic eval) |
+| TardigradeDB ⚠️ **RETRACTED** | ~~68.2%~~ | ~~90.9%~~ | This run (lexical fallback on corrupted dataset; not native engine) |
 | ByteRover 2.0 | 92.2% | — | arXiv:2604.01599 |
 | Letta / MemGPT | — | 83.2% | letta.com/blog |
 | LiCoMemory | — | 73.8% | arXiv:2511.01448 |

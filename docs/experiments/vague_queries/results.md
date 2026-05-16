@@ -1,5 +1,7 @@
 # Vague-Query Refinement: Empirical Results
 
+> ℹ️ **Audit note (2026-05-14):** The empirical results in this document — mean-centering (+31pp moderate), cross-encoder reranker stacking (+40pp moderate / +18pp vague), and the PRF sweep — were measured on the 100-cell synthetic Sonia corpus and are **unaffected** by the 2026-05-14 bench audit. However, the "vague-query vocabulary overlap is the retrieval ceiling" / DeepMind-LIMIT-style theoretical-ceiling framing that appears later in this document was drawn in part from the broken LoCoMo runs and is **retracted**. See [`docs/experiments/2026-05-14-bench-audit.md`](../2026-05-14-bench-audit.md).
+
 **Date:** 2026-05-02
 **Hardware:** RTX 3070 Ti, CUDA 12.8
 **Model:** Qwen/Qwen3-0.6B (28 layers, query layer 18, fp32, eager attention)

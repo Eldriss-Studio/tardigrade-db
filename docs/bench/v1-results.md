@@ -59,6 +59,8 @@ The `tardigrade` adapter in `python/tdb_bench/adapters/tardigrade.py` now has tw
 
 ### Smoke fixture (6 items, native mode, RTX 3070 Ti, deterministic_fallback evaluator)
 
+> ⚠️ **Audit caveat 2026-05-14:** This 6-item fixture was run against the same LoCoMo source as the retracted 68.2% headline runs (`benchmarks/scripts/prepare_phase1_datasets.py`, dataset-prep bug). The numbers below are anecdotal. Re-run on the clean dataset before citing the "mechanism transfer" claim. See [`docs/experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md).
+
 | Refinement | avg score | passed |
 |---|---:|---|
 | none | 0.833 | 5/6 |
@@ -66,7 +68,7 @@ The `tardigrade` adapter in `python/tdb_bench/adapters/tardigrade.py` now has tw
 
 The single miss at `none` (`How was ticket #8842 resolved?` retrieved the maintenance-window cell instead of the ticket-resolution cell) is recovered by mean-centering — consistent with the +31pp moderate-tier gain measured on the 100-memory vague-query corpus (`docs/experiments/vague_queries/results.md`).
 
-This is a **6-item fixture**, too small to be statistically meaningful on its own, but it confirms the mechanism transfers from the synthetic vague-query corpus to the LoCoMo/LongMemEval question shape.
+This is a **6-item fixture, too small to be statistically meaningful**, and was run on the corrupted LoCoMo source. Pending a clean-data re-run, treat the +0.167 delta as anecdotal evidence of mechanism transfer, not a measurement.
 
 ### Mem0 / Letta head-to-head — pending operator setup
 

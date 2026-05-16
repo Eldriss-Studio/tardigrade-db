@@ -33,15 +33,17 @@
 - **Seed:** 42
 - **Fallbacks:** 0/2042 (all items judged by LLM)
 
-## Results
+## Results — RETRACTED 2026-05-14
 
-| Benchmark | Deterministic Eval | DeepSeek LLM Judge | Delta |
-|-----------|-------------------|-------------------|-------|
-| **LoCoMo** (1,542 items) | 68.2% | 67.2% | -1.0% |
-| **LongMemEval** (500 items) | 90.9% | 88.8% | -2.1% |
-| **Combined** (2,042 items) | 73.8% | 72.5% | -1.3% |
+> ⚠️ Every score below was **retracted on 2026-05-14**. The run used the lexical fallback adapter on a corpus corrupted by a dataset-prep bug. Both the deterministic and LLM-judge columns measure the lexical fallback's self-retrieval on broken data, not the native KV engine. See [`docs/experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md).
 
-## Key Finding: The Gap Is Real
+| Benchmark | Deterministic Eval | DeepSeek LLM Judge | Delta | Status |
+|-----------|-------------------|-------------------|-------|--------|
+| LoCoMo (1,542 items) | ~~68.2%~~ | ~~67.2%~~ | -1.0% | ⚠️ RETRACTED 2026-05-14 |
+| LongMemEval (500 items) | ~~90.9%~~ | ~~88.8%~~ | -2.1% | ⚠️ RETRACTED 2026-05-14 |
+| Combined (2,042 items) | ~~73.8%~~ | ~~72.5%~~ | -1.3% | ⚠️ RETRACTED 2026-05-14 |
+
+## Key Finding: The Gap Is Real — RETRACTED
 
 The hypothesis was that deterministic evaluation (strict lexical overlap) might
 be underscoring TardigradeDB — that the engine retrieves correct answers but

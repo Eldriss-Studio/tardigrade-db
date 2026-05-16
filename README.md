@@ -6,11 +6,13 @@
 
 TardigradeDB is not a traditional database with tables and indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-> **Research status (April 27, 2026): experimental prototype**
+> **Research status (May 14, 2026): experimental prototype**
 >
 > TardigradeDB is a research experiment, not a production-ready database.
 > Current results are from controlled demos, experiments, and benchmarks.
 > APIs, on-disk formats, and guarantees may change while the architecture is validated.
+>
+> ⚠️ **Audit notice (2026-05-14):** The April 2026 benchmark headlines (68.2% LoCoMo / 90.9% LongMemEval) were **retracted** — they measured the lexical fallback adapter on a corpus corrupted by a dataset-prep bug, not the native KV engine. Honest native-engine number on clean LoCoMo: ~36% R@1 at 50-item scale; full-corpus re-measurement pending. All four RLS modes (keyword/multiphrasing/embedding/generative/agent) underperform the no-RLS baseline on clean data. Synthetic-corpus results (100% recall at 5K, vague-query refinement, KV injection on gibberish facts, cross-model retrieval) are unaffected. Full record: [`docs/experiments/2026-05-14-bench-audit.md`](docs/experiments/2026-05-14-bench-audit.md).
 
 > *From "storage as a service" to "storage as cognition."*
 
@@ -202,16 +204,33 @@ The agent controls linking via `store_linked()` (batch) or `store_and_link()` (i
 
 See `docs/experiments/multi-memory-injection.md` for the full research progression.
 
-### Benchmark Results: LoCoMo + LongMemEval (May 2026)
+### Benchmark Results: LoCoMo + LongMemEval — RETRACTED 2026-05-14
 
-Full-run results on 2,042 items each (Qwen3-0.6B, chunked ingestion, LLM judge):
+> ⚠️ **The previously published LoCoMo (68.2%) and LongMemEval (90.9%) headline numbers were retracted on 2026-05-14.** A bench audit found those runs used the lexical fallback adapter on a corpus corrupted by a dataset-prep bug — they did not measure the native KV engine on the intended dataset.
+>
+> **Honest native-engine numbers on clean data:**
+>
+> | Benchmark | Honest measurement | Notes |
+> |-----------|--------------------|-------|
+> | LoCoMo Phase-1 (50-item subset, clean) | **~36% R@1** | Native engine, no RLS |
+> | LoCoMo Phase-1 (full corpus, clean) | not yet re-measured | Pending |
+> | LongMemEval (full corpus, clean) | not yet re-measured | Pending |
+>
+> All four RLS modes (keyword / multiphrasing / embedding / generative / agent) **underperform** the no-RLS baseline on clean data; the DeepSeek agent reformulator loses 12.7pp. The earlier "vocabulary-gap is the retrieval ceiling" framing is also retracted — it was drawn from the broken data.
+>
+> Full record: [`docs/experiments/2026-05-14-bench-audit.md`](docs/experiments/2026-05-14-bench-audit.md).
 
-| Benchmark | Items | Score | Notes |
-|-----------|-------|-------|-------|
-| **LongMemEval S-1** | 2,042 | **90.9%** | Chunked ingestion via `TextChunker` |
-| **LoCoMo Phase-1** | 2,042 | **68.2%** | Ceiling = vocabulary gap (not retrieval failure) |
+### Vague-Query Refinement (synthetic corpus — unaffected by audit)
 
-**Why LoCoMo is capped at 68.2%:** Six refinement techniques (whitening, cross-encoder reranking, keyword/embedding/generative RLS) all produced 0% gain. This is the model capability limit for Qwen3-0.6B — confirmed by the [ICLR 2026 LIMIT paper](https://arxiv.org/abs/2410.11823). LoCoMo queries use abstract vocabulary that Qwen3-0.6B cannot bridge to the concrete words in stored conversations. The vocabulary-bridge strategy (`LLMAgentReformulationStrategy`) is the active research path.
+Measured on RTX 3070 Ti / Qwen3-0.6B (100-cell Sonia corpus, 230 queries):
+
+| Refinement | Specific R@5 | Moderate R@5 | Vague R@5 |
+|------------|--------------|--------------|-----------|
+| `none` | 100% | 28% | 46% |
+| `centered` (mean-centering) | 100% | 59% (+31pp) | 50% (+4pp) |
+| `centered` + cross-encoder rerank | 100% | **68% (+40pp)** | **64% (+18pp)** |
+
+Cross-encoder default model: `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params). Stage-2 reranker adds ~30% latency (~86ms vs ~67ms p95). API: `engine.set_refinement_mode("none"|"centered"|"prf", ...)`. Full results: [`docs/experiments/vague_queries/results.md`](docs/experiments/vague_queries/results.md).
 
 See [observed benchmark results](https://eldriss-studio.github.io/tardigrade-db/dev/bench-v1/results.html) for full run history.
 
@@ -241,7 +260,7 @@ kps.store_linked(["Fact A about Tomoko", "Fact B about Tomoko"])
 
 ### Why Python Exists in This Project
 
-The Rust kernel (storage, retrieval, governance, indexing — 238 tests) is a self-contained library. It does not need Python.
+The Rust kernel (storage, retrieval, governance, indexing — 304 tests) is a self-contained library. It does not need Python.
 
 Python exists for two reasons: **to bridge TardigradeDB to model inference frameworks**. HuggingFace Transformers is the only practical way to access a model's KV cache (`past_key_values`) on local hardware. The Python layer (`tardigrade_hooks`) captures those tensors and feeds them to the Rust engine via PyO3 bindings.
 
@@ -581,7 +600,7 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] Durable text persistence — Rust-side `TextStore` (append-only, fsynced) replaces fragile JSON sidecar, with lazy migration of legacy data
 - [x] Delete API — `delete_pack` / `tardigrade_forget` with crash-safe `DeletionLog`
 - [x] **vLLM KV Connector v1 integration** — `tardigrade_vllm.connector.TardigradeConnector` captures KV during vLLM generation (per-request slot extraction, one pack per request via fingerprint dedup), persists as packs, and supports cross-process state sync via `Engine.refresh()`. Validated on Qwen3-0.6B with vLLM 0.19 (27 tests: 22 CPU + 5 GPU + 1 cross-session). **Architectural finding: the v1 connector API is prefix-cache only (token-identical prefix matching) — it cannot carry cross-prompt KV injection.** The "memory" pitch is served by the HuggingFace `KnowledgePackStore` path instead. See [experiments/README.md](docs/experiments/README.md).
-- [x] 370+ tests (238 Rust + 145 Python including vLLM connector + integration suites)
+- [x] 663 tests (304 Rust + 359 Python including vLLM connector + integration suites)
 - [x] **P1 Architectural Unification** — Active governance (tier boost: Core 1.25×, Validated 1.1×; `evict_draft_packs`), WAL checkpointing, text store consolidation (JSON sidecar removed), dead code cleanup, status API, configurable engine from Python, pluggable retrieval key strategies
 - [x] **TextChunker + FileIngestor** — Token-bounded chunking (512T, 64T overlap, 32T min) with sequential Supports edges between consecutive chunks.
 - [x] **TardigradeClient facade** — `store / query / ingest_file / ingest_text / consolidate / consolidate_all` in one object. Engine created internally at `db_path`.
@@ -589,14 +608,14 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] **ReflectiveLatentSearch (RLS)** — RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE loop; 5 strategies: `KeywordExpansion`, `MultiPhrasing`, `EmbeddingExpansion`, `GenerativeReformulation`, `LLMAgentReformulation`; RRF fusion.
 - [x] **CrossEncoderReranker** — Stage-2 re-ranking via `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params); ~30% latency overhead (~86ms vs ~67ms p95).
 - [x] **Shared constants** — `tardigrade_hooks.constants` eliminates all magic values across file ingestion, multi-view, governance, and RLS.
-- [x] **Full benchmark runs** — LongMemEval 90.9%, LoCoMo 68.2% (Qwen3-0.6B ceiling — vocabulary gap confirmed by ICLR 2026 LIMIT paper).
+- [x] ~~**Full benchmark runs** — LongMemEval 90.9%, LoCoMo 68.2%~~ **[RETRACTED 2026-05-14]** — those measured the lexical fallback adapter on corrupted data. Honest native-engine number on clean LoCoMo: ~36% R@1 at 50-item scale; full-corpus re-run pending. See [`docs/experiments/2026-05-14-bench-audit.md`](docs/experiments/2026-05-14-bench-audit.md).
 
 ### Next up
 
 - [x] **v0.1.0 release + PyPI packaging** — `pip install tardigrade-db` (wheels for Linux, macOS, Windows).
 - [ ] **Release-mode benchmark numbers** — Run `cargo bench`, publish actual performance data.
 - [x] **Background governance sweep** — `MaintenanceWorker` (Active Object, `std::thread`) runs decay + eviction + compaction automatically.
-- [ ] **LLM agent vocabulary bridge** — `LLMAgentReformulationStrategy` validation on LoCoMo full run to test whether vocabulary bridging can exceed the 68.2% ceiling.
+- [ ] **LLM agent vocabulary bridge** — `LLMAgentReformulationStrategy` validation on LoCoMo full run on the clean dataset, against the honest ~36% R@1 native baseline (the previously cited "68.2% ceiling" was retracted on 2026-05-14).
 - [ ] **Storage reduction** — 730 KB per memory is large. Investigate selective layer storage, INT8 KV, or FP16 for injection-critical layers.
 
 ### Future
@@ -625,10 +644,10 @@ If neither Path 2 nor Path 3 is sufficient, the remaining option is to modify vL
 
 #### Engine and infrastructure
 
-- [x] **Vamana edge persistence** — Graph serialized to disk; O(n) load on refresh instead of O(n²) rebuild.
+- [ ] **Vamana edge persistence** — Graph is currently rebuilt from scratch on `refresh()` (O(n²)). Serializing edges for O(n) load is planned.
 - [x] **Segment compaction** — Mark-Sweep GC rewrites segments below 50% live ratio. `Engine::compact()` + Python binding.
 - [x] **Background maintenance** — `MaintenanceWorker` (Active Object) runs governance sweep + auto-compaction in a background `std::thread`.
-- [x] **Vague-query recall investigation** — RLS framework built and validated (5 strategies). Ceiling confirmed at 68.2% LoCoMo (model capability limit, not retrieval). Vocabulary-bridge via `LLMAgentReformulationStrategy` is the remaining path.
+- [x] **Vague-query recall investigation** — RLS framework built (5 strategies). Per the 2026-05-14 audit, all RLS modes underperform the no-RLS baseline on clean LoCoMo (agent reformulator: -12.7pp); the prior "vocabulary-gap ceiling" framing is retracted. Mean-centering + cross-encoder reranking (synthetic Sonia corpus) is the validated refinement path (+40pp moderate R@5, +18pp vague).
 - [ ] **Incremental compaction** — Release engine lock between segments to reduce contention window during compaction.
 - [ ] **Disk-aware Vamana** — PageANN-style page-node alignment for billion-scale cold storage.
 - [ ] **Multi-model dimension support** — Handle different models (different d_k) in one engine instance.

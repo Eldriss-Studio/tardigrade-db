@@ -165,14 +165,19 @@ if lme: print(f'LongMemEval: {sum(i[\"score\"] for i in lme)/len(lme):.4f} ({len
 " target/bench-agent-rls-native.json
 ```
 
-## Known Results (Mac, in_memory mode)
+## Known Results — RETRACTED 2026-05-14
 
-| Config | LoCoMo | LongMemEval |
-|---|---|---|
-| Baseline (no RLS) | 68.2% | 88.8% |
-| Agent RLS, naive fusion | 52.9% (-15.3pp) | 77.8% (-11.0pp) |
-
-Naive always-reformulate + max-score fusion degrades both. The follow-up experiment will implement margin-based acceptance (only use reformulated result if it scores ≥2x the original).
+> ⚠️ The previous "Known Results (Mac, in_memory mode)" table cited a 68.2% LoCoMo / 88.8% LongMemEval baseline and a -15.3pp / -11.0pp regression from agent RLS. Those numbers were **retracted on 2026-05-14**: the baseline was the lexical fallback adapter on a corpus corrupted by a dataset-prep bug, and the RLS deltas were measured relative to that broken baseline.
+>
+> **Honest clean-data measurements (50-item subset, native engine):**
+>
+> | Config | LoCoMo R@1 |
+> |---|---|
+> | No RLS (native engine) | 21.95% |
+> | Keyword expansion | 16.62% (-5.3pp) |
+> | Agent RLS (DeepSeek reformulator) | 9.29% (-12.7pp) |
+>
+> All RLS modes underperform the no-RLS baseline on clean data. The "margin-based acceptance" follow-up was motivated by a retracted ceiling claim; revisit only after a clean full-corpus baseline is in hand. Full record: [`2026-05-14-bench-audit.md`](2026-05-14-bench-audit.md).
 
 ## Cost Estimate
 

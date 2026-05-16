@@ -4,9 +4,9 @@
 
 Traditional agent memory systems store text, retrieve text, paste text into the prompt. This consumes prompt tokens.
 
-TardigradeDB stores the model's own KV cache tensors — the internal state the model computes during a forward pass. When using the Python API, retrieved memories are injected directly into the model's attention as KV cache, consuming zero prompt tokens. When using the MCP server, memories are delivered as text for universal LLM compatibility (standard prompt token cost).
+TardigradeDB stores the model's own KV cache tensors — the internal state the model computes during a forward pass. When using the Python API, retrieved memories are injected directly into the model's attention as KV cache: the stored facts themselves contribute zero additional prompt tokens (their KV is restored, not re-tokenized). The query text still costs tokens. When using the MCP server, memories are delivered as text for universal LLM compatibility (standard prompt token cost).
 
-**Result (Python API):** Byte-identical output to having the text in the prompt, at 46% fewer prompt tokens.
+**Result (Python API):** Byte-identical output to having the text in the prompt, with 46% fewer total prompt tokens than the equivalent text-RAG call (because retrieved facts don't re-enter the prompt).
 
 **When to use:** Single-fact recall queries. "What's the user's preference?" "What did they say about X?"
 
@@ -39,7 +39,7 @@ RLS runs a RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE loop t
 | `GenerativeReformulationStrategy` | local LLM (e.g. Qwen2.5-3B) | ~500ms |
 | `LLMAgentReformulationStrategy` | external API (DeepSeek) | ~1-2s (network) |
 
-**Benchmark result:** RLS keyword/embedding strategies produced 0% lift on LoCoMo (2,042 items), confirming that the 68.2% ceiling is the model capability limit, not a retrieval failure. The agent strategy (vocabulary bridging) is the active research path.
+**Benchmark result (revised 2026-05-14):** Earlier runs cited a "68.2% LoCoMo ceiling" against which RLS produced 0% lift; those numbers were **retracted** in the 2026-05-14 bench audit (measured on a corrupted dataset using the lexical fallback adapter, not the native KV engine). On clean data, the honest native-engine baseline is ~36% R@1 at 50-item scale, and **all RLS modes underperform the no-RLS baseline** (the DeepSeek agent reformulator loses 12.7pp). RLS as currently designed is not a win. See [`docs/experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md).
 
 ## Multi-view Consolidation
 
