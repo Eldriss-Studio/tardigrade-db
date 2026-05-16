@@ -1319,6 +1319,50 @@ The honest 17% R@5 is the actual bottleneck. Plausible directions:
 
 Task #100 will research option 1-4 properly before changing code.
 
+### Update — answer-text metric measured (smoke #7, commit `2dbc1be`)
+
+Task #100 research recommended a parallel `answer_text_metrics`
+that substring-matches `ground_truth` against retrieved chunks
+(complementing the evidence-text `retrieval_metrics`). Task
+#101 implemented it.
+
+Smoke #7 result (same 30+30 corpus):
+
+| Metric | LoCoMo | LongMemEval |
+|---|---|---|
+| Evidence-text R@5 | 0.283 | 0.060 |
+| **Answer-text R@5** | **0.000** | **0.167** |
+| LLM-Judge | 0.253 | 0.500 |
+
+**LoCoMo answer text never appears in retrieved chunks (0/30
+items).** Every LoCoMo answer is synthesized — dates ("7 May 2023",
+not literal in conversation), categorical labels ("Single",
+paraphrased as "alone as a single parent"), numerics ("4 years",
+appears but not connected to GT). The LLM has to synthesize the
+answer from supporting context **on every item**. The 25% LLM-Judge
+score is the ceiling reachable from supporting context alone.
+
+**LongMemEval has the inverse.** LME's gold-evidence marking is
+less aligned with answer-bearing turns than LoCoMo's (R@5 = 6.0%
+vs LoCoMo's 28.3%), but LME answers more often appear verbatim in
+retrieved chunks (R@5 = 16.7% vs LoCoMo's 0.0%). Combined with a
+50% LLM-Judge, this suggests LME relies on retrieval-of-answer-text
+plus LLM gap-filling — a more standard retrieve-then-read pattern.
+
+Reading: the LoCoMo benchmark is dominated by the answerer's
+synthesis ability given supporting context, not by retrieval
+quality of literal answer strings. Reranker / retrieval-keys
+improvements will help by widening the supporting-context pool,
+not by surfacing the answer directly. The ceiling without an
+LLM upgrade is bounded by Qwen3-1.7B's (or DeepSeek-chat's)
+synthesis capability over compressed evidence.
+
+The earlier "the retriever picks the wrong chunk 83% of the time"
+framing was misleading. More accurately: **the retriever can't
+pick a chunk containing the answer because the answer isn't a
+chunk substring in LoCoMo's design.** Phase 1B audit
+2026-05-16 task #101.
+
 ---
 
 ## Recommendations going forward
