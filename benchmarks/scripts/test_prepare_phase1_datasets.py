@@ -489,7 +489,10 @@ class TestGoldEvidenceEmittedInRow:
                 "haystack_session_ids": ["sess-0", "sess-1"],
                 "haystack_sessions": [
                     [{"role": "user", "content": "no answer here"}],
-                    [{"role": "user", "content": "the right answer is in this turn"}],
+                    [
+                        {"role": "user", "content": "the right answer is in this turn"},
+                        {"role": "assistant", "content": "another relevant turn"},
+                    ],
                 ],
             }
         ]
@@ -499,10 +502,43 @@ class TestGoldEvidenceEmittedInRow:
         assert len(rows) == 1
         gold = rows[0]["gold_evidence"]
         assert isinstance(gold, list)
-        # The answer session's content is in the gold list.
+        # The answer session's turns are in the gold list.
         assert any("right answer is in this turn" in g for g in gold)
+        assert any("another relevant turn" in g for g in gold)
         # The non-answer session is NOT.
         assert not any("no answer here" in g for g in gold)
+
+    def test_longmemeval_gold_evidence_is_per_turn_not_per_session(self, tmp_path: Path):
+        # Each turn becomes a separate gold entry so chunkers that
+        # split sessions into ~600-char chunks can still substring
+        # match. Smoke #88 revealed that per-session gold (concatenated
+        # turns) was too long to substring-match any single chunk —
+        # recall@k went 0/30 on LongMemEval until we sliced per turn.
+        payload = [
+            {
+                "question_id": "lm-pt",
+                "question": "Q",
+                "answer": "A",
+                "answer_session_ids": ["sess-0"],
+                "haystack_session_ids": ["sess-0"],
+                "haystack_sessions": [
+                    [
+                        {"role": "user", "content": "turn one content"},
+                        {"role": "assistant", "content": "turn two content"},
+                        {"role": "user", "content": "turn three content"},
+                    ],
+                ],
+            }
+        ]
+        src = tmp_path / "lme_per_turn.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+        rows = prep._longmemeval_rows(src, max_context_chars=0)
+        gold = rows[0]["gold_evidence"]
+        # Three turns → three gold entries; not one concatenated entry.
+        assert len(gold) == 3
+        assert "turn one content" in gold
+        assert "turn two content" in gold
+        assert "turn three content" in gold
 
     def test_longmemeval_without_answer_sessions_emits_empty_gold(self, tmp_path: Path):
         # Defensive: source variants without answer_session_ids should

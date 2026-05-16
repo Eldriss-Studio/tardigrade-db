@@ -287,15 +287,19 @@ def _render_longmemeval_sessions(sessions: Any) -> str:
 
 
 def _longmemeval_gold_evidence(entry: dict[str, Any]) -> list[str]:
-    """Concatenate the turn texts of every answer session in ``entry``.
+    """Per-turn gold from every answer session in ``entry``.
 
-    LongMemEval marks the relevant session(s) for each question via
-    ``answer_session_ids``. We map those IDs to positions in
-    ``haystack_session_ids`` to pick the matching ``haystack_sessions``
-    slot. Returns one combined string per answer session — chunkers
-    split context on session boundaries so a per-session granularity
-    matches retrieval granularity. Empty when the entry lacks the
-    fields (oracle dump variants).
+    LongMemEval marks the relevant session(s) via
+    ``answer_session_ids``. We map those IDs to ``haystack_sessions``
+    positions and emit **one gold entry per turn** in those sessions,
+    not one entry per session.
+
+    Per-turn granularity matters because the chunker splits sessions
+    into ~600-char chunks. A per-session-joined gold (often 2-5 KB)
+    is never a substring of a single chunk — smoke #88 measured
+    recall@10 = 0/30 on LongMemEval before this fix because the
+    full-session gold strings were too long to match. Per-turn gold
+    (typically 50-300 chars) fits inside a single chunk.
     """
     answer_ids = entry.get("answer_session_ids")
     haystack_ids = entry.get("haystack_session_ids")
@@ -313,15 +317,12 @@ def _longmemeval_gold_evidence(entry: dict[str, Any]) -> list[str]:
         session = haystack_sessions[pos]
         if not isinstance(session, list):
             continue
-        turn_texts: list[str] = []
         for turn in session:
             if not isinstance(turn, dict):
                 continue
             content = _normalize_text(turn.get("content"))
             if content:
-                turn_texts.append(content)
-        if turn_texts:
-            gold.append("\n".join(turn_texts))
+                gold.append(content)
     return gold
 
 
