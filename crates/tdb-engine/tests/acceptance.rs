@@ -3019,6 +3019,44 @@ fn test_engine_status_reflects_current_state() {
     assert!(status.slb_occupancy > 0);
 }
 
+/// ATDD (Track A — A2.3): status surfaces footprint fields used by the
+/// `positioning/latency_first.md` doc — `arena_bytes` (sum of segment
+/// file sizes) and `arena_bytes_per_cell` (per-cell average, derived).
+#[test]
+fn test_engine_status_reports_arena_footprint() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(dir.path()).unwrap();
+
+    let empty = engine.status();
+    assert_eq!(empty.cell_count, 0);
+    // Per-cell average is 0 when there are no cells (guard against div-by-zero).
+    assert_eq!(empty.arena_bytes_per_cell, 0);
+
+    let key = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
+    engine
+        .mem_write_pack(&KVPack {
+            id: 0,
+            owner: 1,
+            retrieval_key: key.clone(),
+            layers: vec![KVLayerPayload { layer_idx: 0, data: vec![1.0; 16] }],
+            salience: 80.0,
+            text: Some("Test fact for footprint".to_owned()),
+        })
+        .unwrap();
+
+    let after = engine.status();
+    assert!(after.cell_count > 0);
+    // Arena footprint must grow once at least one pack is written.
+    assert!(
+        after.arena_bytes > empty.arena_bytes,
+        "arena_bytes did not grow after write: before={} after={}",
+        empty.arena_bytes,
+        after.arena_bytes,
+    );
+    // Per-cell average must equal arena_bytes / cell_count by construction.
+    assert_eq!(after.arena_bytes_per_cell, after.arena_bytes / after.cell_count as u64);
+}
+
 // ── Multi-Agent acceptance tests (P3.3) ───────────────────────────────────
 
 const AGENT_ALPHA: u64 = 100;

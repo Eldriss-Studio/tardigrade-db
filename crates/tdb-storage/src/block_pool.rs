@@ -171,6 +171,16 @@ impl BlockPool {
         self.index.len()
     }
 
+    /// Total on-disk bytes across every segment file in this pool.
+    ///
+    /// Used by `EngineStatus::arena_bytes` for footprint reporting. Sums
+    /// the active segment plus all sealed segments; does not subtract
+    /// space reclaimable by compaction (call `compact()` first if you
+    /// want a tight figure).
+    pub fn arena_bytes(&self) -> u64 {
+        self.segments.iter().map(Segment::size).sum()
+    }
+
     /// Iterate over all persisted cell IDs (sorted, from the in-memory index).
     /// Used by `Engine::open()` to rebuild derived state from disk (Memento pattern).
     pub fn iter_cell_ids(&self) -> impl Iterator<Item = CellId> + '_ {

@@ -155,6 +155,13 @@ pub struct EngineStatus {
     pub pipeline_stages: usize,
     pub governance_entries: usize,
     pub trace_edges: usize,
+    /// Total on-disk bytes across all storage segments (active + sealed).
+    /// Surfaces engine footprint for the `positioning/latency_first.md`
+    /// claims and for the bench harness's footprint reporter.
+    pub arena_bytes: u64,
+    /// Derived: `arena_bytes / cell_count`, or 0 when `cell_count == 0`.
+    /// Pre-computed so callers don't replicate the div-by-zero guard.
+    pub arena_bytes_per_cell: u64,
 }
 
 /// A single write request for batch operations (Batch Command pattern).
@@ -867,8 +874,11 @@ impl Engine {
 
     /// Snapshot of engine state for monitoring and diagnostics.
     pub fn status(&self) -> EngineStatus {
+        let cell_count = self.pool.cell_count();
+        let arena_bytes = self.pool.arena_bytes();
+        let arena_bytes_per_cell = if cell_count > 0 { arena_bytes / cell_count as u64 } else { 0 };
         EngineStatus {
-            cell_count: self.pool.cell_count(),
+            cell_count,
             pack_count: self.pack_directory.len(),
             segment_count: self.pool.segment_count(),
             slb_occupancy: self.slb.len(),
@@ -877,6 +887,8 @@ impl Engine {
             pipeline_stages: self.pipeline.stage_count(),
             governance_entries: self.governance.len(),
             trace_edges: self.trace.edge_count(),
+            arena_bytes,
+            arena_bytes_per_cell,
         }
     }
 

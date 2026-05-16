@@ -445,7 +445,7 @@ impl Engine {
     ///
     /// Returns a dict with keys: `cell_count`, `pack_count`, `segment_count`,
     /// `slb_occupancy`, `slb_capacity`, `vamana_active`, `pipeline_stages`,
-    /// `governance_entries`, `trace_edges`.
+    /// `governance_entries`, `trace_edges`, `arena_bytes`, `arena_bytes_per_cell`.
     fn status(&self, py: Python<'_>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let s = lock_engine(&self.inner)?.status();
         let dict = pyo3::types::PyDict::new(py);
@@ -458,6 +458,8 @@ impl Engine {
         dict.set_item("pipeline_stages", s.pipeline_stages)?;
         dict.set_item("governance_entries", s.governance_entries)?;
         dict.set_item("trace_edges", s.trace_edges)?;
+        dict.set_item("arena_bytes", s.arena_bytes)?;
+        dict.set_item("arena_bytes_per_cell", s.arena_bytes_per_cell)?;
         Ok(dict.into_any().unbind())
     }
 
