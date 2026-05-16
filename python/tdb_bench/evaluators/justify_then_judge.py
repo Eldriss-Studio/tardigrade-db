@@ -61,7 +61,14 @@ JUDGE_MAX_TOKENS = 60
 # Bump when the template body changes so prior cached responses
 # invalidate naturally. Format `v{N}-{ISO-date}`.
 JUSTIFY_TEMPLATE_VERSION = "v1-2026-05-16"
-JUDGE_WITH_JUSTIFICATION_TEMPLATE_VERSION = "v1-2026-05-16"
+# v2 (2026-05-16) — the judge was treating the reasoning trace as
+# scoring evidence: when the trace said "evidence doesn't support
+# the answer", the judge returned score=0.0 even on exact GT
+# matches like Answer="United Airlines." vs GT="United Airlines".
+# Verified by isolated reproduction. The new template explicitly
+# scopes the score to answer-vs-ground-truth equivalence and uses
+# the trace only to break ties on paraphrase / partial-match cases.
+JUDGE_WITH_JUSTIFICATION_TEMPLATE_VERSION = "v2-2026-05-16"
 
 # ScoreResult.score >= this → judgment="llm_pass". Mirrors the
 # threshold used by LLMGatedEvaluator so the two pipelines produce
@@ -113,8 +120,21 @@ class JustifyPromptBuilder:
 
 _JUDGE_WITH_JUSTIFICATION_TEMPLATE = (
     'Score answer correctness from 0.0 to 1.0 as JSON {{"score": number}}.\n'
-    "Use the reasoning trace as an aid; the score is on the answer vs the "
-    "ground truth, not the trace.\n\n"
+    "\n"
+    "Rules (apply in order):\n"
+    "1. If the answer is an exact match, abbreviation, or paraphrase of the "
+    "ground truth, score 1.0 — REGARDLESS of whether the reasoning trace "
+    "could derive it from evidence. The trace's complaints about evidence "
+    "are not relevant when the answer itself is correct.\n"
+    "2. If the answer captures the substance of the ground truth but with "
+    "additional or missing detail, score 0.6-0.9 depending on completeness.\n"
+    "3. If the answer is factually wrong (different entity, opposite "
+    "meaning), score 0.0.\n"
+    "4. If the answer is 'I don't know' or similar refusal, score 0.0.\n"
+    "5. Use the reasoning trace only to break ties on partial matches — "
+    "e.g. when the answer paraphrases the GT and the trace clarifies which "
+    "specific entity is meant.\n"
+    "\n"
     "Question: {question}\n"
     "Ground truth: {ground_truth}\n"
     "Answer: {answer}\n"
