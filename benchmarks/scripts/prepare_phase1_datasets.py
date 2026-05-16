@@ -239,6 +239,13 @@ def _locomo_rows(
                 if isinstance(cat, int)
                 else _UNKNOWN_CATEGORY
             )
+            # gold_evidence: dated turn texts for the retriever to
+            # surface. Powers the audit-resistant retrieval-only
+            # metrics (#88) computed in parallel with the LLM-Judge
+            # score. Empty list when source carries no evidence
+            # references — runner skips such rows from retrieval
+            # averages.
+            gold_evidence = list(dict.fromkeys(evidence_lines))
             rows.append(
                 {
                     "id": f"locomo-{sample_id}-q{idx:04d}",
@@ -247,6 +254,7 @@ def _locomo_rows(
                     "question": question,
                     "ground_truth": answer,
                     "category": category_name,
+                    "gold_evidence": gold_evidence,
                 }
             )
     return rows
@@ -271,6 +279,45 @@ def _render_longmemeval_sessions(sessions: Any) -> str:
     return "\n".join(chunks).strip()
 
 
+def _longmemeval_gold_evidence(entry: dict[str, Any]) -> list[str]:
+    """Concatenate the turn texts of every answer session in ``entry``.
+
+    LongMemEval marks the relevant session(s) for each question via
+    ``answer_session_ids``. We map those IDs to positions in
+    ``haystack_session_ids`` to pick the matching ``haystack_sessions``
+    slot. Returns one combined string per answer session — chunkers
+    split context on session boundaries so a per-session granularity
+    matches retrieval granularity. Empty when the entry lacks the
+    fields (oracle dump variants).
+    """
+    answer_ids = entry.get("answer_session_ids")
+    haystack_ids = entry.get("haystack_session_ids")
+    haystack_sessions = entry.get("haystack_sessions")
+    if not isinstance(answer_ids, list) or not isinstance(haystack_ids, list):
+        return []
+    if not isinstance(haystack_sessions, list):
+        return []
+    id_to_pos = {sid: i for i, sid in enumerate(haystack_ids)}
+    gold: list[str] = []
+    for sid in answer_ids:
+        pos = id_to_pos.get(sid)
+        if pos is None or pos >= len(haystack_sessions):
+            continue
+        session = haystack_sessions[pos]
+        if not isinstance(session, list):
+            continue
+        turn_texts: list[str] = []
+        for turn in session:
+            if not isinstance(turn, dict):
+                continue
+            content = _normalize_text(turn.get("content"))
+            if content:
+                turn_texts.append(content)
+        if turn_texts:
+            gold.append("\n".join(turn_texts))
+    return gold
+
+
 def _longmemeval_rows(path: Path, max_context_chars: int) -> list[dict[str, str]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     rows: list[dict[str, str]] = []
@@ -287,6 +334,7 @@ def _longmemeval_rows(path: Path, max_context_chars: int) -> list[dict[str, str]
         if not qid or not question or not answer or not context:
             continue
         category = _normalize_text(entry.get("question_type")) or _UNKNOWN_CATEGORY
+        gold_evidence = _longmemeval_gold_evidence(entry)
         rows.append(
             {
                 "id": f"longmemeval-{qid}",
@@ -295,6 +343,7 @@ def _longmemeval_rows(path: Path, max_context_chars: int) -> list[dict[str, str]
                 "question": question,
                 "ground_truth": answer,
                 "category": category,
+                "gold_evidence": gold_evidence,
             }
         )
     return rows

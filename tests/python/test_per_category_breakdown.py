@@ -104,6 +104,64 @@ class TestPerCategoryBreakdownGrouping:
         assert BenchmarkRunner._per_category_breakdown([], _SYS) == {}
 
 
+class TestRetrievalAggregateAttachedToSystemsPayload:
+    """Pin the audit-resistant retrieval headline (#88) plumbing:
+    the system payload carries a ``retrieval`` block with
+    mean(recall@k) and mean(ndcg@k), skipping gold-less rows."""
+
+    @staticmethod
+    def _row_with_metrics(score: float, metrics: dict | None) -> dict:
+        return {
+            "item_id": f"r-{score}",
+            "dataset": "locomo",
+            "category": "single_hop",
+            "system": _SYS,
+            "status": "ok",
+            "score": score,
+            "retrieval_metrics": metrics,
+        }
+
+    def test_retrieval_aggregate_excludes_nan_rows(self):
+        from tdb_bench.runner import BenchmarkRunner
+        items = [
+            self._row_with_metrics(
+                1.0, {"recall@5": 1.0, "ndcg@5": 1.0},
+            ),
+            self._row_with_metrics(
+                1.0, {"recall@5": 0.0, "ndcg@5": 0.0},
+            ),
+            self._row_with_metrics(
+                1.0, {"recall@5": float("nan"), "ndcg@5": float("nan")},
+            ),
+        ]
+        agg = BenchmarkRunner._retrieval_aggregate(items, _SYS)
+        # Two scored rows; NaN one skipped.
+        assert agg["n"] == 2
+        assert agg["recall@5"] == 0.5
+        assert agg["ndcg@5"] == 0.5
+
+    def test_retrieval_aggregate_handles_no_scored_rows(self):
+        from tdb_bench.runner import BenchmarkRunner
+        items = [
+            self._row_with_metrics(
+                1.0, {"recall@5": float("nan"), "ndcg@5": float("nan")},
+            ),
+        ]
+        agg = BenchmarkRunner._retrieval_aggregate(items, _SYS)
+        assert agg["n"] == 0
+
+    def test_retrieval_aggregate_filters_other_systems(self):
+        from tdb_bench.runner import BenchmarkRunner
+        items = [
+            self._row_with_metrics(1.0, {"recall@5": 1.0, "ndcg@5": 1.0}),
+            {**self._row_with_metrics(0.0, {"recall@5": 0.0, "ndcg@5": 0.0}),
+             "system": "other"},
+        ]
+        agg = BenchmarkRunner._retrieval_aggregate(items, _SYS)
+        assert agg["n"] == 1
+        assert agg["recall@5"] == 1.0
+
+
 class TestPerCategoryBreakdownAttachedToSystemsPayload:
     """End-to-end check that `_aggregates` wires `by_category` into
     each system's payload."""

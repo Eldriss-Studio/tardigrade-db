@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -23,6 +23,11 @@ class BenchmarkItem:
     question: str
     ground_truth: str
     category: str = "unknown"
+    # Gold evidence snippets the retriever is supposed to surface.
+    # Powers the audit-resistant retrieval-only metrics (#88). Empty
+    # list when the source dataset has no evidence references for
+    # this item — the runner skips such rows from retrieval averages.
+    gold_evidence: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
