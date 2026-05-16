@@ -39,6 +39,7 @@ class JsonlDatasetAdapter(DatasetAdapter):
                         context=str(raw["context"]),
                         question=str(raw["question"]),
                         ground_truth=str(raw["ground_truth"]),
+                        category=str(raw.get("category", "unknown")),
                     )
                 )
                 if max_items and len(items) >= max_items:

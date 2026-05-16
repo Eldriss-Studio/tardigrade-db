@@ -106,6 +106,20 @@ def _session_index_from_dia_id(dia_id: Any) -> int | None:
 DEFAULT_LOCOMO_EXCLUDE_CATEGORIES: frozenset[int] = frozenset({5})
 
 
+# LoCoMo numeric categories → human-readable names used in the runner's
+# per-category breakdown. Source: LoCoMo paper §3 + dial481 audit. The
+# leaderboard convention is to slice scores by these names so single-hop
+# (easy retrieval) doesn't mask multi-hop (composition) regressions.
+_LOCOMO_CATEGORY_NAMES: dict[int, str] = {
+    1: "single_hop",
+    2: "multi_hop",
+    3: "temporal",
+    4: "open_domain",
+    5: "adversarial",
+}
+_UNKNOWN_CATEGORY = "unknown"
+
+
 def _locomo_rows(
     path: Path,
     context_mode: str,
@@ -220,6 +234,11 @@ def _locomo_rows(
             if not question or not answer or not context:
                 continue
 
+            category_name = (
+                _LOCOMO_CATEGORY_NAMES.get(cat, _UNKNOWN_CATEGORY)
+                if isinstance(cat, int)
+                else _UNKNOWN_CATEGORY
+            )
             rows.append(
                 {
                     "id": f"locomo-{sample_id}-q{idx:04d}",
@@ -227,6 +246,7 @@ def _locomo_rows(
                     "context": context,
                     "question": question,
                     "ground_truth": answer,
+                    "category": category_name,
                 }
             )
     return rows
@@ -266,6 +286,7 @@ def _longmemeval_rows(path: Path, max_context_chars: int) -> list[dict[str, str]
             context = context[:max_context_chars]
         if not qid or not question or not answer or not context:
             continue
+        category = _normalize_text(entry.get("question_type")) or _UNKNOWN_CATEGORY
         rows.append(
             {
                 "id": f"longmemeval-{qid}",
@@ -273,6 +294,7 @@ def _longmemeval_rows(path: Path, max_context_chars: int) -> list[dict[str, str]
                 "context": context,
                 "question": question,
                 "ground_truth": answer,
+                "category": category,
             }
         )
     return rows

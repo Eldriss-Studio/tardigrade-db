@@ -181,6 +181,7 @@ class BenchmarkRunner:
                         {
                             "item_id": f"{name}-dataset-unavailable",
                             "dataset": name,
+                            "category": "unknown",
                             "system": system_name,
                             "status": "skipped",
                             "latency_ms": 0.0,
@@ -348,6 +349,7 @@ class BenchmarkRunner:
                 {
                     "item_id": item.item_id,
                     "dataset": item.dataset,
+                    "category": getattr(item, "category", "unknown"),
                     "system": system_name,
                     "status": "failed",
                     "latency_ms": 0.0,
@@ -371,6 +373,7 @@ class BenchmarkRunner:
                 {
                     "item_id": item.item_id,
                     "dataset": item.dataset,
+                    "category": getattr(item, "category", "unknown"),
                     "system": system_name,
                     "status": "failed",
                     "latency_ms": 0.0,
@@ -389,6 +392,7 @@ class BenchmarkRunner:
         row = {
             "item_id": item.item_id,
             "dataset": item.dataset,
+            "category": getattr(item, "category", "unknown"),
             "system": system_name,
             "status": q.status,
             "latency_ms": round(float(q.latency_ms), 6),
@@ -488,9 +492,44 @@ class BenchmarkRunner:
                 "ok": int(per_system_status[system].get("ok", 0)),
                 "skipped": int(per_system_status[system].get("skipped", 0)),
                 "failed": int(per_system_status[system].get("failed", 0)),
+                "by_category": self._per_category_breakdown(items, system),
             }
 
         return {"systems": systems_payload}
+
+    @staticmethod
+    def _per_category_breakdown(
+        items: list[dict[str, Any]], system: str
+    ) -> dict[str, dict[str, Any]]:
+        """Group ``ok`` items for ``system`` by ``(dataset, category)``.
+
+        Returns a dict keyed by ``"{dataset}/{category}"`` so a single
+        system's payload can carry both LoCoMo's ``single_hop``…
+        ``adversarial`` slices and LongMemEval's ``temporal-reasoning``,
+        ``multi-session``, … slices side by side. The key includes the
+        dataset prefix because LongMemEval's ``temporal-reasoning`` and
+        LoCoMo's ``temporal`` measure different things and must not be
+        merged. Phase 1B audit 2026-05-16 #89.
+        """
+        buckets: dict[str, list[float]] = defaultdict(list)
+        all_for_system: dict[str, int] = defaultdict(int)
+        for row in items:
+            if row.get("system") != system:
+                continue
+            key = f"{row.get('dataset', 'unknown')}/{row.get('category', 'unknown')}"
+            all_for_system[key] += 1
+            if row.get("status") == "ok":
+                buckets[key].append(float(row.get("score", 0.0)))
+        out: dict[str, dict[str, Any]] = {}
+        for key, count in sorted(all_for_system.items()):
+            scores = buckets.get(key, [])
+            avg = sum(scores) / len(scores) if scores else 0.0
+            out[key] = {
+                "n": count,
+                "ok": len(scores),
+                "avg_score": round(avg, 6),
+            }
+        return out
 
     def _status_summary(self, items: list[dict[str, Any]]) -> dict[str, int]:
         summary: dict[str, int] = defaultdict(int)
