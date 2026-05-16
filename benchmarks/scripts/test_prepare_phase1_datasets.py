@@ -194,6 +194,92 @@ class TestMalformedDiaIdHandledGracefully:
         assert "real evidence" in rows[0]["context"]
 
 
+class TestCategoryFilter:
+    """LoCoMo Cat-5 is adversarial (unanswerable). Every leaderboard
+    system filters it because including it conflates retrieval
+    quality with refusal calibration (different abilities). Default
+    excludes Cat 5."""
+
+    def test_default_excludes_category_5(self, tmp_path: Path):
+        payload = [
+            {
+                "sample_id": "cat-mix",
+                "conversation": {
+                    "speaker_a": "A",
+                    "speaker_b": "B",
+                    "session_1_date_time": _DATE_S1,
+                    "session_1": [
+                        {"dia_id": "D1:1", "speaker": "A", "text": "Some text."}
+                    ],
+                },
+                "qa": [
+                    {"question": "Q1", "answer": "a", "evidence": ["D1:1"], "category": 1},
+                    {"question": "Q2", "answer": "b", "evidence": ["D1:1"], "category": 4},
+                    {"question": "Q5", "answer": "c", "evidence": ["D1:1"], "category": 5},
+                ],
+            }
+        ]
+        src = tmp_path / "cats.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+
+        rows = prep._locomo_rows(src, context_mode="evidence")
+        # Default excludes cat=5; keeps cats 1, 4.
+        assert len(rows) == 2
+        assert all("Q5" != r["question"] for r in rows)
+
+    def test_explicit_exclude_keeps_cat_5(self, tmp_path: Path):
+        payload = [
+            {
+                "sample_id": "cat-mix-include",
+                "conversation": {
+                    "speaker_a": "A",
+                    "speaker_b": "B",
+                    "session_1_date_time": _DATE_S1,
+                    "session_1": [
+                        {"dia_id": "D1:1", "speaker": "A", "text": "Some text."}
+                    ],
+                },
+                "qa": [
+                    {"question": "Q1", "answer": "a", "evidence": ["D1:1"], "category": 1},
+                    {"question": "Q5", "answer": "c", "evidence": ["D1:1"], "category": 5},
+                ],
+            }
+        ]
+        src = tmp_path / "include.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+
+        # Override default — exclude nothing.
+        rows = prep._locomo_rows(src, context_mode="evidence", exclude_categories=set())
+        assert len(rows) == 2
+
+    def test_explicit_exclude_arbitrary_categories(self, tmp_path: Path):
+        payload = [
+            {
+                "sample_id": "cat-arbitrary",
+                "conversation": {
+                    "speaker_a": "A",
+                    "speaker_b": "B",
+                    "session_1_date_time": _DATE_S1,
+                    "session_1": [
+                        {"dia_id": "D1:1", "speaker": "A", "text": "Some text."}
+                    ],
+                },
+                "qa": [
+                    {"question": "Q1", "answer": "a", "evidence": ["D1:1"], "category": 1},
+                    {"question": "Q3", "answer": "b", "evidence": ["D1:1"], "category": 3},
+                    {"question": "Q5", "answer": "c", "evidence": ["D1:1"], "category": 5},
+                ],
+            }
+        ]
+        src = tmp_path / "arb.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+
+        # Drop cats 3 and 5 specifically.
+        rows = prep._locomo_rows(src, context_mode="evidence", exclude_categories={3, 5})
+        assert len(rows) == 1
+        assert rows[0]["question"] == "Q1"
+
+
 class TestSessionWithoutDateStillBuilds:
     def test_missing_session_date_falls_back_to_undated_evidence(self, tmp_path: Path):
         # Defensive: if a session_N_date_time key is absent for some
