@@ -122,7 +122,6 @@ def _locomo_rows(
 
         dia_to_text: dict[Any, str] = {}
         dia_to_session: dict[Any, int] = {}
-        full_turns: list[str] = []
         session_keys = sorted(
             [k for k in conv.keys() if k.startswith("session_") and not k.endswith("_date_time")],
             key=lambda x: int(x.split("_")[1]),
@@ -142,11 +141,24 @@ def _locomo_rows(
             if date:
                 session_dates[idx] = date
 
+        # Build full-context as session blocks: each block opens with
+        # `[session N — <date>]` (or `[session N]` when the date is
+        # missing), followed by speaker-prefixed turns. The header makes
+        # session boundaries explicit and gives the answerer LLM the
+        # temporal anchor it needs for date-resolving questions.
+        # Phase 1B audit 2026-05-16 #93.
+        session_blocks: list[str] = []
         for session_key in session_keys:
             session_idx = int(session_key.split("_")[1])
             turns = conv.get(session_key, [])
             if not isinstance(turns, list):
                 continue
+            block_lines: list[str] = []
+            date = session_dates.get(session_idx)
+            header = (
+                f"[session {session_idx} — {date}]" if date else f"[session {session_idx}]"
+            )
+            block_lines.append(header)
             for turn in turns:
                 if not isinstance(turn, dict):
                     continue
@@ -163,9 +175,11 @@ def _locomo_rows(
                     # (matters for legacy int dia_ids that don't encode session).
                     parsed_session = _session_index_from_dia_id(dia_id)
                     dia_to_session[dia_id] = parsed_session if parsed_session is not None else session_idx
-                full_turns.append(f"{speaker}: {text}")
+                block_lines.append(f"{speaker}: {text}")
+            if len(block_lines) > 1:
+                session_blocks.append("\n".join(block_lines))
 
-        full_context = "\n".join(full_turns).strip()
+        full_context = "\n\n".join(session_blocks).strip()
         qa_rows = sample.get("qa", [])
         for idx, qa in enumerate(qa_rows):
             if not isinstance(qa, dict):

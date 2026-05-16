@@ -149,17 +149,70 @@ class TestEvidenceOrderAndDedupePreserved:
         assert rows[0]["context"].count("alpha") == 1
 
 
-class TestFullModeUnaffected:
-    def test_full_context_mode_does_not_change_format(self, tmp_path: Path):
-        # The fix only targets evidence mode; --locomo-context=full keeps
-        # its existing speaker-prefixed joined-turns format.
+class TestFullModeCarriesSessionDates:
+    """Full-context mode must inject session-date headers so the
+    answerer LLM can resolve absolute-date temporal questions against
+    relative references in the transcript. Mirrors evidence-mode
+    behavior pinned in TestEvidenceCarriesSessionDate."""
+
+    def test_full_context_includes_session_date_header_per_session(self, tmp_path: Path):
         src = _synthetic_locomo(tmp_path)
         rows = prep._locomo_rows(src, context_mode="full")
 
-        # All speaker lines appear in the joined transcript.
+        # Both sessions' dates appear in the full transcript.
+        for row in rows:
+            assert _DATE_S1 in row["context"]
+            assert _DATE_S2 in row["context"]
+
+    def test_full_context_preserves_speaker_prefixed_turns(self, tmp_path: Path):
+        # Date headers augment the transcript; speaker prefixes remain.
+        src = _synthetic_locomo(tmp_path)
+        rows = prep._locomo_rows(src, context_mode="full")
         for row in rows:
             assert "Caroline:" in row["context"]
             assert "Melanie:" in row["context"]
+
+    def test_full_context_orders_session_dates_before_turns(self, tmp_path: Path):
+        # The session-1 date must appear before the session-1 turn text
+        # so the LLM reads the date as the temporal anchor for the
+        # turns below it.
+        src = _synthetic_locomo(tmp_path)
+        rows = prep._locomo_rows(src, context_mode="full")
+        ctx = rows[0]["context"]
+        date_idx = ctx.find(_DATE_S1)
+        turn_idx = ctx.find("LGBTQ support group")
+        assert date_idx != -1 and turn_idx != -1
+        assert date_idx < turn_idx
+
+    def test_full_context_falls_back_when_session_date_missing(self, tmp_path: Path):
+        # Defensive: a session without a date_time key must still ingest.
+        payload = [
+            {
+                "sample_id": "nodate-full",
+                "conversation": {
+                    "speaker_a": "A",
+                    "speaker_b": "B",
+                    # session_1_date_time intentionally omitted.
+                    "session_1": [
+                        {"dia_id": "D1:1", "speaker": "A", "text": "undated turn"},
+                    ],
+                },
+                "qa": [
+                    {
+                        "question": "Q?",
+                        "answer": "undated turn",
+                        "evidence": ["D1:1"],
+                    }
+                ],
+            }
+        ]
+        src = tmp_path / "nodate_full.json"
+        src.write_text(json.dumps(payload), encoding="utf-8")
+
+        rows = prep._locomo_rows(src, context_mode="full")
+        assert len(rows) == 1
+        assert "undated turn" in rows[0]["context"]
+        assert "A:" in rows[0]["context"]
 
 
 class TestMalformedDiaIdHandledGracefully:
