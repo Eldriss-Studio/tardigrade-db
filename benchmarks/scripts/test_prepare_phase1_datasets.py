@@ -424,18 +424,48 @@ class TestGoldEvidenceEmittedInRow:
     retrieval-only metrics (#88, ENGRAM-style audit) in parallel with
     the LLM-Judge score."""
 
-    def test_locomo_gold_evidence_is_list_of_dated_turn_texts(self, tmp_path: Path):
+    def test_locomo_gold_evidence_is_raw_turn_text(self, tmp_path: Path):
+        # Gold must be the *raw* turn text — no `[date]` prefix, no
+        # `Speaker:` prefix. Both evidence-mode and full-mode contexts
+        # wrap turns with different metadata (date-bracket vs
+        # session-header + speaker), so a wrapped gold is never a
+        # substring of one of the two modes. Raw turn text is a
+        # substring of both. Bug found in smoke #88 2026-05-16:
+        # retrieval_metrics=0.0 across all rows because gold and chunk
+        # formats diverged in full-conv mode.
         src = _synthetic_locomo(tmp_path)
         rows = prep._locomo_rows(src, context_mode="evidence")
-        # Q1: evidence ["D1:1"]; turn text "I went to a LGBTQ support
-        # group yesterday and it was powerful." with session date.
         assert isinstance(rows[0]["gold_evidence"], list)
         assert len(rows[0]["gold_evidence"]) == 1
-        assert "LGBTQ support group" in rows[0]["gold_evidence"][0]
-        # Date is prefixed onto gold snippets too — keeps the gold and
-        # the retrieved chunks in the same vocabulary for substring
-        # match.
-        assert _DATE_S1 in rows[0]["gold_evidence"][0]
+        gold = rows[0]["gold_evidence"][0]
+        assert "LGBTQ support group" in gold
+        # No metadata wrapper.
+        assert not gold.startswith("[")
+        assert not gold.startswith("Caroline:")
+
+    def test_locomo_gold_is_substring_of_evidence_mode_context(self, tmp_path: Path):
+        # Behaviour proof — the gold text must appear verbatim inside
+        # the row's `context` so substring-based retrieval metrics
+        # have a hope of matching.
+        src = _synthetic_locomo(tmp_path)
+        rows = prep._locomo_rows(src, context_mode="evidence")
+        for row in rows:
+            for gold in row["gold_evidence"]:
+                assert gold in row["context"], (
+                    f"gold {gold!r} not substring of context "
+                    f"{row['context'][:200]!r}"
+                )
+
+    def test_locomo_gold_is_substring_of_full_mode_context(self, tmp_path: Path):
+        # Same invariant for full-conv mode — different context shape,
+        # same substring requirement.
+        src = _synthetic_locomo(tmp_path)
+        rows = prep._locomo_rows(src, context_mode="full")
+        for row in rows:
+            for gold in row["gold_evidence"]:
+                assert gold in row["context"], (
+                    f"gold {gold!r} not substring of full-mode context"
+                )
 
     def test_locomo_full_mode_still_emits_gold_evidence(self, tmp_path: Path):
         # Full-context mode preserves gold-evidence so the retrieval
@@ -446,6 +476,8 @@ class TestGoldEvidenceEmittedInRow:
         for row in rows:
             assert "gold_evidence" in row
             assert len(row["gold_evidence"]) >= 1
+        # And the same raw-turn-text shape (no metadata wrapper).
+        assert not rows[0]["gold_evidence"][0].startswith("[")
 
     def test_longmemeval_gold_evidence_from_answer_sessions(self, tmp_path: Path):
         payload = [
