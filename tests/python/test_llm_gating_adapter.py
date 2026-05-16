@@ -233,17 +233,18 @@ class TestRetrieveThenReadDecoratorEvidenceCapBothSides:
         assert result.evidence == [f"chunk-{i}" for i in range(5)]
 
     def test_prompt_evidence_capped_to_prompt_top_k(self):
-        # LLM_GATE_PROMPT_TOP_K = 10 (default).
-        evidence = [f"chunk-{i}" for i in range(25)]
+        from tdb_bench.answerers.constants import LLM_GATE_PROMPT_TOP_K
+
+        evidence = [f"chunk-{i}" for i in range(LLM_GATE_PROMPT_TOP_K + 15)]
         inner = _StubAdapter(evidence=evidence)
         gen = MockAnswerGenerator(canned="x")
         outer = RetrieveThenReadAdapter(inner=inner, generator=gen)
 
         outer.query(_item(), top_k=5)
 
-        for i in range(10):
+        for i in range(LLM_GATE_PROMPT_TOP_K):
             assert f"chunk-{i}" in gen.last_prompt
-        for i in range(10, 25):
+        for i in range(LLM_GATE_PROMPT_TOP_K, LLM_GATE_PROMPT_TOP_K + 15):
             assert f"chunk-{i}" not in gen.last_prompt
 
 

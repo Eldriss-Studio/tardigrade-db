@@ -53,13 +53,20 @@ LLM_GATE_TEMPERATURE = 0.0
 # Override per-run via TDB_LLM_GATE_INNER_TOP_K.
 LLM_GATE_INNER_TOP_K = 25
 
-# How many of the retrieved chunks reach the LLM prompt. 10 picked
-# because (a) LoCoMo questions typically need 1-3 supporting cells
-# and 10 gives room for misranking, (b) at ~500 tokens per chunk this
-# stays inside DeepSeek's 64K context with comfortable headroom.
+# How many of the retrieved chunks reach the LLM prompt.
+#
+# Bumped 10 → 20 (Phase 1B audit 2026-05-16 #94 follow-up). Smoke #3
+# diagnosed that LoCoMo evidence-marked gold ≠ answer-bearing text.
+# The retriever surfaces the marked-gold turn at R@1=1.00 but the
+# literal answer often lives in a different turn (e.g. evidence
+# turn says "I've known these friends for 4 years"; the answer
+# "single" lives elsewhere). At top-10 the answer-bearing turn often
+# misses the prompt window even when retrieval is technically
+# perfect. Top-20 doubles the LLM's view at the cost of ~12 KB of
+# prompt evidence, well inside DeepSeek's 64K context.
 #
 # Override per-run via TDB_LLM_GATE_PROMPT_TOP_K.
-LLM_GATE_PROMPT_TOP_K = 10
+LLM_GATE_PROMPT_TOP_K = 20
 
 # Back-compat alias for one release. Existing callers continue to
 # work; new code should import LLM_GATE_PROMPT_TOP_K directly because
