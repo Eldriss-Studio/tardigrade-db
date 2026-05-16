@@ -44,14 +44,14 @@ cat > target/bench-llmgated-smoke50-config.json <<'JSON'
       "datasets": [
         {
           "name": "locomo",
-          "revision": "phase1_oracle",
-          "path": "benchmarks/datasets/phase1_oracle/locomo_phase1.jsonl",
+          "revision": "phase1_oracle_dated",
+          "path": "benchmarks/datasets/phase1_oracle_dated/locomo_phase1.jsonl",
           "max_items": 50
         },
         {
           "name": "longmemeval",
-          "revision": "phase1_oracle",
-          "path": "benchmarks/datasets/phase1_oracle/longmemeval_phase1.jsonl",
+          "revision": "phase1_oracle_dated",
+          "path": "benchmarks/datasets/phase1_oracle_dated/longmemeval_phase1.jsonl",
           "max_items": 50
         }
       ],
