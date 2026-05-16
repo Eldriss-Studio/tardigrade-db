@@ -1,0 +1,71 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="`PerChannelScaleCalibrator` — accumulates the per-dimension scale vector σ used to neutralize activation outliers before INT8 quantization."><title>tdb_retrieval::quantization::calibrator - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="tdb_retrieval" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module calibrator</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../tdb_retrieval/index.html">tdb_<wbr>retrieval</a><span class="version">0.1.5</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module calibrator</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#the-problem-σ-solves" title="The problem σ solves">The problem σ solves</a></li><li><a href="#api-contract" title="API contract">API contract</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#constants" title="Constants">Constants</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In tdb_<wbr>retrieval::<wbr>quantization</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">tdb_retrieval</a>::<wbr><a href="../index.html">quantization</a></div><h1>Module <span>calibrator</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/tdb_retrieval/quantization/calibrator.rs.html#1-264">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p><code>PerChannelScaleCalibrator</code> — accumulates the per-dimension scale
+vector σ used to neutralize activation outliers before INT8
+quantization.</p>
+<h2 id="the-problem-σ-solves"><a class="doc-anchor" href="#the-problem-σ-solves">§</a>The problem σ solves</h2>
+<p>Group-wise INT8 quantization (group of 32 floats, one f32 scale per
+group, signed 8-bit values) is sensitive to per-group <code>abs_max</code>.
+When the source data is LLM hidden states, a small number of
+channels carry magnitudes 10-100× the rest (“activation outlier
+channels”, Dettmers et al., 2022, <a href="https://arxiv.org/abs/2208.07339">arXiv:2208.07339</a>).
+In a 32-float group where one channel value is 5.0 and the other
+31 are in [-0.5, 0.5], plain group quantization sets the scale
+to <code>5.0/127 ≈ 0.039</code>. The smaller values still resolve at this
+scale — but at <em>coarser</em> widths (<code>Q4_0</code>, scale = 5.0/7 = 0.714)
+everything below ~0.36 collapses to zero.</p>
+<p>Per-channel pre-scaling (<code>SmoothQuant</code> pattern, <a href="https://arxiv.org/abs/2211.10438">Xiao et al.,
+2022</a>) sidesteps this by dividing each dim by its
+own σ[d] <em>before</em> group quantization runs. After scaling, every
+dim has comparable range across cells; no single channel
+dominates its group.</p>
+<h2 id="api-contract"><a class="doc-anchor" href="#api-contract">§</a>API contract</h2>
+<p>Calibration is <em>one-shot</em> in this implementation: feed a bounded
+window of hidden states via <a href="struct.PerChannelScaleCalibrator.html#method.observe" title="method tdb_retrieval::quantization::calibrator::PerChannelScaleCalibrator::observe"><code>PerChannelScaleCalibrator::observe</code></a>,
+then call <a href="struct.PerChannelScaleCalibrator.html#method.finalize" title="method tdb_retrieval::quantization::calibrator::PerChannelScaleCalibrator::finalize"><code>PerChannelScaleCalibrator::finalize</code></a> to obtain the σ
+vector. Further <code>observe</code> calls after finalize are no-ops
+(already pinned).</p>
+<p>σ is <code>max(|x[d]|)</code> over the observed window, floored at
+<a href="constant.PER_CHANNEL_SCALE_FLOOR.html" title="constant tdb_retrieval::quantization::calibrator::PER_CHANNEL_SCALE_FLOOR"><code>PER_CHANNEL_SCALE_FLOOR</code></a> to prevent divide-by-zero on dead
+channels.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.PerChannelScaleCalibrator.html" title="struct tdb_retrieval::quantization::calibrator::PerChannelScaleCalibrator">PerChannel<wbr>Scale<wbr>Calibrator</a></dt><dd>Accumulates <code>σ\[d\] = max(|x[d]|)</code> across a bounded window of
+observed hidden-state vectors, then freezes.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.DEFAULT_CALIBRATION_WINDOW_TOKENS.html" title="constant tdb_retrieval::quantization::calibrator::DEFAULT_CALIBRATION_WINDOW_TOKENS">DEFAULT_<wbr>CALIBRATION_<wbr>WINDOW_<wbr>TOKENS</a></dt><dd>Default number of <em>token vectors</em> (not cells) the calibrator
+accumulates before finalizing. 4096 tokens at 127 tokens/cell ≈
+32 cells — a small fraction of any realistic corpus and enough
+to capture stable activation statistics for a fixed model.</dd><dt><a class="constant" href="constant.PER_CHANNEL_SCALE_FLOOR.html" title="constant tdb_retrieval::quantization::calibrator::PER_CHANNEL_SCALE_FLOOR">PER_<wbr>CHANNEL_<wbr>SCALE_<wbr>FLOOR</a></dt><dd>Floor applied to per-channel scales to guard against
+divide-by-zero on dead (always-zero) channels. Set tight enough
+that legitimate scales are never floored, loose enough that
+dead-channel divisions stay numerically stable.</dd></dl></section></div></main></body></html>

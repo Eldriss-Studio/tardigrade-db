@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["calibrator","int8_group","per_channel_scaled","strategy"]};

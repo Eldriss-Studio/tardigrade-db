@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["attention","int8_quant","per_token","pipeline","refinement","retriever","simd_distance","slb","token_weighter"]};
+window.SIDEBAR_ITEMS = {"mod":["attention","cell_source","int8_quant","per_token","pipeline","quantization","refinement","retriever","simd_distance","slb","token_weighter"]};

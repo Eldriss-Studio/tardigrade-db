@@ -1,0 +1,71 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Retrieval-side quantization — distinct from `tdb-storage`’s archival quantization."><title>tdb_retrieval::quantization - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_retrieval" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module quantization</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_retrieval/index.html">tdb_<wbr>retrieval</a><span class="version">0.1.5</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module quantization</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#module-layout" title="Module layout">Module layout</a></li></ul><h3><a href="#reexports">Module Items</a></h3><ul class="block"><li><a href="#reexports" title="Re-exports">Re-exports</a></li><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate tdb_<wbr>retrieval</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_retrieval</a></div><h1>Module <span>quantization</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_retrieval/quantization/mod.rs.html#1-40">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Retrieval-side quantization — distinct from <code>tdb-storage</code>’s
+archival quantization.</p>
+<p><code>TardigradeDB</code> stores tokens in two places:</p>
+<ul>
+<li>
+<p><strong>Archival</strong> (<code>tdb-storage/src/quantization.rs::Q4</code>): on-disk
+representation. Aggressive 4-bit group quantization for space.
+<em>Not</em> used for retrieval scoring — <code>Q4_0</code> collapses non-outlier
+values to zero when activation outliers dominate a group
+(Dettmers 2022, “<code>LLM.int8()</code>”).</p>
+</li>
+<li>
+<p><strong>Retrieval</strong> (this module): the precision tier used at scoring
+time. <code>INT8</code> group quantization paired with a per-channel
+pre-scaling sidecar (<code>SmoothQuant</code>-for-storage pattern). Keeps
+outlier crush out of the scoring path.</p>
+</li>
+</ul>
+<p>See <code>docs/refs/external-references.md</code> §A3f for the literature
+body that gates this design (<code>LLM.int8</code>, <code>SmoothQuant</code>, <code>AWQ</code>,
+<code>ColBERTv2</code>, <code>Faiss</code> SQ8 / <code>ScaNN</code> / <code>Qdrant</code> production
+references).</p>
+<h2 id="module-layout"><a class="doc-anchor" href="#module-layout">§</a>Module layout</h2>
+<ul>
+<li><a href="calibrator/index.html" title="mod tdb_retrieval::quantization::calibrator"><code>calibrator</code></a> — <a href="calibrator/struct.PerChannelScaleCalibrator.html" title="struct tdb_retrieval::quantization::calibrator::PerChannelScaleCalibrator"><code>PerChannelScaleCalibrator</code></a>: accumulates the
+per-dimension scale vector σ from a calibration sample.</li>
+<li><a href="int8_group/index.html" title="mod tdb_retrieval::quantization::int8_group"><code>int8_group</code></a> — <a href="int8_group/struct.Int8Group32.html" title="struct tdb_retrieval::quantization::int8_group::Int8Group32"><code>Int8Group32</code></a> plain INT8 group quantizer.</li>
+<li><a href="per_channel_scaled/index.html" title="mod tdb_retrieval::quantization::per_channel_scaled"><code>per_channel_scaled</code></a> — <a href="per_channel_scaled/struct.PerChannelScaled.html" title="struct tdb_retrieval::quantization::per_channel_scaled::PerChannelScaled"><code>PerChannelScaled</code></a> decorator that
+wraps an inner strategy with calibrated per-channel σ.</li>
+</ul>
+</div></details><h2 id="reexports" class="section-header">Re-exports<a href="#reexports" class="anchor">§</a></h2><dl class="item-table reexports"><dt id="reexport.DEFAULT_CALIBRATION_WINDOW_TOKENS"><code>pub use calibrator::<a class="constant" href="calibrator/constant.DEFAULT_CALIBRATION_WINDOW_TOKENS.html" title="constant tdb_retrieval::quantization::calibrator::DEFAULT_CALIBRATION_WINDOW_TOKENS">DEFAULT_CALIBRATION_WINDOW_TOKENS</a>;</code></dt><dt id="reexport.PER_CHANNEL_SCALE_FLOOR"><code>pub use calibrator::<a class="constant" href="calibrator/constant.PER_CHANNEL_SCALE_FLOOR.html" title="constant tdb_retrieval::quantization::calibrator::PER_CHANNEL_SCALE_FLOOR">PER_CHANNEL_SCALE_FLOOR</a>;</code></dt><dt id="reexport.PerChannelScaleCalibrator"><code>pub use calibrator::<a class="struct" href="calibrator/struct.PerChannelScaleCalibrator.html" title="struct tdb_retrieval::quantization::calibrator::PerChannelScaleCalibrator">PerChannelScaleCalibrator</a>;</code></dt><dt id="reexport.INT8_GROUP_SIZE"><code>pub use int8_group::<a class="constant" href="int8_group/constant.INT8_GROUP_SIZE.html" title="constant tdb_retrieval::quantization::int8_group::INT8_GROUP_SIZE">INT8_GROUP_SIZE</a>;</code></dt><dt id="reexport.Int8Group32"><code>pub use int8_group::<a class="struct" href="int8_group/struct.Int8Group32.html" title="struct tdb_retrieval::quantization::int8_group::Int8Group32">Int8Group32</a>;</code></dt><dt id="reexport.PerChannelScaled"><code>pub use per_channel_scaled::<a class="struct" href="per_channel_scaled/struct.PerChannelScaled.html" title="struct tdb_retrieval::quantization::per_channel_scaled::PerChannelScaled">PerChannelScaled</a>;</code></dt><dt id="reexport.QuantizedToken"><code>pub use strategy::<a class="struct" href="strategy/struct.QuantizedToken.html" title="struct tdb_retrieval::quantization::strategy::QuantizedToken">QuantizedToken</a>;</code></dt><dt id="reexport.RetrievalQuantStrategy"><code>pub use strategy::<a class="trait" href="strategy/trait.RetrievalQuantStrategy.html" title="trait tdb_retrieval::quantization::strategy::RetrievalQuantStrategy">RetrievalQuantStrategy</a>;</code></dt></dl><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="calibrator/index.html" title="mod tdb_retrieval::quantization::calibrator">calibrator</a></dt><dd><code>PerChannelScaleCalibrator</code> — accumulates the per-dimension scale
+vector σ used to neutralize activation outliers before INT8
+quantization.</dd><dt><a class="mod" href="int8_group/index.html" title="mod tdb_retrieval::quantization::int8_group">int8_<wbr>group</a></dt><dd><code>Int8Group32</code> — plain group-of-32 INT8 quantization for retrieval.</dd><dt><a class="mod" href="per_channel_scaled/index.html" title="mod tdb_retrieval::quantization::per_channel_scaled">per_<wbr>channel_<wbr>scaled</a></dt><dd><code>PerChannelScaled&lt;Q&gt;</code> — Decorator that pre-scales tokens by a
+calibrated σ vector before delegating quantization to an inner
+strategy, and inverse-scales on dequantization.</dd><dt><a class="mod" href="strategy/index.html" title="mod tdb_retrieval::quantization::strategy">strategy</a></dt><dd><code>RetrievalQuantStrategy</code> — Strategy trait for per-token retrieval
+quantization.</dd></dl></section></div></main></body></html>

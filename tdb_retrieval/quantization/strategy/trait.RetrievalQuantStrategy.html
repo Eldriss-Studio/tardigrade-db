@@ -1,0 +1,55 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Strategy: how the retriever quantizes and dequantizes a single token vector for the scoring path."><title>RetrievalQuantStrategy in tdb_retrieval::quantization::strategy - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="tdb_retrieval" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc trait"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">RetrievalQuantStrategy</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../tdb_retrieval/index.html">tdb_<wbr>retrieval</a><span class="version">0.1.5</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Retrieval<wbr>Quant<wbr>Strategy</a></h2><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.dequantize_token" title="dequantize_token">dequantize_token</a></li><li><a href="#tymethod.dim" title="dim">dim</a></li><li><a href="#tymethod.quantize_token" title="quantize_token">quantize_token</a></li></ul><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In tdb_<wbr>retrieval::<wbr>quantization::<wbr>strategy</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">tdb_retrieval</a>::<wbr><a href="../index.html">quantization</a>::<wbr><a href="index.html">strategy</a></div><h1>Trait <span class="trait">Retrieval<wbr>Quant<wbr>Strategy</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/tdb_retrieval/quantization/strategy.rs.html#43-59">Source</a> </span></div><pre class="rust item-decl"><code>pub trait RetrievalQuantStrategy: <a class="trait" href="https://doc.rust-lang.org/1.95.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + <a class="trait" href="https://doc.rust-lang.org/1.95.0/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> {
+    // Required methods
+    fn <a href="#tymethod.dim" class="fn">dim</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.usize.html">usize</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.quantize_token" class="fn">quantize_token</a>(&amp;self, token: &amp;[<a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.f32.html">f32</a>]) -&gt; <a class="struct" href="struct.QuantizedToken.html" title="struct tdb_retrieval::quantization::strategy::QuantizedToken">QuantizedToken</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.dequantize_token" class="fn">dequantize_token</a>(&amp;self, quantized: &amp;<a class="struct" href="struct.QuantizedToken.html" title="struct tdb_retrieval::quantization::strategy::QuantizedToken">QuantizedToken</a>) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.95.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.f32.html">f32</a>&gt;;
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Strategy: how the retriever quantizes and dequantizes a single
+token vector for the scoring path.</p>
+<p>Implementations must be deterministic — the same input always
+yields the same output — and must be <code>Send + Sync</code> because the
+engine holds them behind a shared reference and dispatches from
+concurrent query contexts.</p>
+</div></details><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="tymethod.dim" class="method"><a class="src rightside" href="../../../src/tdb_retrieval/quantization/strategy.rs.html#45">Source</a><h4 class="code-header">fn <a href="#tymethod.dim" class="fn">dim</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.usize.html">usize</a></h4></section></summary><div class="docblock"><p>Per-token dimension this strategy operates on.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.quantize_token" class="method"><a class="src rightside" href="../../../src/tdb_retrieval/quantization/strategy.rs.html#52">Source</a><h4 class="code-header">fn <a href="#tymethod.quantize_token" class="fn">quantize_token</a>(&amp;self, token: &amp;[<a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.f32.html">f32</a>]) -&gt; <a class="struct" href="struct.QuantizedToken.html" title="struct tdb_retrieval::quantization::strategy::QuantizedToken">QuantizedToken</a></h4></section></summary><div class="docblock"><p>Quantize one token vector.</p>
+<p>Returns <a href="struct.QuantizedToken.html#method.empty" title="associated function tdb_retrieval::quantization::strategy::QuantizedToken::empty"><code>QuantizedToken::empty()</code></a> on input that doesn’t match
+<code>self.dim()</code> — callers treat this as “skip” rather than
+failing the surrounding batch.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.dequantize_token" class="method"><a class="src rightside" href="../../../src/tdb_retrieval/quantization/strategy.rs.html#58">Source</a><h4 class="code-header">fn <a href="#tymethod.dequantize_token" class="fn">dequantize_token</a>(&amp;self, quantized: &amp;<a class="struct" href="struct.QuantizedToken.html" title="struct tdb_retrieval::quantization::strategy::QuantizedToken">QuantizedToken</a>) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.95.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.f32.html">f32</a>&gt;</h4></section></summary><div class="docblock"><p>Dequantize one token back to f32.</p>
+<p>Returns an empty <code>Vec</code> if <code>quantized.dim</code> does not match
+<code>self.dim()</code>. The recovered vector has length <code>self.dim()</code>.</p>
+</div></details></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"><div class="negative-marker"></div><section id="impl-RetrievalQuantStrategy-for-Int8Group32" class="impl"><a class="src rightside" href="../../../src/tdb_retrieval/quantization/int8_group.rs.html#54-101">Source</a><a href="#impl-RetrievalQuantStrategy-for-Int8Group32" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.RetrievalQuantStrategy.html" title="trait tdb_retrieval::quantization::strategy::RetrievalQuantStrategy">RetrievalQuantStrategy</a> for <a class="struct" href="../int8_group/struct.Int8Group32.html" title="struct tdb_retrieval::quantization::int8_group::Int8Group32">Int8Group32</a></h3></section><section id="impl-RetrievalQuantStrategy-for-PerChannelScaled%3CQ%3E" class="impl"><a class="src rightside" href="../../../src/tdb_retrieval/quantization/per_channel_scaled.rs.html#43-70">Source</a><a href="#impl-RetrievalQuantStrategy-for-PerChannelScaled%3CQ%3E" class="anchor">§</a><h3 class="code-header">impl&lt;Q: <a class="trait" href="trait.RetrievalQuantStrategy.html" title="trait tdb_retrieval::quantization::strategy::RetrievalQuantStrategy">RetrievalQuantStrategy</a>&gt; <a class="trait" href="trait.RetrievalQuantStrategy.html" title="trait tdb_retrieval::quantization::strategy::RetrievalQuantStrategy">RetrievalQuantStrategy</a> for <a class="struct" href="../per_channel_scaled/struct.PerChannelScaled.html" title="struct tdb_retrieval::quantization::per_channel_scaled::PerChannelScaled">PerChannelScaled</a>&lt;Q&gt;</h3></section></div><script src="../../../trait.impl/tdb_retrieval/quantization/strategy/trait.RetrievalQuantStrategy.js" async></script></section></div></main></body></html>

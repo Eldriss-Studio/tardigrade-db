@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_CALIBRATION_WINDOW_TOKENS","PER_CHANNEL_SCALE_FLOOR"],"struct":["PerChannelScaleCalibrator"]};

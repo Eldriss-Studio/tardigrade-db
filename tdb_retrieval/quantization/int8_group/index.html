@@ -1,0 +1,61 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="`Int8Group32` — plain group-of-32 INT8 quantization for retrieval."><title>tdb_retrieval::quantization::int8_group - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="tdb_retrieval" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module int8_group</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../tdb_retrieval/index.html">tdb_<wbr>retrieval</a><span class="version">0.1.5</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module int8_<wbr>group</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#why-int8-not-q4" title="Why INT8 not Q4">Why INT8 not Q4</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#constants" title="Constants">Constants</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In tdb_<wbr>retrieval::<wbr>quantization</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">tdb_retrieval</a>::<wbr><a href="../index.html">quantization</a></div><h1>Module <span>int8_<wbr>group</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/tdb_retrieval/quantization/int8_group.rs.html#1-130">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p><code>Int8Group32</code> — plain group-of-32 INT8 quantization for retrieval.</p>
+<p>Mirrors the <code>Q4_0</code> group structure used by <code>tdb-storage</code> for archival
+(one f32 scale per 32 values) but with 8-bit values instead of 4-bit.
+Suitable for retrieval scoring as the inner quantizer; pair with a
+<a href="../per_channel_scaled/struct.PerChannelScaled.html" title="struct tdb_retrieval::quantization::per_channel_scaled::PerChannelScaled"><code>PerChannelScaled</code></a>
+decorator to neutralize activation outliers before encoding.</p>
+<h2 id="why-int8-not-q4"><a class="doc-anchor" href="#why-int8-not-q4">§</a>Why INT8 not Q4</h2>
+<p><code>Q4_0</code> has 16 levels per group (4-bit signed [-7, 7]). At Qwen3-style
+hidden-state magnitudes, the half-step is large enough to round
+non-outlier values to zero — destroying retrieval precision. <code>INT8</code>
+has 256 levels (signed [-127, 127]); the half-step is 16× smaller,
+and even on outlier-heavy groups the non-outlier dims remain
+resolvable. Production retrieval systems (<code>Faiss</code> SQ8, <code>Qdrant</code>,
+Sentence-Transformers) standardize on <code>INT8</code> as their precision
+floor for the same reason.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Int8Group32.html" title="struct tdb_retrieval::quantization::int8_group::Int8Group32">Int8<wbr>Group32</a></dt><dd>Plain INT8 group-of-32 quantizer. No outlier handling — see
+<a href="../per_channel_scaled/struct.PerChannelScaled.html" title="struct tdb_retrieval::quantization::per_channel_scaled::PerChannelScaled"><code>PerChannelScaled</code></a>
+for the wrapper that pairs this with a calibrated σ to neutralize
+activation outliers.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.INT8_GROUP_SCALE_FLOOR.html" title="constant tdb_retrieval::quantization::int8_group::INT8_GROUP_SCALE_FLOOR">INT8_<wbr>GROUP_<wbr>SCALE_<wbr>FLOOR</a></dt><dd>Floor applied to per-group <code>abs_max</code> to avoid divide-by-zero in
+all-zero groups. Mirrors
+<a href="../calibrator/constant.PER_CHANNEL_SCALE_FLOOR.html" title="constant tdb_retrieval::quantization::calibrator::PER_CHANNEL_SCALE_FLOOR"><code>PER_CHANNEL_SCALE_FLOOR</code></a>
+but per-group rather than per-channel.</dd><dt><a class="constant" href="constant.INT8_GROUP_SIZE.html" title="constant tdb_retrieval::quantization::int8_group::INT8_GROUP_SIZE">INT8_<wbr>GROUP_<wbr>SIZE</a></dt><dd>Group size for INT8 quantization. Matches the storage-layer Q4
+group size for alignment.</dd><dt><a class="constant" href="constant.INT8_LEVELS.html" title="constant tdb_retrieval::quantization::int8_group::INT8_LEVELS">INT8_<wbr>LEVELS</a></dt><dd>8-bit signed integer range — half-width used when scaling
+<code>abs_max</code> into <code>[-INT8_LEVELS, INT8_LEVELS]</code> before clamping.
+<code>127</code> rather than <code>128</code> keeps quantization symmetric around
+zero.</dd></dl></section></div></main></body></html>
