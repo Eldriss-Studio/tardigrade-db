@@ -49,6 +49,15 @@ def _parse_args() -> argparse.Namespace:
         default=0,
         help="Optional context char cap for LongMemEval rows (0 = no cap).",
     )
+    parser.add_argument(
+        "--locomo-exclude-categories",
+        default=",".join(str(c) for c in sorted(DEFAULT_LOCOMO_EXCLUDE_CATEGORIES)),
+        help=(
+            "Comma-separated LoCoMo categories to exclude. Default '5' "
+            "drops adversarial/unanswerable items — matches every "
+            "leaderboard system. Pass empty string '' to include all."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -86,7 +95,24 @@ def _session_index_from_dia_id(dia_id: Any) -> int | None:
         return None
 
 
-def _locomo_rows(path: Path, context_mode: str) -> list[dict[str, str]]:
+# Default LoCoMo categories to exclude. Cat 5 is adversarial /
+# unanswerable; every published leaderboard system (Mem0, Memobase,
+# ByteRover, Letta, MemMachine) filters it because including it
+# conflates retrieval quality with refusal calibration (different
+# abilities). Per dial481/locomo-audit, the official eval scripts
+# silently skip 446 Cat-5 items — matching that here keeps our
+# numerator/denominator aligned with leaderboard reports. Override
+# via the `--locomo-exclude-categories` CLI flag.
+DEFAULT_LOCOMO_EXCLUDE_CATEGORIES: frozenset[int] = frozenset({5})
+
+
+def _locomo_rows(
+    path: Path,
+    context_mode: str,
+    exclude_categories: set[int] | frozenset[int] | None = None,
+) -> list[dict[str, str]]:
+    if exclude_categories is None:
+        exclude_categories = DEFAULT_LOCOMO_EXCLUDE_CATEGORIES
     payload = json.loads(path.read_text(encoding="utf-8"))
     rows: list[dict[str, str]] = []
 
@@ -143,6 +169,10 @@ def _locomo_rows(path: Path, context_mode: str) -> list[dict[str, str]]:
         qa_rows = sample.get("qa", [])
         for idx, qa in enumerate(qa_rows):
             if not isinstance(qa, dict):
+                continue
+            # Category filter (default drops Cat 5 adversarial).
+            cat = qa.get("category")
+            if isinstance(cat, int) and cat in exclude_categories:
                 continue
             question = _normalize_text(qa.get("question"))
             answer = _normalize_text(qa.get("answer"))
@@ -252,7 +282,17 @@ def main() -> int:
     if not longmemeval_json.exists():
         raise FileNotFoundError(f"LongMemEval file not found: {longmemeval_json}")
 
-    locomo_rows = _locomo_rows(locomo_json, context_mode=args.locomo_context)
+    exclude_cats: set[int] = set()
+    if args.locomo_exclude_categories.strip():
+        for piece in args.locomo_exclude_categories.split(","):
+            piece = piece.strip()
+            if piece:
+                exclude_cats.add(int(piece))
+    locomo_rows = _locomo_rows(
+        locomo_json,
+        context_mode=args.locomo_context,
+        exclude_categories=exclude_cats,
+    )
     longmemeval_rows = _longmemeval_rows(
         longmemeval_json,
         max_context_chars=max(0, int(args.longmemeval_max_context_chars)),
@@ -283,6 +323,7 @@ def main() -> int:
         "options": {
             "locomo_context": args.locomo_context,
             "longmemeval_max_context_chars": int(args.longmemeval_max_context_chars),
+            "locomo_exclude_categories": sorted(exclude_cats),
         },
     }
     manifest_out.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
