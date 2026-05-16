@@ -7,7 +7,13 @@ from tdb_bench.adapters.retrieve_then_read import RetrieveThenReadAdapter
 from tdb_bench.answerers import build_answerer_from_env
 from tdb_bench.contracts import BenchmarkAdapter, DatasetAdapter, Evaluator
 from tdb_bench.datasets import LoCoMoDatasetAdapter, LongMemEvalDatasetAdapter
-from tdb_bench.evaluators import DeterministicEvaluator, DeepSeekProvider, LLMGatedEvaluator, OpenAIProvider
+from tdb_bench.evaluators import (
+    DeepSeekProvider,
+    DeterministicEvaluator,
+    JustifyThenJudgeEvaluator,
+    LLMGatedEvaluator,
+    OpenAIProvider,
+)
 from tdb_bench.errors import ConfigError
 
 
@@ -62,4 +68,21 @@ class RegistryFactory:
                 OpenAIProvider(model=judge_model),
             ]
             return LLMGatedEvaluator(providers=providers)
+        if mode == "justify_then_judge":
+            # Both stages use the same provider chain — DeepSeek first
+            # (cheaper, already keyed), OpenAI as fallback. The justify
+            # stage requests longer max_tokens than the judge stage; that
+            # routing happens inside JustifyThenJudgeEvaluator.
+            justify_providers = [
+                DeepSeekProvider(),
+                OpenAIProvider(model=judge_model),
+            ]
+            judge_providers = [
+                DeepSeekProvider(),
+                OpenAIProvider(model=judge_model),
+            ]
+            return JustifyThenJudgeEvaluator(
+                justify_providers=justify_providers,
+                judge_providers=judge_providers,
+            )
         raise ConfigError(f"Unknown evaluator mode: {mode}")

@@ -12,8 +12,18 @@ import urllib.request
 from abc import ABC, abstractmethod
 
 
+_DEFAULT_JUDGE_MAX_TOKENS = 60
+
+
 class JudgeProvider(ABC):
-    """Strategy: sends a judge prompt to an LLM API, returns raw text."""
+    """Strategy: sends a judge prompt to an LLM API, returns raw text.
+
+    The optional ``max_tokens`` kwarg lets multi-stage pipelines
+    (``JustifyThenJudgeEvaluator``) request a longer response budget
+    for the justify step (~512 tokens) while keeping the judge step
+    at the cheap ~60 default. Subclasses MUST accept the kwarg even if
+    they ignore it.
+    """
 
     @abstractmethod
     def name(self) -> str: ...
@@ -22,7 +32,7 @@ class JudgeProvider(ABC):
     def is_available(self) -> bool: ...
 
     @abstractmethod
-    def judge(self, prompt: str) -> str: ...
+    def judge(self, prompt: str, max_tokens: int = _DEFAULT_JUDGE_MAX_TOKENS) -> str: ...
 
 
 class DeepSeekProvider(JudgeProvider):
@@ -39,11 +49,13 @@ class DeepSeekProvider(JudgeProvider):
     def is_available(self) -> bool:
         return bool(os.getenv(self._ENV_VAR, "").strip())
 
-    def judge(self, prompt: str) -> str:
+    def judge(self, prompt: str, max_tokens: int = _DEFAULT_JUDGE_MAX_TOKENS) -> str:
         api_key = os.getenv(self._ENV_VAR, "").strip()
         if not api_key:
             raise ValueError(f"{self.name()} provider not available: {self._ENV_VAR} not set")
-        return _chat_completions(self._URL, api_key, self._MODEL, prompt, self._TIMEOUT)
+        return _chat_completions(
+            self._URL, api_key, self._MODEL, prompt, self._TIMEOUT, max_tokens
+        )
 
 
 class OpenAIProvider(JudgeProvider):
@@ -62,19 +74,28 @@ class OpenAIProvider(JudgeProvider):
     def is_available(self) -> bool:
         return bool(os.getenv(self._ENV_VAR, "").strip())
 
-    def judge(self, prompt: str) -> str:
+    def judge(self, prompt: str, max_tokens: int = _DEFAULT_JUDGE_MAX_TOKENS) -> str:
         api_key = os.getenv(self._ENV_VAR, "").strip()
         if not api_key:
             raise ValueError(f"{self.name()} provider not available: {self._ENV_VAR} not set")
-        return _chat_completions(self._URL, api_key, self._model, prompt, self._TIMEOUT)
+        return _chat_completions(
+            self._URL, api_key, self._model, prompt, self._TIMEOUT, max_tokens
+        )
 
 
-def _chat_completions(url: str, api_key: str, model: str, prompt: str, timeout: int) -> str:
+def _chat_completions(
+    url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    timeout: int,
+    max_tokens: int = _DEFAULT_JUDGE_MAX_TOKENS,
+) -> str:
     """Shared Chat Completions call — same format for DeepSeek and OpenAI."""
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 60,
+        "max_tokens": max_tokens,
         "temperature": 0.0,
     }
     req = urllib.request.Request(
