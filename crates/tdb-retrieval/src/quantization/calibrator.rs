@@ -17,16 +17,17 @@
 //!
 //! Per-channel pre-scaling (`SmoothQuant` pattern, [Xiao et al.,
 //! 2022][smoothquant]) sidesteps this by dividing each dim by its
-//! own σ[d] *before* group quantization runs. After scaling, every
+//! own σ\[d\] *before* group quantization runs. After scaling, every
 //! dim has comparable range across cells; no single channel
 //! dominates its group.
 //!
 //! # API contract
 //!
 //! Calibration is *one-shot* in this implementation: feed a bounded
-//! window of hidden states via [`Self::observe`], then call
-//! [`Self::finalize`] to obtain the σ vector. Further `observe`
-//! calls after finalize are no-ops (already pinned).
+//! window of hidden states via [`PerChannelScaleCalibrator::observe`],
+//! then call [`PerChannelScaleCalibrator::finalize`] to obtain the σ
+//! vector. Further `observe` calls after finalize are no-ops
+//! (already pinned).
 //!
 //! σ is `max(|x[d]|)` over the observed window, floored at
 //! [`PER_CHANNEL_SCALE_FLOOR`] to prevent divide-by-zero on dead
@@ -47,7 +48,7 @@ pub const DEFAULT_CALIBRATION_WINDOW_TOKENS: usize = 4096;
 /// dead-channel divisions stay numerically stable.
 pub const PER_CHANNEL_SCALE_FLOOR: f32 = 1e-6;
 
-/// Accumulates `σ[d] = max(|x[d]|)` across a bounded window of
+/// Accumulates `σ\[d\] = max(|x[d]|)` across a bounded window of
 /// observed hidden-state vectors, then freezes.
 ///
 /// Single Responsibility: this struct does *only* calibration —

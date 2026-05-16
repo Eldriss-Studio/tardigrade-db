@@ -1620,7 +1620,8 @@ impl Engine {
     ///
     /// The per-token retriever is constructed in lazy mode: it stores only
     /// per-cell summaries (~4 KB/cell) and decodes raw tokens on demand via
-    /// the [`BlockPoolCellSource`] handed to it at query time. This makes
+    /// the [`crate::cell_source_pool::BlockPoolCellSource`] handed to it at
+    /// query time. This makes
     /// engine memory scale with the corpus's summaries, not with the
     /// corpus's full per-token data — full `LoCoMo` fits in ~1 GB instead
     /// of ~28 GB.

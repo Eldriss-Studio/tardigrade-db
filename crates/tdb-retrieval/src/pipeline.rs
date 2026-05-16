@@ -235,8 +235,10 @@ mod tests {
 
     /// Records what `upstream_candidates` and `source` it was called with
     /// so the test can assert the pipeline forwarded the right context.
+    type CapturedCalls = Vec<(Option<HashSet<CellId>>, bool)>;
+
     struct RecordingStage {
-        captured: Arc<Mutex<Vec<(Option<HashSet<CellId>>, bool)>>>,
+        captured: Arc<Mutex<CapturedCalls>>,
     }
 
     impl Retriever for RecordingStage {
