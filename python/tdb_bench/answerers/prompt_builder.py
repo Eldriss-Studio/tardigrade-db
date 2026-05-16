@@ -21,9 +21,13 @@ from .constants import PROMPT_TEMPLATE_VERSION
 
 # Format strings kept at module scope so the layout is one read away.
 _ANSWER_INSTRUCTION = (
-    "Answer the question using only the evidence below. "
+    "Answer the question using the evidence below. "
     "Be concise — one short phrase or sentence. "
-    "If the evidence does not contain the answer, respond with: I don't know."
+    "You may combine multiple evidence lines, paraphrase, and resolve "
+    "relative time references (\"yesterday\", \"last week\") against the "
+    "session date shown in headers like [session 3 — 12 May, 2023]. "
+    "Only respond with: I don't know — when the evidence contains no "
+    "information that bears on the question."
 )
 
 _EVIDENCE_HEADER = "Evidence:"

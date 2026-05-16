@@ -86,7 +86,7 @@ LLM_GATE_RETRY_BACKOFF_FACTOR = 2.0
 # keys include it, so old cached entries become invalid automatically.
 # Format: "v{N}-{ISO-date}" so version order is reading-order and
 # we can git-blame the change date.
-PROMPT_TEMPLATE_VERSION = "v1-2026-05-15"
+PROMPT_TEMPLATE_VERSION = "v2-2026-05-16"
 
 # --- Cache ---
 
