@@ -43,6 +43,7 @@ Returns the candidates re-sorted by cross-encoder score, descending.
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Callable, Iterable
 
 
@@ -69,6 +70,15 @@ class CrossEncoderReranker:
         self.model_name = model_name or self.DEFAULT_MODEL
         self._batch_size = batch_size
         self._model = CrossEncoder(self.model_name, device=device)
+        # PyTorch model.forward is not thread-safe — concurrent
+        # `predict` calls race on shared internal state (KV caches,
+        # attention scratch buffers) and produce non-deterministic
+        # scores. Observed as a 0.42 → 0.38 LoCoMo headline regression
+        # under `--workers 4` (Phase 1B audit 2026-05-16 task #96).
+        # A per-instance lock serialises the model call while leaving
+        # the rest of `rerank` (Python data shuffling) free to run
+        # concurrently from other threads holding different rerankers.
+        self._predict_lock = threading.Lock()
 
     def rerank(
         self,
@@ -108,7 +118,8 @@ class CrossEncoderReranker:
             pairs.append((query_text, text))
 
         if pairs:
-            raw_scores = self._model.predict(pairs, batch_size=self._batch_size)
+            with self._predict_lock:
+                raw_scores = self._model.predict(pairs, batch_size=self._batch_size)
             # CrossEncoder returns numpy; cast to python floats for sort.
             for original_rank, score in zip(pair_idx, raw_scores):
                 scored.append((float(score), original_rank, candidates[original_rank]))
