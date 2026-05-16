@@ -12,6 +12,7 @@ The foundation is a persistent block pool that stores each agent's KV cache dura
 - **Append-Only Segments:** 256MB segments with length-prefixed binary records. `sync_data()` on every write. Partial records at EOF are silently discarded on recovery.
 - **Text Store:** Durable append-only binary sidecar for fact text associated with KV packs. Single source of truth (replaces the original JSON sidecar).
 - **Deletion Log:** Append-only log of deleted pack IDs, applied during `refresh()`.
+- **Segment Compaction:** Mark-Sweep GC rewrites segments below 50% live ratio to reclaim space from deleted packs. `Engine::compact()` is exposed to Python. Crash-safe (atomic segment rewrites; partial work discarded on recovery).
 
 **3. Retrieval Engine: Latent Space Attention & Caching**
 
@@ -54,4 +55,3 @@ Autonomous lifecycle management prevents infinite accumulation and surfaces prov
 - **RelayCaching:** Cross-agent KV cache reuse (estimated 4.7× TTFT reduction from literature).
 - **BatchQuantizedKVCache:** Concurrent Q4 inference across multiple agents.
 - **Vamana Edge Persistence:** Avoid O(n²) rebuild on refresh.
-- **Segment Compaction:** Reclaim space from deleted packs.

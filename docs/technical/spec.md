@@ -7,6 +7,7 @@ The storage engine persists the LLM's Key-Value (KV) cache directly to disk as q
 - **Segment Scanning Recovery:** On open, segments are scanned to rebuild the `CellId → (segment, offset)` index. O(n) in cell count, not cell size. No external dependency — the segment files are the source of truth.
 - **Text Store:** Append-only binary sidecar for fact text associated with KV packs. Single source of truth (JSON sidecar removed in P1).
 - **Deletion Log:** Durable append-only log of deleted pack IDs. Applied during `refresh()` to filter deleted packs from in-memory state.
+- **Segment Compaction:** Mark-Sweep GC rewrites segments below 50% live ratio, reclaiming space from deleted packs. `Engine::compact()` exposed to Python. Crash-safe (segments are rebuilt atomically; partial work is discarded on recovery).
 
 ### 2. Retrieval Layer: Latent Space Attention & Semantic Lookaside Buffers
 
@@ -43,5 +44,4 @@ These capabilities are described in the original TDD but are **not yet implement
 - **Decoupled Position Encoding:** RoPE remapping for safe cross-prompt KV injection. Designed but not needed for current deployment paths.
 - **RelayCaching:** Cross-agent KV cache reuse for multi-agent handoffs. Estimated 4.7× TTFT reduction (from literature). Requires multi-agent scheduling logic.
 - **BatchQuantizedKVCache:** Concurrent Q4 inference across multiple agents. Stub only.
-- **Vamana Edge Persistence:** Serializing graph edges to disk for O(1) refresh instead of O(n²) rebuild.
-- **Segment Compaction:** Background merge of old segments to reclaim space from deleted packs.
+- **Vamana Edge Persistence:** Serializing graph edges to disk for O(n) load on refresh instead of O(n²) rebuild.

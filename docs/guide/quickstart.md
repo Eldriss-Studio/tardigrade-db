@@ -71,6 +71,8 @@ n = client.consolidate(pack_id)        # int: views attached
 all_views = client.consolidate_all()   # dict[int, int]: {pack_id: views_attached}
 ```
 
+> ⚠️ **Production note:** The snippet above omits `kv_capture_fn`, so `TardigradeClient` uses its built-in random-vector stub (`_random_kv_stub`) for retrieval keys. That's fine for smoke-testing the API surface, but retrieval will not be semantically meaningful. For real use, pass a `kv_capture_fn` tied to a loaded model — see [`docs/guide/python-api.md`](python-api.md) for the HF KV-hook bridge.
+
 ### What happens under the hood during `query()`
 
 1. **Retrieve:** `kv_capture_fn` encodes the query into a retrieval key via a model forward pass

@@ -100,6 +100,13 @@ already supports this (ViewGenerator takes its own model/tokenizer).
    before shipping features. We still don't know where TardigradeDB lands
    relative to the field.
 
+> **UPDATE 2026-05-14:** Honest LoCoMo/LongMemEval baselines have since been
+> measured on the clean dataset: ~36% R@1 on a 50-item clean LoCoMo subset
+> (native engine, no RLS). Earlier "68.2% / 90.9%" headlines were measured
+> against the lexical fallback adapter on a corrupted dataset and were
+> retracted. Full-corpus clean-data re-runs are still pending. See
+> [`docs/experiments/2026-05-14-bench-audit.md`](../2026-05-14-bench-audit.md).
+
 ## Honest Assessment
 
 The parent-document architecture (B) is validated — it prevents the v1 catastrophe.
