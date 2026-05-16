@@ -58,6 +58,36 @@
         "answer": "Answer concisely using retrieved evidence.",
         "judge": "Score factual correctness and evidence relevance only."
       }
+    },
+    "challenger": {
+      "_comment": "Track B (LoCoMo Judge race): Qwen3-1.7B capture + full-conversation context + justify-then-judge evaluator + tardigrade-llm-gated system + deepseek-chat answerer. Set TDB_BENCH_MODEL=Qwen/Qwen3-1.7B in the environment before running. See ~/.claude/plans/i-want-a-definitive-majestic-bear.md (Track B).",
+      "seed": 42,
+      "timeout_seconds": 30,
+      "datasets": [
+        {
+          "name": "locomo",
+          "revision": "phase1_oracle_full",
+          "path": "benchmarks/datasets/phase1_oracle_full/locomo_phase1.jsonl",
+          "max_items": null
+        },
+        {
+          "name": "longmemeval",
+          "revision": "phase1_oracle_full",
+          "path": "benchmarks/datasets/phase1_oracle_full/longmemeval_phase1.jsonl",
+          "max_items": null
+        }
+      ],
+      "systems": ["tardigrade-llm-gated"],
+      "evaluator": {
+        "mode": "justify_then_judge",
+        "answerer_model": "deepseek-chat",
+        "judge_model": "deepseek-chat"
+      },
+      "top_k": 5,
+      "prompts": {
+        "answer": "Answer concisely using retrieved evidence; use evidence dates to resolve relative temporal references.",
+        "judge": "Score factual correctness; the reasoning trace is an aid, not the score target."
+      }
     }
   }
 }
