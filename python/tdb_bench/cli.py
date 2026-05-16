@@ -30,6 +30,18 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--dataset", action="append", default=[])
     run.add_argument("--repeat", type=int, default=1)
     run.add_argument("--seed", type=int, action="append", default=[])
+    run.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Parallel item-processing worker count for the runner. "
+            "Default 1 (single-threaded, env override via TDB_BENCH_WORKERS). "
+            "With workers>1, each (item, system) is dispatched to a "
+            "ThreadPoolExecutor; LLM calls run in parallel while the "
+            "GPU section is serialized by the adapter's internal lock."
+        ),
+    )
 
     report = sub.add_parser("report")
     report.add_argument("--input", required=True)
@@ -57,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             datasets=args.dataset or None,
             repeat=int(args.repeat),
             seeds=args.seed or None,
+            workers=args.workers,
         )
         return 0
 

@@ -237,6 +237,13 @@ class TardigradeAdapter(BenchmarkAdapter):
         self._hook = None
         self._mode = "in_memory"
         self._refinement = _REFINEMENT
+        # Serializes the GPU-bound section (tokenizer + model.forward
+        # + hook capture) when the runner uses `--workers N > 1`. The
+        # underlying engine's Arc<Mutex<>> already serializes Rust
+        # calls; this lock additionally protects the shared torch
+        # model object whose forward isn't strictly thread-safe.
+        import threading as _threading
+        self._gpu_lock = _threading.Lock()
         self._reranker = None
         if _RERANK_MODEL:
             try:
@@ -589,17 +596,23 @@ class TardigradeAdapter(BenchmarkAdapter):
 
         model, tokenizer, query_layer = _load_model_cached()
         start = time.perf_counter()
-        inputs = tokenizer(
-            item.question, return_tensors="pt", truncation=True, max_length=256,
-        )
-        inputs = {k: v.to(model.device) for k, v in inputs.items()}
-        with torch.no_grad():
-            out = model(**inputs, use_cache=True, output_hidden_states=True)
-        handles = self._hook.on_prefill(
-            layer=query_layer,
-            past_key_values=out.past_key_values,
-            model_hidden_states=out.hidden_states[query_layer],
-        )
+        # GPU lock: model.forward + hook capture share state; the lock
+        # makes the section safe under `--workers N > 1`. The lock is
+        # released before the reranker call so concurrent threads can
+        # progress past their own GPU step while one thread is in CPU
+        # reranking territory.
+        with self._gpu_lock:
+            inputs = tokenizer(
+                item.question, return_tensors="pt", truncation=True, max_length=256,
+            )
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+            with torch.no_grad():
+                out = model(**inputs, use_cache=True, output_hidden_states=True)
+            handles = self._hook.on_prefill(
+                layer=query_layer,
+                past_key_values=out.past_key_values,
+                model_hidden_states=out.hidden_states[query_layer],
+            )
 
         # Stage-2 cross-encoder reranking on per-CHUNK text.
         #
