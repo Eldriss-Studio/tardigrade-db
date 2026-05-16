@@ -4,7 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
+TardigradeDB is a general-purpose, KV-native persistent memory engine. Use cases are agnostic — anyone can build any consumer on top: agentic systems, RAG alternatives, long-context resumption, game-character memory, whatever the KV-cache primitive enables.
+
+**Motivating use case (informs design priorities, not the API).** The author's own planned consumer is *Project Ares*, an interactive-fiction game built on inkjs where NPCs and world state recall events lived rather than read them from a journal. That motivating context is the reason the engine cares about real-time latency, per-owner isolation, subjective storage (same event, different memory per owner), recency decay, and clean save/restore. None of those features are game-specific — they happen to be the right primitives for many consumers — but the *priority weighting* among them came from imagining a player walking back into a town with NPCs who remember them. Project Ares plugs in *after* the foundation is solid; until then, design decisions favour generality, cleanliness, and speed over any single use-case-specific shortcut.
+
+The technical bet: store memory as the model's own latent representation of an experience (KV-cache hidden states) rather than as text + embeddings (an external lookup). Consumers that want recall to feel like part of cognition — not a journal read — get that for free. Consumers that just want a fast persistent memory primitive get a fast persistent memory primitive.
+
+Ongoing priorities (all general; the motivating use case just weighted them):
+
+- **Latency is sacred.** Sub-millisecond p99 at 5K cells is the bar. Anything that bloats that path needs a real reason.
+- **Footprint matters.** Per-cell storage (~751 B today) is a budget line — consumers may run alongside an LLM on consumer hardware.
+- **Owner-scoping is structural.** Every layer respects owner boundaries — useful for multi-agent isolation, multi-NPC games, multi-tenant SaaS, any consumer with multiple parties.
+- **Subjectivity-preserving storage.** Different owners ingesting the same input can keep different memories. The engine already supports this via owner-scoping; consumers decide whether to use it.
+- **Drift and decay.** Importance scoring, tier hysteresis, recency decay (governance layer) are general primitives for *what to remember*.
+- **Persistence is a load-bearing API.** Save/restore must roundtrip cleanly. Save-game is one specialisation; agent-snapshot is another.
+
+**Benchmarks vs product.** LoCoMo / LongMemEval are diagnostic measurements — they tell us if the retrieval primitive behaves on long conversational corpora. They are not the product target, and competing head-to-head with text-extraction memory systems (Mem0, Letta, ByteRover) is not a goal. Those systems pay an LLM call at ingest to pre-synthesize facts; TardigradeDB stores the latent representation. Different architectures, different cost models. Techniques those systems use (LLM-extraction at ingest, retrieval-reformulation at both stages) are fair game when they make the engine a better primitive for downstream consumers.
+
+> Earlier framings ("memory system for autonomous AI agents", "KV-cache-native database kernel") are still technically accurate. The product surface is a general-purpose KV-native memory engine.
+
+TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
 > **⚠️ Audit notice — 2026-05-14.** A benchmark audit on this date retracted the historical "68.2% LoCoMo / 90.9% LongMemEval" baseline numbers — they measured the lexical fallback adapter on a corpus corrupted by a dataset-prep bug, not the native KV engine. The honest native-engine number on the clean dataset is ~36% R@1 at 50-item scale (full-corpus number not yet re-measured). All four RLS modes (keyword/multiphrasing/embedding/generative/agent) underperform the no-RLS baseline on clean data; the DeepSeek agent reformulator loses 12.7pp. The "vague-query vocabulary overlap is the retrieval ceiling" framing is also retracted as it was drawn from the broken data. Full record: [`docs/experiments/2026-05-14-bench-audit.md`](docs/experiments/2026-05-14-bench-audit.md). Synthetic-corpus measurements (100% recall at 5K memories, vague-query refinement on the 100-cell Sonia corpus, cross-model retrieval, KV injection on gibberish facts) are unaffected.
 
