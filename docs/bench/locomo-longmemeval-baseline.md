@@ -62,21 +62,23 @@
 | Mem0g (graph) | 68.4% | — | mem0.ai/blog |
 | Mem0 | 66.9% | 49.0% | mem0.ai/blog |
 
-### Analysis
+### Analysis — RETRACTED
 
-**LongMemEval 90.9%** is the headline number. TardigradeDB outperforms every
+> ⚠️ **The Analysis, Caveats, and What-This-Tells-Us sections below are retracted along with the results table.** They were written to interpret the corrupted-dataset / lexical-fallback runs as TardigradeDB measurements. The "headline number" framing, the comparison-to-field conclusions, and the inferred "vocabulary-overlap ceiling" are all unsupported by these runs. Preserved below as historical context only. See [`../experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md) for the honest clean-data numbers (~36% R@1 on a 50-item clean LoCoMo subset; full-corpus pending; all RLS modes underperform the no-RLS baseline).
+
+~~**LongMemEval 90.9%** is the headline number. TardigradeDB outperforms every
 published system in our references on this benchmark — and with a deterministic
 evaluator that is stricter than the LLM-gated judging used by most competitors.
 The KV-native latent-space retrieval + mean-centering refinement is particularly
 strong for the information extraction and knowledge update categories that
-LongMemEval emphasizes.
+LongMemEval emphasizes.~~ **[RETRACTED 2026-05-14 — lexical fallback on corrupted dataset.]**
 
-**LoCoMo 68.2%** is competitive with Mem0g (68.4%) but below the vanilla
+~~**LoCoMo 68.2%** is competitive with Mem0g (68.4%) but below the vanilla
 GPT-4o-mini baseline (74.0%) and well below ByteRover 2.0 (92.2%). LoCoMo tests
 long-term conversational memory across 300-turn conversations — the queries tend
 to be more vague and contextual ("what did we talk about last week?"), which is
 exactly the vocabulary-overlap problem that limits TardigradeDB's vague-query
-R@5 to 60%.
+R@5 to 60%.~~ **[RETRACTED 2026-05-14 — the LoCoMo number and the "vocabulary-overlap problem" framing both came from the broken runs.]**
 
 ### Caveats
 
@@ -92,14 +94,16 @@ R@5 to 60%.
 3. **Model size:** Qwen3-0.6B is a small model (0.6B params). Larger models
    produce richer hidden states that should improve retrieval quality.
 
-### What This Tells Us
+4. ⚠️ **Dataset corruption (added 2026-05-14):** The corpus used here was produced by `benchmarks/scripts/prepare_phase1_datasets.py`, which had a bug that made every item share the same ~62K-char context. The "deterministic evaluator + lexical fallback adapter" combination then produced self-retrieval on this corrupted corpus. None of the caveats above matter as much as this one.
 
-The LoCoMo gap (68.2% vs 74% vanilla baseline) is where multi-view
+### What This Tells Us — RETRACTED
+
+~~The LoCoMo gap (68.2% vs 74% vanilla baseline) is where multi-view
 consolidation, better vague-query handling, or the cross-encoder reranker
 would have the most impact. The LongMemEval strength (90.9%) validates that
 the core KV-native architecture works — latent-space retrieval is excellent
 for direct factual retrieval; the weakness is in fuzzy, context-dependent
-conversational recall.
+conversational recall.~~ **[RETRACTED 2026-05-14 — entire interpretation rests on retracted numbers.]**
 
 ### Run Command
 

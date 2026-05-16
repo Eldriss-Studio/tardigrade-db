@@ -3,7 +3,7 @@
 **Date:** April 22, 2026  
 **Goal:** Empirically test whether cross-context KV injection helps, hurts, or is neutral  
 **Model:** GPT-2 (117M) — full access to hidden states and KV cache  
-**Status:** Planned
+**Status:** Complete (2026-04-22) — results in [`kv-injection-results.md`](kv-injection-results.md)
 
 ## Background
 

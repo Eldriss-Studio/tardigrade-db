@@ -42,7 +42,7 @@ This is where you go from "I understand the theory" to "I understand what Tardig
 
 - **Quantization fundamentals** — What FP16, INT8, and INT4 (Q4) mean. How you map a range of floats into a small set of integers (scale + zero-point). The `half` crate in the workspace handles FP16; `tdb-storage/quantization.rs` handles Q4.
 
-- **Safetensors format** — The serialization format TardigradeDB uses. Understand its header structure (JSON metadata + flat tensor data). It's designed for zero-copy mmap, which connects directly to the GPU DMA path.
+- **Custom mmap-backed arena (primary storage)** — TardigradeDB's primary on-disk format is a custom append-only mmap arena with length-prefixed binary records and per-write `sync_data()`. See `tdb-storage/`. Safetensors is retained only for import/export interop (it has a 100MB header cap and no in-place update, so it's not suitable as a primary KV-cache store). Understand both formats and *why* the project rejected safetensors as primary — per CLAUDE.md § Spec Corrections, "Storage format: Custom mmap'd arena, NOT safetensors."
 
 - **The cost of quantization error** — Q4 KV is lossy. Understand *where* the error shows up (attention score distortion) and why it's acceptable for memory (the "gist" is preserved even if exact values shift).
 
@@ -140,7 +140,7 @@ You can trace how a KV block goes from "captured during inference" → serialize
 
 - **Why vector search alone fails ("Vector Haze")** — Cosine similarity retrieves *topically similar* but *causally disconnected* facts. An agent needs to know that "the patient reported chest pain" CAUSED "the doctor ordered an ECG" — pure similarity search can't express this.
 
-- **The Atlas Index** — A Page-Clustered Vector Index combining small-world graph navigation (like HNSW) with B+ Tree-style disk locality. The Vamana algorithm (from Microsoft's DiskANN) powers the graph navigation.
+- **The Vamana graph index** — DiskANN-style single-layer graph with robust pruning (angular diversity). TardigradeDB rejected HNSW (which fails for attention retrieval due to Q/K distribution shift) and B+ trees (wrong shape for ANN search). The hot path is SIMD brute-force matmul; the cold path is the Vamana graph. Per CLAUDE.md § Spec Corrections: "Index: Vamana graph (DiskANN-style), NOT HNSW + B+ tree."
 
 - **The Trace graph** — An episodic graph that tracks causal edges between KV blocks. Not a general knowledge graph; specifically tracks "this memory led to that memory."
 

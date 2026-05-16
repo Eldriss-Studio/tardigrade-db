@@ -52,29 +52,31 @@ phrases them differently, and an LLM judge would catch this.
 **The opposite is true.** The LLM judge scored slightly *lower* than
 deterministic. This means:
 
-1. The deterministic evaluator was being *generous* (partial lexical overlap
-   getting credit that an LLM judge considers incorrect).
-2. The retrieval quality gap (LoCoMo 67% vs vanilla GPT-4o 74%) is genuine.
-3. The vague-query vocabulary-overlap ceiling is the real bottleneck — not
-   evaluator bias.
+> ⚠️ **The interpretation below is retracted along with the results.** Both the deterministic and LLM-judge columns measure the lexical fallback adapter on a corrupted corpus, so the "gap is genuine / vocabulary-overlap ceiling" inference has no empirical support from these runs. Preserved as historical context. See [`../experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md).
 
-## Comparison to Field (with Fair LLM Judging)
+1. ~~The deterministic evaluator was being *generous* (partial lexical overlap
+   getting credit that an LLM judge considers incorrect).~~ **[RETRACTED]**
+2. ~~The retrieval quality gap (LoCoMo 67% vs vanilla GPT-4o 74%) is genuine.~~ **[RETRACTED 2026-05-14]**
+3. ~~The vague-query vocabulary-overlap ceiling is the real bottleneck — not
+   evaluator bias.~~ **[RETRACTED 2026-05-14 — vocabulary-overlap-ceiling framing is unsupported by clean-data measurements.]**
+
+## Comparison to Field (with Fair LLM Judging) — RETRACTED
 
 | System | LoCoMo | LongMemEval | Evaluator |
 |--------|--------|-------------|-----------|
-| **TardigradeDB** | **67.2%** | **88.8%** | DeepSeek LLM judge |
+| TardigradeDB ⚠️ **RETRACTED 2026-05-14** | ~~67.2%~~ | ~~88.8%~~ | DeepSeek LLM judge (on corrupted dataset, via lexical fallback) |
 | ByteRover 2.0 | 92.2% | — | Their eval |
 | Letta / MemGPT | — | 83.2% | Their eval |
 | Vanilla GPT-4o-mini | 74.0% | — | LoCoMo official |
 | Mem0g (graph) | 68.4% | — | Their eval |
 | Mem0 | 66.9% | 49.0% | Their eval |
 
-LongMemEval 88.8% still beats every published number in our references.
-LoCoMo 67.2% is below the vanilla baseline (74%).
+~~LongMemEval 88.8% still beats every published number in our references.
+LoCoMo 67.2% is below the vanilla baseline (74%).~~ **[RETRACTED 2026-05-14.]**
 
-## What This Means for Next Steps
+## What This Means for Next Steps — RETRACTED
 
-The LoCoMo gap is a retrieval problem, not a scoring problem. Closing it
+~~The LoCoMo gap is a retrieval problem, not a scoring problem. Closing it
 requires better vague-query handling — the same problem multi-view
 consolidation was designed to address (but hasn't yet delivered on, due
-to the generator quality bottleneck).
+to the generator quality bottleneck).~~ **[RETRACTED 2026-05-14 — the "LoCoMo gap" being interpreted here was an artifact of the corrupted dataset + lexical fallback. Honest next step is a clean-data full-corpus re-run; see audit § Recommendations.]**

@@ -45,10 +45,11 @@ they cannot avoid.
 
 Caveats:
 
-- Synthetic random keys: no semantic structure. Real Qwen3 hidden
-  states have more separable geometry and we expect recall to hold
-  higher at 5K+ scale (see `docs/experiments/` for the 100% recall
-  measurement at 5K on synthetic-fact corpora).
+- Synthetic random keys: no semantic structure. The 100% recall at 5K
+  measurement (`docs/experiments/`) was on a synthetic-fact corpus with
+  separable per-token Qwen3 hidden states. Real-world semantic structure
+  (overlapping conversations, paraphrased facts) may differ; we do not
+  extrapolate the 5K synthetic recall to arbitrary real workloads.
 - Hardware: RTX 3070 Ti / WSL2. Different hardware shifts numbers
   but not the order-of-magnitude story.
 - This is **retrieval-only latency**. The LLM-gated bench path
@@ -132,9 +133,10 @@ this doc's claim.
 - **We do not claim** to beat Mem0 / Memobase / ByteRover on the
   LoCoMo Judge score. Our 50-item LoCoMo smoke under the LLM-gated
   pipeline scored ~7 % (see audit doc Phase 1B.5 + Phase 1B.6).
-  That's a real number we publish honestly. The bench race is a
-  separate, in-flight initiative documented in
-  `~/.claude/plans/i-want-a-definitive-majestic-bear.md` Track B.
+  That's a real number we publish honestly. Clean-data full-corpus
+  re-measurement and the head-to-head bench race are tracked in
+  [`../experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md)
+  § Recommendations going forward (Track B).
 - **We do not claim** to be production-ready. This is a research
   prototype. APIs, on-disk formats, and guarantees may change.
 - **We do not claim** that the synthetic-key recall@5 = 82 % at 5K
