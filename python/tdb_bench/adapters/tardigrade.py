@@ -662,16 +662,33 @@ class TardigradeAdapter(BenchmarkAdapter):
         text isn't tracked (e.g. the lexical-RLS fallback path that
         never ingests via the chunker). Answer comes from the
         ground_truth of the first matching item — same as before.
+
+        Deduplication: identical chunk-text strings are emitted only
+        once. Smoke #5 (#98) found that LoCoMo's prep emits one row
+        per QA — all QAs from the same conversation share context,
+        and ingest writes the same chunks N times with distinct cell
+        IDs. Without dedup, top-5 returned 5 copies of the same
+        chunk and the LLM saw repeated material. Dedup at retrieval
+        is a band-aid; ingest-time dedup is the structural fix (#98).
         """
         evidence: list[str] = []
+        seen_texts: set[str] = set()
         answer = ""
-        for h in handles[: max(1, top_k)]:
+        scanned = 0
+        for h in handles:
+            if scanned >= max(1, top_k):
+                break
             cell_id = int(h.cell_id)
             mapped = self._cell_to_item.get(cell_id)
             if mapped is None:
                 continue
             chunk_text = self._cell_to_chunk_text.get(cell_id)
-            evidence.append(chunk_text if chunk_text else mapped.context)
+            text = chunk_text if chunk_text else mapped.context
+            if text in seen_texts:
+                continue
+            seen_texts.add(text)
+            evidence.append(text)
+            scanned += 1
             if not answer:
                 answer = mapped.ground_truth
         return evidence, answer
