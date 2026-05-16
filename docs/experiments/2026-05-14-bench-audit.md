@@ -1079,6 +1079,97 @@ prep), `15ee6fd` (CLI), `4351a8d` (headline scripts).
 
 ---
 
+## Phase 1B.9 — Judge prompt v2 (mid-headline judge-bias retraction)
+
+**The 1B.8 LoCoMo 65.67 % was inflated; the honest number is 42 %.**
+
+While the full headline run was in flight (Phase 1B.8 launched at
+01:17:38), a triage of the 30-item smoke output found two opposite
+judge-bias failure modes happening at the same time:
+
+1. **Refusal-credit bias.** "I don't know" answers were being scored
+   1.0 because the justify stage politely explained the refusal and
+   the v1 judge took that explanation as evidence the model
+   "understood" the question. Concrete example: Q="What is Caroline's
+   relationship status?" GT="Single" Answer="I don't know." → v1
+   score = 1.0.
+2. **Wrong-evidence penalty bias.** Exact-match correct answers were
+   being scored 0.0 when retrieval surfaced wrong evidence and the
+   justify trace concluded "evidence does not support the answer."
+   Concrete: Q="Which airline did I fly with the most..." GT="United
+   Airlines" Answer="United Airlines." → v1 score = 0.0.
+
+Isolated reproduction confirmed both:
+
+```
+plain judge (Q+GT+A only)              → 1.0   (correct)
+justify-then-judge, wrong evidence     → 0.0   (wrong-evidence penalty)
+justify-then-judge with IDK answer     → 1.0   (refusal-credit bias)
+```
+
+### v2 judge prompt (commit `af462a1`)
+
+Five explicit numbered rules applied in order:
+
+1. Exact / paraphrase / abbreviation match → 1.0 regardless of trace.
+2. Substantive partial match → 0.6 – 0.9.
+3. Factually wrong (different entity, opposite meaning) → 0.0.
+4. **"I don't know" / refusal → 0.0.**
+5. Trace used only to break ties on partial matches.
+
+`JUDGE_WITH_JUSTIFICATION_TEMPLATE_VERSION` bumped v1 → v2;
+the response cache auto-invalidates v1 entries.
+
+### Re-measured smoke (30 items, v2 judge)
+
+| Dataset | items | avg score (v2) | avg score (v1) | Direction |
+|---|---|---|---|---|
+| LoCoMo | 30 | **0.4167** | 0.6567 | corrected ↓ (refusal inflation removed) |
+| LongMemEval | 30 | **0.3333** | 0.3667 | corrected ↓ (smaller IDK effect) |
+
+Per-item diff: 14 items dropped (all "I don't know" answers v1
+wrongly credited as 1.0); 6 items rose (exact-match correct answers
+v1 wrongly penalized as 0.0). The v2 prompt is HONEST in both directions —
+the aggregate movement is asymmetric because LoCoMo has a much
+higher refusal rate than confused-but-correct answers at this scale.
+
+### Honest field comparison (updated)
+
+| System | LoCoMo | Generator |
+|---|---|---|
+| ByteRover 2.0 | ~92 % | Gemini 3 |
+| Memobase | ~76 % | GPT-4o |
+| Letta | ~74 % | GPT-4o |
+| Mem0 | ~67 % | GPT-4o-mini |
+| **TardigradeDB challenger v2 (30 items)** | **~42 %** | DeepSeek + Qwen3-1.7B |
+
+We are **not** in the Mem0 ballpark on this slice. The lift over the
+prior pipeline (0.072 → 0.4167) is real and substantial — **5.8× and
++34.5 pp** — but the comparison-to-leaderboard claim from 1B.8 was
+based on inflated judging and is retracted.
+
+### Why this matters beyond the headline number
+
+This is exactly the failure-mode dial481/locomo-audit catalogs:
+"LLM judges accept 62.81 % of intentionally-wrong-but-topical
+answers." Different judge prompts yield wildly different headline
+numbers on the same retrieval pipeline. Our 1B.9 retraction is a
+ground-truth example of what dial481 warns about — and the reason
+the positioning doc (`docs/positioning/latency_first.md`) declines
+to put LoCoMo Judge in the headline.
+
+### Headline run
+
+Killed mid-run at ~1 hr / ~25 % completion to avoid burning ~$3
+on the inflated-judge measurement. Re-launching with v2 prompt is
+the path to a citeable number; the smoke says ~42 % is the
+expected order of magnitude.
+
+Commits relevant to Phase 1B.9: `af462a1` (judge v2 prompt + bumped
+template version).
+
+---
+
 ## Recommendations going forward
 
 1. **Run the full 1533-item LoCoMo bench on the clean dataset** with
