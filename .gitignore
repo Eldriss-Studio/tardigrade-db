@@ -30,3 +30,6 @@ benchmarks/datasets/**/*.jsonl
 # Remember plugin (Claude Code)
 .remember/
 .env.bench
+
+# Claude Code session-local state
+.claude/scheduled_tasks.lock
