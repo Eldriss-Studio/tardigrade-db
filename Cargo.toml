@@ -28,6 +28,11 @@ tdb-engine = { path = "crates/tdb-engine" }
 
 # Shared external dependencies
 thiserror = "2"
+# Diagnostic-quality error reporting (codes, help text, source spans).
+# `default-features = false` keeps the dep light (no fancy terminal
+# renderer), but we still need the `derive` feature for the
+# `#[derive(Diagnostic)]` macro.
+miette = { version = "7", default-features = false, features = ["derive"] }
 memmap2 = "0.9"
 crossbeam-epoch = "0.9"
 crossbeam-utils = "0.8"
