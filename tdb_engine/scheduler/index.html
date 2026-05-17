@@ -41,12 +41,12 @@ inside the engine directory and reloaded on
 restart, which is the whole point of having an engine-side
 scheduler instead of consumer-side cron.</p>
 <h3 id="firing-model"><a class="doc-anchor" href="#firing-model">§</a>Firing model</h3>
-<p>Each enqueued action fires <strong>at most once</strong>. The maintenance
-worker (or any caller) invokes
+<p>The maintenance worker (or any caller) invokes
 <a href="../engine/struct.Engine.html#method.fire_due_scheduled" title="method tdb_engine::engine::Engine::fire_due_scheduled"><code>crate::engine::Engine::fire_due_scheduled</code></a> periodically;
-actions whose <code>fires_at &lt;= now</code> are executed and removed
-from the schedule. The persistence file is rewritten after
-every change.</p>
+actions whose <code>fires_at &lt;= now</code> are executed, then removed
+from the schedule once execute returns <code>Ok</code>. The persistence
+file is rewritten after every state change. Delivery is
+<strong>at-least-once across crashes</strong> — see the next section.</p>
 <h3 id="crash-semantics-at-least-once--idempotent-actions"><a class="doc-anchor" href="#crash-semantics-at-least-once--idempotent-actions">§</a>Crash semantics: at-least-once + idempotent actions</h3>
 <p>Every scheduled action <strong>stays in the on-disk schedule
 until its execute call returns successfully.</strong> Then — and

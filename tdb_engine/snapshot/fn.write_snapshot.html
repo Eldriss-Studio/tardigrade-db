@@ -37,13 +37,13 @@
     engine_dir: &amp;<a class="struct" href="https://doc.rust-lang.org/1.95.0/std/path/struct.Path.html" title="struct std::path::Path">Path</a>,
     out_path: &amp;<a class="struct" href="https://doc.rust-lang.org/1.95.0/std/path/struct.Path.html" title="struct std::path::Path">Path</a>,
     stats: <a class="struct" href="struct.SnapshotStats.html" title="struct tdb_engine::snapshot::SnapshotStats">SnapshotStats</a>,
-) -&gt; Result&lt;<a class="struct" href="struct.SnapshotManifest.html" title="struct tdb_engine::snapshot::SnapshotManifest">SnapshotManifest</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Bundle the engine’s working directory into a tar archive at
+) -&gt; <a class="type" href="../../tdb_core/error/type.Result.html" title="type tdb_core::error::Result">Result</a>&lt;<a class="struct" href="struct.SnapshotManifest.html" title="struct tdb_engine::snapshot::SnapshotManifest">SnapshotManifest</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Bundle the engine’s working directory into a tar archive at
 <code>out_path</code>. Returns the manifest by value so callers can log or
 persist it without re-reading the archive.</p>
 <p>The caller must have already flushed the engine. <a href="../engine/struct.Engine.html#method.snapshot" title="method tdb_engine::engine::Engine::snapshot"><code>crate::engine::Engine::snapshot</code></a>
 in <code>engine.rs</code> is the proper public entry point and handles flush.</p>
 <h2 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h2>
-<p>Returns [<code>TardigradeError::Io</code>] on disk failures and a
-[<code>TardigradeError::SnapshotIntegrity</code>] if the manifest cannot be
+<p>Returns <a href="../../tdb_core/error/enum.TardigradeError.html#variant.Io" title="variant tdb_core::error::TardigradeError::Io"><code>TardigradeError::Io</code></a> on disk failures and a
+<a href="../../tdb_core/error/enum.TardigradeError.html#variant.SnapshotIntegrity" title="variant tdb_core::error::TardigradeError::SnapshotIntegrity"><code>TardigradeError::SnapshotIntegrity</code></a> if the manifest cannot be
 serialized (which would indicate a bug, not user input).</p>
 </div></details></section></div></main></body></html>
