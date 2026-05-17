@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tardigrade-db"
-version = "0.1.5"
+version = "0.2.0"
 description = "LLM-native database kernel — persistent KV cache memory for autonomous AI agents"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
