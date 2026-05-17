@@ -12,6 +12,16 @@ pre-commit:
       skip:
         - merge
         - rebase
+    lazy-imports:
+      # CI's lint job imports tdb_bench.ci_gate without building the
+      # PyO3 wheel. Any module reachable at import time must not
+      # require the native extension. The script simulates the
+      # extension's absence and verifies the import chain. Catches
+      # regressions like commit `0282db2` did, before push.
+      run: PYTHONPATH=python python3 scripts/lint_lazy_imports.py
+      skip:
+        - merge
+        - rebase
 
 pre-push:
   parallel: false
