@@ -20,11 +20,15 @@ If any of those fail, fix before releasing — never tag broken state.
 
 ## Version policy
 
-Pre-1.0, semver-ish:
+Pre-1.0 SemVer per the [Cargo / Rust convention](https://doc.rust-lang.org/cargo/reference/semver.html), which is also how the Python packaging ecosystem reads it: while major is `0`, **minor functions as major**. Cargo treats `^0.2` as `>=0.2.0, <0.3.0` — bumping `0.2 → 0.3` signals an incompatible change to consumers.
 
-- **Minor bump (`0.X.0`)**: new user-facing surface, breaking internal changes that consumers may notice, batch of features.
-- **Patch bump (`0.X.Y`)**: bug fixes, documentation, internal refactors with no consumer impact.
+That gives the right rules:
+
+- **Patch bump (`0.X.Y`)**: anything additive or backward-compatible — new methods, new enum variants on non-exhaustive types, new optional fields, bug fixes, internal refactors, documentation. The vast majority of pre-1.0 releases should be patch bumps.
+- **Minor bump (`0.X.0`)**: a breaking change consumers must adapt to. Removed or renamed public items, changed signatures, removed enum variants, semantic changes that older callers can't ignore.
 - **No major bumps until 1.0**: 1.0 happens when the public API is stable enough to commit to. Not yet.
+
+**Common mistake to avoid:** bumping minor just because a release is "big" or "marks a milestone." Size of the diff doesn't matter; *breakingness* does. A 5000-line additive PR is a patch. A one-line rename of a public function is a minor.
 
 The workspace version (`Cargo.toml`'s `[workspace.package].version`) and the Python distribution version (`pyproject.toml`'s `[project].version`) must match. The PyO3 binding inherits from the workspace.
 
