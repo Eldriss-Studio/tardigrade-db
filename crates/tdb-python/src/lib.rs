@@ -1057,12 +1057,102 @@ impl Engine {
     }
 }
 
+/// Labeled checkpoint repository (M3.1).
+///
+/// Wraps `tdb_engine::checkpoint::CheckpointRepository` so consumers
+/// can save engine snapshots under string labels with a
+/// monotonically increasing sequence per label, list / find latest,
+/// and restore the latest into a fresh directory.
+#[pyclass]
+struct CheckpointRepository {
+    inner: tdb_engine::checkpoint::CheckpointRepository,
+}
+
+fn entry_to_dict(
+    py: Python<'_>,
+    entry: &tdb_engine::checkpoint::CheckpointEntry,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("label", &entry.label)?;
+    dict.set_item("seq", entry.seq)?;
+    dict.set_item("path", entry.path.display().to_string())?;
+    let manifest_dict = pyo3::types::PyDict::new(py);
+    manifest_dict.set_item("magic", &entry.manifest.magic)?;
+    manifest_dict.set_item("format_version", entry.manifest.format_version)?;
+    manifest_dict.set_item("created_at", &entry.manifest.created_at)?;
+    manifest_dict.set_item("pack_count", entry.manifest.stats.pack_count)?;
+    manifest_dict.set_item("owner_count", entry.manifest.stats.owner_count)?;
+    manifest_dict.set_item("sha256", &entry.manifest.sha256)?;
+    manifest_dict.set_item("quantization_codec", &entry.manifest.codecs.quantization)?;
+    manifest_dict.set_item("key_codec", &entry.manifest.codecs.key)?;
+    dict.set_item("manifest", manifest_dict)?;
+    Ok(dict.into())
+}
+
+#[pymethods]
+impl CheckpointRepository {
+    /// Open a repository rooted at ``root`` (created lazily).
+    #[new]
+    fn new(root: &str) -> Self {
+        Self {
+            inner: tdb_engine::checkpoint::CheckpointRepository::new(std::path::PathBuf::from(
+                root,
+            )),
+        }
+    }
+
+    /// Save ``engine``'s current state under ``label``. Returns a
+    /// dict with ``label``, ``seq``, ``path``, and ``manifest``.
+    fn save(
+        &self,
+        py: Python<'_>,
+        engine: &Engine,
+        label: &str,
+    ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        let entry = {
+            let mut eng = lock_engine(&engine.inner)?;
+            self.inner
+                .save_from(&mut eng, label)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+        };
+        entry_to_dict(py, &entry)
+    }
+
+    /// Return all checkpoints, optionally filtered by ``label``.
+    #[pyo3(signature = (label=None))]
+    fn list(&self, py: Python<'_>, label: Option<&str>) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
+        let entries = self.inner.list(label).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        entries.iter().map(|e| entry_to_dict(py, e)).collect()
+    }
+
+    /// Latest checkpoint for ``label`` or ``None`` if none exist.
+    fn latest(&self, py: Python<'_>, label: &str) -> PyResult<Option<pyo3::Py<pyo3::PyAny>>> {
+        match self.inner.latest(label).map_err(|e| PyRuntimeError::new_err(e.to_string()))? {
+            Some(entry) => Ok(Some(entry_to_dict(py, &entry)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Restore the latest checkpoint for ``label`` into ``target_dir``.
+    fn restore_latest(&self, label: &str, target_dir: &str) -> PyResult<Engine> {
+        let engine = self
+            .inner
+            .restore_latest(label, std::path::Path::new(target_dir))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(Engine {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(engine)),
+            maintenance_worker: None,
+        })
+    }
+}
+
 /// `TardigradeDB` — LLM-native database kernel for persistent KV cache memory.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<Engine>()?;
     m.add_class::<ReadResult>()?;
+    m.add_class::<CheckpointRepository>()?;
 
     m.add("ENCODING_HEADER_SIZE", tdb_engine::encoding::HEADER_SIZE)?;
     m.add("ENCODING_SENTINEL", tdb_engine::encoding::HEADER_SENTINEL)?;

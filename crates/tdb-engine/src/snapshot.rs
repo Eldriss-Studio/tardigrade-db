@@ -233,6 +233,48 @@ pub fn write_snapshot(
     Ok(manifest)
 }
 
+/// Read just the manifest from a snapshot archive without
+/// extracting the payload or verifying the integrity hash.
+///
+/// Useful for listing operations that only need metadata (label
+/// directories, repository enumeration). Magic and format version
+/// are still validated — a tar that lies about being a
+/// `TardigradeDB` snapshot is refused here too.
+///
+/// # Errors
+///
+/// - [`TardigradeError::NotATardigradeSnapshot`] — magic missing.
+/// - [`TardigradeError::UnsupportedFormatVersion`] — unknown version.
+/// - [`TardigradeError::Io`] — disk failure.
+pub fn read_manifest_only(in_path: &Path) -> Result<SnapshotManifest> {
+    let file = File::open(in_path).map_err(|e| TardigradeError::Io { source: e })?;
+    let mut archive = Archive::new(file);
+    for entry in archive.entries().map_err(|e| TardigradeError::Io { source: e })? {
+        let mut entry = entry.map_err(|e| TardigradeError::Io { source: e })?;
+        let path = entry.path().map_err(|e| TardigradeError::Io { source: e })?.to_path_buf();
+        if path.as_os_str() != SNAPSHOT_MANIFEST_NAME {
+            continue;
+        }
+        let buf = read_entry_bounded(&mut entry, MAX_MANIFEST_BYTES)?;
+        let manifest: SnapshotManifest = serde_json::from_slice(&buf).map_err(|e| {
+            TardigradeError::NotATardigradeSnapshot { reason: format!("manifest parse: {e}") }
+        })?;
+        if manifest.magic != SNAPSHOT_MAGIC {
+            return Err(TardigradeError::NotATardigradeSnapshot {
+                reason: format!("unexpected magic: {:?}", manifest.magic),
+            });
+        }
+        if manifest.format_version != SNAPSHOT_FORMAT_VERSION {
+            return Err(TardigradeError::UnsupportedFormatVersion {
+                found: manifest.format_version,
+                supported: SNAPSHOT_FORMAT_VERSION,
+            });
+        }
+        return Ok(manifest);
+    }
+    Err(TardigradeError::NotATardigradeSnapshot { reason: "manifest.json missing".to_string() })
+}
+
 /// Restore a snapshot archive into ``target_dir`` (which must be
 /// empty or non-existent) and validate its manifest. The caller
 /// invokes [`crate::engine::Engine::open`] on ``target_dir`` afterwards.
@@ -242,11 +284,11 @@ pub fn write_snapshot(
 ///
 /// # Errors
 ///
-/// * [`TardigradeError::NotATardigradeSnapshot`] — magic missing.
-/// * [`TardigradeError::UnsupportedFormatVersion`] — unknown version.
-/// * [`TardigradeError::SnapshotCodecMismatch`] — codec incompatible.
-/// * [`TardigradeError::SnapshotIntegrity`] — SHA-256 mismatch.
-/// * [`TardigradeError::Io`] — disk failure.
+/// - [`TardigradeError::NotATardigradeSnapshot`] — magic missing.
+/// - [`TardigradeError::UnsupportedFormatVersion`] — unknown version.
+/// - [`TardigradeError::SnapshotCodecMismatch`] — codec incompatible.
+/// - [`TardigradeError::SnapshotIntegrity`] — SHA-256 mismatch.
+/// - [`TardigradeError::Io`] — disk failure.
 pub fn read_snapshot(in_path: &Path, target_dir: &Path) -> Result<SnapshotManifest> {
     let file = File::open(in_path).map_err(|e| TardigradeError::Io { source: e })?;
     let mut archive = Archive::new(file);
