@@ -129,9 +129,21 @@ class TardigradeClient:
 
     # -- Query ---------------------------------------------------------------
 
+    def encode_query(self, text: str) -> np.ndarray:
+        """Compute the per-token retrieval key for *text*.
+
+        Returns just the query key (no layer payloads) — useful
+        when a consumer wants to cache the key, log it, or feed it
+        directly into :py:meth:`Engine.mem_read_pack` /
+        :py:meth:`Engine.mem_read_tokens` without going through
+        :meth:`query`.
+        """
+        key, _ = self._kv_fn(text, self._tokenizer)
+        return key
+
     def query(self, query_text: str, *, k: int = 5) -> list[dict]:
         """Retrieve the top-k packs matching *query_text*."""
-        key, _ = self._kv_fn(query_text, self._tokenizer)
+        key = self.encode_query(query_text)
         return self._engine.mem_read_pack(key, k, self._owner)
 
     # -- Lifecycle -----------------------------------------------------------
