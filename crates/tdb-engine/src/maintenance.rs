@@ -143,6 +143,11 @@ fn run_loop(
             let days = config.hours_per_tick / 24.0;
             eng.advance_days(days);
             let evicted = eng.evict_draft_packs(config.eviction_threshold, None).unwrap_or(0);
+            // Fire any scheduled actions whose time has come.
+            // Errors are swallowed at the loop level — the
+            // scheduler keeps un-committed entries for retry on
+            // the next tick.
+            let _ = eng.fire_due_scheduled(SystemTime::now());
             drop(eng);
 
             if let Ok(mut s) = status.lock() {
