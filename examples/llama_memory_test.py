@@ -1,11 +1,32 @@
 #!/usr/bin/env python3
 """TardigradeDB memory test with local Llama models via llama-cpp-python.
 
-Uses actual model hidden states from Ollama's GGUF files — no API needed,
-no separate download. Extracts per-token embeddings from the model's final
-layer and stores them as KV cache tensors in TardigradeDB.
+Extracts per-token embeddings from a local GGUF model's final layer
+and stores them as KV cache tensors in TardigradeDB. Designed for
+Ollama-style local setups — no API key, no separate downloads
+beyond the model file itself.
+
+Prerequisites:
+
+1. Install ``llama-cpp-python`` (or use the optional extra in the
+   project's ``pyproject.toml``):
+
+       pip install tardigrade-db[llama]
+
+   Or, for a manual install:
+
+       pip install llama-cpp-python
+
+2. Point the script at a GGUF model file via the
+   ``TARDIGRADE_LLAMA_GGUF`` environment variable:
+
+       export TARDIGRADE_LLAMA_GGUF=/path/to/model.gguf
+
+   If you have Ollama installed, the model blobs live under
+   ``~/.ollama/models/blobs/`` (macOS / Linux). Look there.
 
 Usage:
+
     python examples/llama_memory_test.py store "memory one" "memory two" ...
     python examples/llama_memory_test.py query "related question"
     python examples/llama_memory_test.py info
@@ -13,24 +34,22 @@ Usage:
 """
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 
 import numpy as np
-from llama_cpp import Llama
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 import tardigrade_db
 
-# --- Configuration ---
+# --- Configuration ----------------------------------------------------------
 
-# Ollama blob path for llama3.2:3b (2.0 GB, Q4_K_M)
-MODEL_PATH = (
-    "/Users/storylight/.ollama/models/blobs/"
-    "sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff"
-)
-MODEL_NAME = "llama3.2:3b"
+# The model path is consumer-provided. We don't bake any
+# author-specific path in here — fail fast with a useful hint
+# instead.
+MODEL_PATH_ENV_VAR = "TARDIGRADE_LLAMA_GGUF"
 
 DB_DIR = Path(tempfile.gettempdir()) / "tardigrade_llama_test"
 MEMORY_MAP = DB_DIR / "memory_map.json"
@@ -38,13 +57,52 @@ MEMORY_MAP = DB_DIR / "memory_map.json"
 _llm = None
 
 
+def _model_path() -> str:
+    """Resolve the configured GGUF model path, or exit with a hint."""
+    path = os.environ.get(MODEL_PATH_ENV_VAR, "").strip()
+    if not path:
+        sys.stderr.write(
+            f"error: {MODEL_PATH_ENV_VAR} is not set.\n"
+            "       Point it at a local GGUF model file, e.g.:\n"
+            f"       export {MODEL_PATH_ENV_VAR}=$HOME/.ollama/models/blobs/sha256-...\n"
+            "       See the script's docstring for details.\n",
+        )
+        sys.exit(2)
+    if not Path(path).is_file():
+        sys.stderr.write(
+            f"error: model file not found at: {path}\n"
+            f"       (resolved from {MODEL_PATH_ENV_VAR})\n",
+        )
+        sys.exit(2)
+    return path
+
+
+def _require_llama_cpp():
+    """Import llama_cpp lazily, with a useful error if it's missing."""
+    try:
+        from llama_cpp import Llama  # noqa: F401 — checked import
+    except ImportError:
+        sys.stderr.write(
+            "error: llama-cpp-python is not installed.\n"
+            "       Install with: pip install llama-cpp-python\n"
+            "       Or via the optional extra: pip install tardigrade-db[llama]\n",
+        )
+        sys.exit(2)
+
+
 def get_model():
     """Load the model once (cached)."""
     global _llm
     if _llm is None:
-        print(f"  Loading {MODEL_NAME}...", end=" ", flush=True)
+        # Resolve the config first — the env-var / bad-path errors
+        # are more actionable than the llama_cpp install hint, so
+        # surface them before the import probe.
+        path = _model_path()
+        _require_llama_cpp()
+        from llama_cpp import Llama
+        print(f"  Loading {Path(path).name}...", end=" ", flush=True)
         _llm = Llama(
-            model_path=MODEL_PATH,
+            model_path=path,
             n_ctx=512,
             n_gpu_layers=-1,
             verbose=False,
@@ -132,7 +190,6 @@ def cmd_info():
         memory_map = json.loads(MEMORY_MAP.read_text())
 
     print(f"  DB path: {DB_DIR}")
-    print(f"  Model: {MODEL_NAME}")
     print(f"  Total cells: {engine.cell_count()}")
     print(f"  Mapped memories: {len(memory_map)}\n")
 

@@ -1,25 +1,16 @@
 # Building on TardigradeDB
 
-TardigradeDB is a general-purpose KV-native memory engine. The
-foundation surface exposes six verbs — `store`, `query`,
-`list_owners`, `status`, `save`, `restore` — and three pluggable
-extension points (KV-capture function, write buffer, consolidation
-sweep). Everything else is consumer code.
+TardigradeDB is a general-purpose KV-native memory engine. The foundation surface exposes six verbs — `store`, `query`, `list_owners`, `status`, `save`, `restore` — and three pluggable extension points (KV-capture function, write buffer, consolidation sweep). Everything else is consumer code.
 
-This guide gives three reference patterns for consumers. Each is
-under 40 lines of glue, no engine internals.
+This guide gives three reference patterns for consumers. Each is under 40 lines of glue, no engine internals.
 
-The Python surface (`tardigrade_hooks.TardigradeClient`) and the
-HTTP surface (`POST /mem/*`) expose the same six verbs — pick
-whichever fits the consumer's runtime. The patterns below use
-HTTP so they read the same in Python, Node, Deno, or Go.
+The Python surface (`tardigrade_hooks.TardigradeClient`) and the HTTP surface (`POST /mem/*`) expose the same six verbs — pick whichever fits the consumer's runtime. The patterns below use HTTP so they read the same in Python, Node, Deno, or Go.
 
 ---
 
 ## Pattern 1 — Turn-by-turn agent memory
 
-A long-running agent observes events, recalls relevant ones before
-each action, and persists state across restarts.
+A long-running agent observes events, recalls relevant ones before each action, and persists state across restarts.
 
 ```python
 import httpx
@@ -46,18 +37,13 @@ class AgentMemory:
         return r.json()["manifest"]
 ```
 
-Owner-scoping isolates each agent's memory; the engine never
-returns one agent's pack to another agent's query. Checkpointing
-is durable — the resulting tar archive carries magic, version,
-codec identifiers, and a SHA-256 over the payload.
+Owner-scoping isolates each agent's memory; the engine never returns one agent's pack to another agent's query. Checkpointing is durable — the resulting tar archive carries magic, version, codec identifiers, and a SHA-256 over the payload.
 
 ---
 
 ## Pattern 2 — Multi-NPC / multi-tenant isolation
 
-Many short-lived consumers (game NPCs, per-user agents, per-tenant
-shards) share one engine. Each consumer is an owner id; the engine
-keeps memories disjoint at the storage layer.
+Many short-lived consumers (game NPCs, per-user agents, per-tenant shards) share one engine. Each consumer is an owner id; the engine keeps memories disjoint at the storage layer.
 
 ```js
 // Node — same idea in any HTTP-speaking runtime
@@ -77,20 +63,13 @@ async function npcMemory(bridgeUrl, npcId) {
 }
 ```
 
-The subjectivity property — same event, different memory per
-owner — is structural. Two NPCs observing the same event store
-two separate packs scoped to their own owner ids; neither query
-ever crosses the boundary. See `examples/nodejs_consumer/` for a
-runnable end-to-end demo of this pattern.
+The subjectivity property — same event, different memory per owner — is structural. Two NPCs observing the same event store two separate packs scoped to their own owner ids; neither query ever crosses the boundary. See `examples/nodejs_consumer/` for a runnable end-to-end demo of this pattern.
 
 ---
 
 ## Pattern 3 — Document ingest as long-context memory
 
-A consumer wants to ask questions over a corpus that's larger than
-its model's context window. Ingest each document as one or more
-packs; later, a query retrieves the relevant packs and the
-consumer composes its own prompt.
+A consumer wants to ask questions over a corpus that's larger than its model's context window. Ingest each document as one or more packs; later, a query retrieves the relevant packs and the consumer composes its own prompt.
 
 ```python
 import httpx, pathlib
@@ -115,11 +94,7 @@ def chunk_by_paragraphs(text: str, max_chars: int) -> list[str]:
     return out
 ```
 
-For richer ingestion (token-bounded chunking, overlap, view
-generation), the Python API exposes
-`tardigrade_hooks.TardigradeClient.ingest_file` directly — no
-need to reimplement chunking via HTTP if the consumer is in
-Python.
+For richer ingestion (token-bounded chunking, overlap, view generation), the Python API exposes `tardigrade_hooks.TardigradeClient.ingest_file` directly — no need to reimplement chunking via HTTP if the consumer is in Python.
 
 ---
 
@@ -133,8 +108,7 @@ The engine is deterministic under the following conditions:
 - Vamana graph construction is seeded.
 - Importance scoring is deterministic.
 
-Consumers that rely on replay testing (snapshot a session, run
-again, expect bitwise-identical retrievals) can lean on this.
+Consumers that rely on replay testing (snapshot a session, run again, expect bitwise-identical retrievals) can lean on this.
 
 ---
 
