@@ -33,59 +33,192 @@
   <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
 </div>
 
-</head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">tdb_core/</div>error.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-2"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>thiserror::Error;
-<a href=#2 id=2 data-nosnippet>2</a>
-<a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span><span class="kw">crate</span>::kv_pack::PackId;
-<a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span><span class="kw">crate</span>::types::CellId;
-<a href=#5 id=5 data-nosnippet>5</a>
-<a href=#6 id=6 data-nosnippet>6</a><span class="attr">#[derive(Debug, Error)]
-<a href=#7 id=7 data-nosnippet>7</a></span><span class="kw">pub enum </span>TardigradeError {
-<a href=#8 id=8 data-nosnippet>8</a>    <span class="attr">#[error(<span class="string">"cell not found: {0}"</span>)]
-<a href=#9 id=9 data-nosnippet>9</a>    </span>CellNotFound(CellId),
-<a href=#10 id=10 data-nosnippet>10</a>
-<a href=#11 id=11 data-nosnippet>11</a>    <span class="attr">#[error(<span class="string">"pack not found: {0}"</span>)]
-<a href=#12 id=12 data-nosnippet>12</a>    </span>PackNotFound(PackId),
-<a href=#13 id=13 data-nosnippet>13</a>
-<a href=#14 id=14 data-nosnippet>14</a>    <span class="attr">#[error(<span class="string">"segment full: cannot append to segment at {path}"</span>)]
-<a href=#15 id=15 data-nosnippet>15</a>    </span>SegmentFull { path: String },
-<a href=#16 id=16 data-nosnippet>16</a>
-<a href=#17 id=17 data-nosnippet>17</a>    <span class="attr">#[error(<span class="string">"storage I/O error: {source}"</span>)]
-<a href=#18 id=18 data-nosnippet>18</a>    </span>Io {
-<a href=#19 id=19 data-nosnippet>19</a>        <span class="attr">#[from]
-<a href=#20 id=20 data-nosnippet>20</a>        </span>source: std::io::Error,
-<a href=#21 id=21 data-nosnippet>21</a>    },
-<a href=#22 id=22 data-nosnippet>22</a>
-<a href=#23 id=23 data-nosnippet>23</a>    <span class="attr">#[error(<span class="string">"quantization error: {0}"</span>)]
-<a href=#24 id=24 data-nosnippet>24</a>    </span>Quantization(String),
-<a href=#25 id=25 data-nosnippet>25</a>
-<a href=#26 id=26 data-nosnippet>26</a>    <span class="attr">#[error(<span class="string">"dimension mismatch: expected {expected}, got {actual} for {context}"</span>)]
-<a href=#27 id=27 data-nosnippet>27</a>    </span>DimensionMismatch { expected: usize, actual: usize, context: String },
-<a href=#28 id=28 data-nosnippet>28</a>
-<a href=#29 id=29 data-nosnippet>29</a>    <span class="attr">#[error(<span class="string">"WAL recovery failed: {0}"</span>)]
-<a href=#30 id=30 data-nosnippet>30</a>    </span>WalRecovery(String),
-<a href=#31 id=31 data-nosnippet>31</a>
-<a href=#32 id=32 data-nosnippet>32</a>    <span class="attr">#[error(<span class="string">"index error: {0}"</span>)]
-<a href=#33 id=33 data-nosnippet>33</a>    </span>Index(String),
+</head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">tdb_core/</div>error.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! Engine-wide error type.
+<a href=#2 id=2 data-nosnippet>2</a>//!
+<a href=#3 id=3 data-nosnippet>3</a>//! `TardigradeError` is the single error type returned by every
+<a href=#4 id=4 data-nosnippet>4</a>//! public engine API. It derives both:
+<a href=#5 id=5 data-nosnippet>5</a>//!
+<a href=#6 id=6 data-nosnippet>6</a>//! - [`thiserror::Error`] — for ergonomic `?` propagation and
+<a href=#7 id=7 data-nosnippet>7</a>//!   `Display` / `source()` chains.
+<a href=#8 id=8 data-nosnippet>8</a>//! - [`miette::Diagnostic`] — for diagnostic-quality output:
+<a href=#9 id=9 data-nosnippet>9</a>//!   stable error codes (`tdb::storage::cell_not_found`,
+<a href=#10 id=10 data-nosnippet>10</a>//!   `tdb::retrieval::empty_corpus`, ...), inline help text
+<a href=#11 id=11 data-nosnippet>11</a>//!   with actionable next steps, and source spans (for variants
+<a href=#12 id=12 data-nosnippet>12</a>//!   that carry one).
+<a href=#13 id=13 data-nosnippet>13</a>//!
+<a href=#14 id=14 data-nosnippet>14</a>//! ## Backward compatibility
+<a href=#15 id=15 data-nosnippet>15</a>//!
+<a href=#16 id=16 data-nosnippet>16</a>//! Existing variants keep their `Display` shape verbatim — code
+<a href=#17 id=17 data-nosnippet>17</a>//! that grep'd "cell not found: 42" or pattern-matched on
+<a href=#18 id=18 data-nosnippet>18</a>//! variants pre-0.3 continues to work. New context-rich variants
+<a href=#19 id=19 data-nosnippet>19</a>//! were added alongside the old ones rather than replacing them,
+<a href=#20 id=20 data-nosnippet>20</a>//! and consumers can migrate at their own pace.
+<a href=#21 id=21 data-nosnippet>21</a>//!
+<a href=#22 id=22 data-nosnippet>22</a>//! ## Adding a variant
+<a href=#23 id=23 data-nosnippet>23</a>//!
+<a href=#24 id=24 data-nosnippet>24</a>//! Every new variant should:
+<a href=#25 id=25 data-nosnippet>25</a>//!
+<a href=#26 id=26 data-nosnippet>26</a>//! - Carry structured fields (not just `String`) for anything a
+<a href=#27 id=27 data-nosnippet>27</a>//!   consumer might want to programmatically match on.
+<a href=#28 id=28 data-nosnippet>28</a>//! - Have a `#[diagnostic(code = "tdb::&lt;area&gt;::&lt;name&gt;")]`
+<a href=#29 id=29 data-nosnippet>29</a>//!   annotation so consumers get a stable code.
+<a href=#30 id=30 data-nosnippet>30</a>//! - Have a `#[diagnostic(help("..."))]` line with a one-sentence
+<a href=#31 id=31 data-nosnippet>31</a>//!   hint on how to fix the underlying problem. The help text
+<a href=#32 id=32 data-nosnippet>32</a>//!   shows up in `cargo doc` and in miette's pretty-printed
+<a href=#33 id=33 data-nosnippet>33</a>//!   output.
 <a href=#34 id=34 data-nosnippet>34</a>
-<a href=#35 id=35 data-nosnippet>35</a>    <span class="attr">#[error(<span class="string">"governance error: {0}"</span>)]
-<a href=#36 id=36 data-nosnippet>36</a>    </span>Governance(String),
+<a href=#35 id=35 data-nosnippet>35</a></span><span class="kw">use </span>miette::Diagnostic;
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>thiserror::Error;
 <a href=#37 id=37 data-nosnippet>37</a>
-<a href=#38 id=38 data-nosnippet>38</a>    <span class="attr">#[error(<span class="string">"capacity exceeded: {0}"</span>)]
-<a href=#39 id=39 data-nosnippet>39</a>    </span>CapacityExceeded(String),
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span><span class="kw">crate</span>::kv_pack::PackId;
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span><span class="kw">crate</span>::types::CellId;
 <a href=#40 id=40 data-nosnippet>40</a>
-<a href=#41 id=41 data-nosnippet>41</a>    <span class="comment">// ── Snapshot / restore errors ────────────────────────────────
-<a href=#42 id=42 data-nosnippet>42</a>    </span><span class="attr">#[error(<span class="string">"not a TardigradeDB snapshot: {reason}"</span>)]
-<a href=#43 id=43 data-nosnippet>43</a>    </span>NotATardigradeSnapshot { reason: String },
-<a href=#44 id=44 data-nosnippet>44</a>
-<a href=#45 id=45 data-nosnippet>45</a>    <span class="attr">#[error(<span class="string">"unsupported snapshot format version {found}, supported: {supported}"</span>)]
-<a href=#46 id=46 data-nosnippet>46</a>    </span>UnsupportedFormatVersion { found: u8, supported: u8 },
-<a href=#47 id=47 data-nosnippet>47</a>
-<a href=#48 id=48 data-nosnippet>48</a>    <span class="attr">#[error(<span class="string">"snapshot codec mismatch for {field}: snapshot={snapshot}, engine={engine}"</span>)]
-<a href=#49 id=49 data-nosnippet>49</a>    </span>SnapshotCodecMismatch { field: String, snapshot: String, engine: String },
-<a href=#50 id=50 data-nosnippet>50</a>
-<a href=#51 id=51 data-nosnippet>51</a>    <span class="attr">#[error(<span class="string">"snapshot integrity check failed: {0}"</span>)]
-<a href=#52 id=52 data-nosnippet>52</a>    </span>SnapshotIntegrity(String),
-<a href=#53 id=53 data-nosnippet>53</a>}
-<a href=#54 id=54 data-nosnippet>54</a>
-<a href=#55 id=55 data-nosnippet>55</a><span class="kw">pub type </span><span class="prelude-ty">Result</span>&lt;T&gt; = std::result::Result&lt;T, TardigradeError&gt;;
+<a href=#41 id=41 data-nosnippet>41</a><span class="attr">#[derive(Debug, Error, Diagnostic)]
+<a href=#42 id=42 data-nosnippet>42</a></span><span class="kw">pub enum </span>TardigradeError {
+<a href=#43 id=43 data-nosnippet>43</a>    <span class="attr">#[error(<span class="string">"cell not found: {0}"</span>)]
+<a href=#44 id=44 data-nosnippet>44</a>    #[diagnostic(
+<a href=#45 id=45 data-nosnippet>45</a>        code(tdb::storage::cell_not_found),
+<a href=#46 id=46 data-nosnippet>46</a>        help(
+<a href=#47 id=47 data-nosnippet>47</a>            <span class="string">"the cell id was never written or has been evicted; check engine.cell_count() and the deletion log"
+<a href=#48 id=48 data-nosnippet>48</a>        </span>)
+<a href=#49 id=49 data-nosnippet>49</a>    )]
+<a href=#50 id=50 data-nosnippet>50</a>    </span>CellNotFound(CellId),
+<a href=#51 id=51 data-nosnippet>51</a>
+<a href=#52 id=52 data-nosnippet>52</a>    <span class="attr">#[error(<span class="string">"pack not found: {0}"</span>)]
+<a href=#53 id=53 data-nosnippet>53</a>    #[diagnostic(
+<a href=#54 id=54 data-nosnippet>54</a>        code(tdb::storage::pack_not_found),
+<a href=#55 id=55 data-nosnippet>55</a>        help(
+<a href=#56 id=56 data-nosnippet>56</a>            <span class="string">"the pack id was never written or has been deleted; check engine.list_packs() for the current set"
+<a href=#57 id=57 data-nosnippet>57</a>        </span>)
+<a href=#58 id=58 data-nosnippet>58</a>    )]
+<a href=#59 id=59 data-nosnippet>59</a>    </span>PackNotFound(PackId),
+<a href=#60 id=60 data-nosnippet>60</a>
+<a href=#61 id=61 data-nosnippet>61</a>    <span class="attr">#[error(<span class="string">"segment full: cannot append to segment at {path}"</span>)]
+<a href=#62 id=62 data-nosnippet>62</a>    #[diagnostic(
+<a href=#63 id=63 data-nosnippet>63</a>        code(tdb::storage::segment_full),
+<a href=#64 id=64 data-nosnippet>64</a>        help(
+<a href=#65 id=65 data-nosnippet>65</a>            <span class="string">"the current segment hit its size cap; the engine should roll a new segment automatically — if you see this, the rollover path didn't fire"
+<a href=#66 id=66 data-nosnippet>66</a>        </span>)
+<a href=#67 id=67 data-nosnippet>67</a>    )]
+<a href=#68 id=68 data-nosnippet>68</a>    </span>SegmentFull { path: String },
+<a href=#69 id=69 data-nosnippet>69</a>
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="attr">#[error(<span class="string">"storage I/O error: {source}"</span>)]
+<a href=#71 id=71 data-nosnippet>71</a>    #[diagnostic(code(tdb::storage::io))]
+<a href=#72 id=72 data-nosnippet>72</a>    </span>Io {
+<a href=#73 id=73 data-nosnippet>73</a>        <span class="attr">#[from]
+<a href=#74 id=74 data-nosnippet>74</a>        </span>source: std::io::Error,
+<a href=#75 id=75 data-nosnippet>75</a>    },
+<a href=#76 id=76 data-nosnippet>76</a>
+<a href=#77 id=77 data-nosnippet>77</a>    <span class="attr">#[error(<span class="string">"quantization error: {0}"</span>)]
+<a href=#78 id=78 data-nosnippet>78</a>    #[diagnostic(code(tdb::storage::quantization))]
+<a href=#79 id=79 data-nosnippet>79</a>    </span>Quantization(String),
+<a href=#80 id=80 data-nosnippet>80</a>
+<a href=#81 id=81 data-nosnippet>81</a>    <span class="attr">#[error(<span class="string">"dimension mismatch: expected {expected}, got {actual} for {context}"</span>)]
+<a href=#82 id=82 data-nosnippet>82</a>    #[diagnostic(
+<a href=#83 id=83 data-nosnippet>83</a>        code(tdb::retrieval::dimension_mismatch),
+<a href=#84 id=84 data-nosnippet>84</a>        help(
+<a href=#85 id=85 data-nosnippet>85</a>            <span class="string">"the query key dimension must match the dimension of stored cells; verify your capture function emits the same hidden-state width on every write and read"
+<a href=#86 id=86 data-nosnippet>86</a>        </span>)
+<a href=#87 id=87 data-nosnippet>87</a>    )]
+<a href=#88 id=88 data-nosnippet>88</a>    </span>DimensionMismatch { expected: usize, actual: usize, context: String },
+<a href=#89 id=89 data-nosnippet>89</a>
+<a href=#90 id=90 data-nosnippet>90</a>    <span class="attr">#[error(<span class="string">"WAL recovery failed: {0}"</span>)]
+<a href=#91 id=91 data-nosnippet>91</a>    #[diagnostic(
+<a href=#92 id=92 data-nosnippet>92</a>        code(tdb::index::wal_recovery),
+<a href=#93 id=93 data-nosnippet>93</a>        help(
+<a href=#94 id=94 data-nosnippet>94</a>            <span class="string">"the WAL on disk is corrupted or partially written; if this followed a hard crash, the segment may be salvageable with manual inspection of the WAL file"
+<a href=#95 id=95 data-nosnippet>95</a>        </span>)
+<a href=#96 id=96 data-nosnippet>96</a>    )]
+<a href=#97 id=97 data-nosnippet>97</a>    </span>WalRecovery(String),
+<a href=#98 id=98 data-nosnippet>98</a>
+<a href=#99 id=99 data-nosnippet>99</a>    <span class="attr">#[error(<span class="string">"index error: {0}"</span>)]
+<a href=#100 id=100 data-nosnippet>100</a>    #[diagnostic(code(tdb::index::generic))]
+<a href=#101 id=101 data-nosnippet>101</a>    </span>Index(String),
+<a href=#102 id=102 data-nosnippet>102</a>
+<a href=#103 id=103 data-nosnippet>103</a>    <span class="attr">#[error(<span class="string">"governance error: {0}"</span>)]
+<a href=#104 id=104 data-nosnippet>104</a>    #[diagnostic(code(tdb::governance::generic))]
+<a href=#105 id=105 data-nosnippet>105</a>    </span>Governance(String),
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a>    <span class="attr">#[error(<span class="string">"capacity exceeded: {0}"</span>)]
+<a href=#108 id=108 data-nosnippet>108</a>    #[diagnostic(code(tdb::storage::capacity))]
+<a href=#109 id=109 data-nosnippet>109</a>    </span>CapacityExceeded(String),
+<a href=#110 id=110 data-nosnippet>110</a>
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="comment">// ── Snapshot / restore errors ────────────────────────────────
+<a href=#112 id=112 data-nosnippet>112</a>    </span><span class="attr">#[error(<span class="string">"not a TardigradeDB snapshot: {reason}"</span>)]
+<a href=#113 id=113 data-nosnippet>113</a>    #[diagnostic(
+<a href=#114 id=114 data-nosnippet>114</a>        code(tdb::snapshot::not_a_snapshot),
+<a href=#115 id=115 data-nosnippet>115</a>        help(
+<a href=#116 id=116 data-nosnippet>116</a>            <span class="string">"the file does not begin with the expected `tdb!` magic — verify it was produced by Engine::snapshot()"
+<a href=#117 id=117 data-nosnippet>117</a>        </span>)
+<a href=#118 id=118 data-nosnippet>118</a>    )]
+<a href=#119 id=119 data-nosnippet>119</a>    </span>NotATardigradeSnapshot { reason: String },
+<a href=#120 id=120 data-nosnippet>120</a>
+<a href=#121 id=121 data-nosnippet>121</a>    <span class="attr">#[error(<span class="string">"unsupported snapshot format version {found}, supported: {supported}"</span>)]
+<a href=#122 id=122 data-nosnippet>122</a>    #[diagnostic(
+<a href=#123 id=123 data-nosnippet>123</a>        code(tdb::snapshot::unsupported_format_version),
+<a href=#124 id=124 data-nosnippet>124</a>        help(
+<a href=#125 id=125 data-nosnippet>125</a>            <span class="string">"the snapshot was created by a different (newer or much older) engine version; export it back to a portable format via the source engine"
+<a href=#126 id=126 data-nosnippet>126</a>        </span>)
+<a href=#127 id=127 data-nosnippet>127</a>    )]
+<a href=#128 id=128 data-nosnippet>128</a>    </span>UnsupportedFormatVersion { found: u8, supported: u8 },
+<a href=#129 id=129 data-nosnippet>129</a>
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="attr">#[error(<span class="string">"snapshot codec mismatch for {field}: snapshot={snapshot}, engine={engine}"</span>)]
+<a href=#131 id=131 data-nosnippet>131</a>    #[diagnostic(
+<a href=#132 id=132 data-nosnippet>132</a>        code(tdb::snapshot::codec_mismatch),
+<a href=#133 id=133 data-nosnippet>133</a>        help(
+<a href=#134 id=134 data-nosnippet>134</a>            <span class="string">"the snapshot was written by an engine using a different codec; build an explicit codec-conversion tool, do not silently reinterpret"
+<a href=#135 id=135 data-nosnippet>135</a>        </span>)
+<a href=#136 id=136 data-nosnippet>136</a>    )]
+<a href=#137 id=137 data-nosnippet>137</a>    </span>SnapshotCodecMismatch { field: String, snapshot: String, engine: String },
+<a href=#138 id=138 data-nosnippet>138</a>
+<a href=#139 id=139 data-nosnippet>139</a>    <span class="attr">#[error(<span class="string">"snapshot integrity check failed: {0}"</span>)]
+<a href=#140 id=140 data-nosnippet>140</a>    #[diagnostic(
+<a href=#141 id=141 data-nosnippet>141</a>        code(tdb::snapshot::integrity),
+<a href=#142 id=142 data-nosnippet>142</a>        help(
+<a href=#143 id=143 data-nosnippet>143</a>            <span class="string">"the SHA-256 of the snapshot payload does not match the manifest; the archive is corrupted in transit or storage"
+<a href=#144 id=144 data-nosnippet>144</a>        </span>)
+<a href=#145 id=145 data-nosnippet>145</a>    )]
+<a href=#146 id=146 data-nosnippet>146</a>    </span>SnapshotIntegrity(String),
+<a href=#147 id=147 data-nosnippet>147</a>
+<a href=#148 id=148 data-nosnippet>148</a>    <span class="comment">// ── Retrieval errors (new in v0.3) ───────────────────────────
+<a href=#149 id=149 data-nosnippet>149</a>    </span><span class="doccomment">/// Returned when a query targets an owner that has no packs
+<a href=#150 id=150 data-nosnippet>150</a>    /// stored. Distinguishes "no results found" (empty Ok vec)
+<a href=#151 id=151 data-nosnippet>151</a>    /// from "you queried something that never had data" — the
+<a href=#152 id=152 data-nosnippet>152</a>    /// latter is almost always a consumer bug.
+<a href=#153 id=153 data-nosnippet>153</a>    </span><span class="attr">#[error(<span class="string">"empty corpus for owner {owner}: no packs have ever been stored for this owner"</span>)]
+<a href=#154 id=154 data-nosnippet>154</a>    #[diagnostic(
+<a href=#155 id=155 data-nosnippet>155</a>        code(tdb::retrieval::empty_corpus),
+<a href=#156 id=156 data-nosnippet>156</a>        help(
+<a href=#157 id=157 data-nosnippet>157</a>            <span class="string">"verify the owner id matches the one used at write time; for multi-agent setups, the same engine handle must be shared across clients (use TardigradeClient.builder().with_engine(engine))"
+<a href=#158 id=158 data-nosnippet>158</a>        </span>)
+<a href=#159 id=159 data-nosnippet>159</a>    )]
+<a href=#160 id=160 data-nosnippet>160</a>    </span>EmptyCorpus { owner: u64 },
+<a href=#161 id=161 data-nosnippet>161</a>
+<a href=#162 id=162 data-nosnippet>162</a>    <span class="doccomment">/// Returned by query paths when no usable retrieval key
+<a href=#163 id=163 data-nosnippet>163</a>    /// could be derived for the query. The `hint` field carries
+<a href=#164 id=164 data-nosnippet>164</a>    /// a context-specific reason (e.g. `kv_capture_fn` returned
+<a href=#165 id=165 data-nosnippet>165</a>    /// `None`, or query text was empty after tokenization).
+<a href=#166 id=166 data-nosnippet>166</a>    </span><span class="attr">#[error(<span class="string">"no query key produced: {hint}"</span>)]
+<a href=#167 id=167 data-nosnippet>167</a>    #[diagnostic(
+<a href=#168 id=168 data-nosnippet>168</a>        code(tdb::retrieval::no_query_key),
+<a href=#169 id=169 data-nosnippet>169</a>        help(
+<a href=#170 id=170 data-nosnippet>170</a>            <span class="string">"a query needs a non-empty key to score against; for TardigradeClient, configure kv_capture_fn — for direct Engine use, ensure the passed key has length &gt; 0"
+<a href=#171 id=171 data-nosnippet>171</a>        </span>)
+<a href=#172 id=172 data-nosnippet>172</a>    )]
+<a href=#173 id=173 data-nosnippet>173</a>    </span>NoQueryKey { hint: String },
+<a href=#174 id=174 data-nosnippet>174</a>
+<a href=#175 id=175 data-nosnippet>175</a>    <span class="doccomment">/// Returned when the streaming write buffer's coalesced
+<a href=#176 id=176 data-nosnippet>176</a>    /// flush fails. The cause is preserved as the diagnostic
+<a href=#177 id=177 data-nosnippet>177</a>    /// source so consumers can drill in.
+<a href=#178 id=178 data-nosnippet>178</a>    </span><span class="attr">#[error(<span class="string">"write buffer flush failed at offset {failed_offset}: {detail}"</span>)]
+<a href=#179 id=179 data-nosnippet>179</a>    #[diagnostic(
+<a href=#180 id=180 data-nosnippet>180</a>        code(tdb::storage::flush_failed),
+<a href=#181 id=181 data-nosnippet>181</a>        help(
+<a href=#182 id=182 data-nosnippet>182</a>            <span class="string">"the engine could not durably persist the buffered writes; check disk space, fsync errors, and underlying filesystem health"
+<a href=#183 id=183 data-nosnippet>183</a>        </span>)
+<a href=#184 id=184 data-nosnippet>184</a>    )]
+<a href=#185 id=185 data-nosnippet>185</a>    </span>FlushFailed { failed_offset: u64, detail: String },
+<a href=#186 id=186 data-nosnippet>186</a>}
+<a href=#187 id=187 data-nosnippet>187</a>
+<a href=#188 id=188 data-nosnippet>188</a><span class="kw">pub type </span><span class="prelude-ty">Result</span>&lt;T&gt; = std::result::Result&lt;T, TardigradeError&gt;;
 </code></pre></div></section></main></body></html>
