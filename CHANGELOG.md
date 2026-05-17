@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_no changes yet_
+
+## [0.3.1] — 2026-05-17
+
+Patch release. Polish work plus an honest fix to the latency-bench artifact. No breaking changes.
+
 ### Added
 
 - **Typed errors with diagnostic codes.** `TardigradeError` now derives `miette::Diagnostic` alongside `thiserror::Error`. Every variant gets a stable `#[diagnostic(code = "tdb::<area>::<name>")]` and a one-sentence `#[help(...)]` annotation that surfaces in `cargo doc` and miette's pretty output. Three new context-rich variants added alongside the existing string-bag ones: `EmptyCorpus { owner }` (distinguishes "no results" from "queried something that never had data"), `NoQueryKey { hint }` (surfaces query-key derivation failures), `FlushFailed { failed_offset, detail }` (structured failure mode for the streaming write buffer). Existing variants keep their `Display` shape verbatim — code that grep'd "cell not found: 42" or pattern-matched on variants from earlier versions still works (`5b0e230`).
