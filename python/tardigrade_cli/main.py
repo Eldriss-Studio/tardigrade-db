@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from tardigrade_cli.chat_cmd import ChatCommand
 from tardigrade_cli.consolidate_cmd import ConsolidateCommand
 from tardigrade_cli.init_cmd import InitCommand
 from tardigrade_cli.query_cmd import QueryCommand
@@ -42,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         QueryCommand(),
         StatusCommand(),
         ConsolidateCommand(),
+        ChatCommand(),
     ]
     parser = _build_parser(subcommands)
     args = parser.parse_args(argv)
