@@ -7,6 +7,7 @@ Pre-1.0 release procedure for `tardigrade-db`. Single-artifact release: the Pyth
 - **After a feature batch ships green.** Don't release per-commit; group multiple related commits behind one tag. A milestone group (e.g. the HTTP bridge + Node.js example + consumer guide) is a good unit. A single internal refactor is not.
 - **Out-of-cycle for security or critical bug fixes.** Tag the fix on its own, bump patch, ship.
 - **Avoid sleepy releases.** If the working tree has been dormant for a sprint and nothing meaningful changed, don't release just for the heartbeat.
+- **Avoid frenetic releases too.** Default cadence is weeks, not hours. Multiple releases in a single working session is a smell — bump consumers' update cost without giving them new behaviour proportional to the noise. When a feature lands, ask: "could this wait for the next planned release window?" If yes, hold it and batch with the next set of work. The exception is a security or data-loss fix, which ships immediately on its own.
 
 Trigger check before kicking off:
 
