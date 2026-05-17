@@ -1,4 +1,4 @@
-"""ATDD: DeepSeekAnswerer real-API smoke (Slice L4).
+"""ATDD: DeepSeekAnswerer real-API smoke.
 
 Live API call. Marked ``live_api`` so CI / no-key environments
 auto-skip. Single-shot trivia question to confirm the wiring; the

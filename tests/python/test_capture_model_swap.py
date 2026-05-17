@@ -1,4 +1,4 @@
-"""ATDD: capture-model swap to Qwen3-1.7B (Track B, slice B1).
+"""ATDD: capture-model swap to Qwen3-1.7B.
 
 Pins that the engine + adapter handle a different capture model than
 the default Qwen3-0.6B without code changes — just the env-var swap

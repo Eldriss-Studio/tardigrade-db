@@ -1,4 +1,4 @@
-# ATDD tests for vLLM block format conversion (Phase 36).
+# ATDD tests for vLLM block format conversion.
 #
 # Tests the format conversion between TardigradeDB flat KV arrays
 # and vLLM paged attention blocks. These work without vLLM installed.

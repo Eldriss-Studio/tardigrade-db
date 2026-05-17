@@ -7,7 +7,7 @@ doc can attribute movement to a real cause. Same shape applies to
 LongMemEval's ``question_type``.
 
 Pin the contract on the static aggregation helper directly so the
-test is hermetic — no adapter or evaluator wiring needed. Phase 1B
+test is hermetic — no adapter or evaluator wiring needed. the bench audit
 audit 2026-05-16 #89.
 """
 
@@ -163,7 +163,7 @@ class TestRetrievalAggregateAttachedToSystemsPayload:
 
 
 class TestAnswerTextRetrievalAggregate:
-    """Phase 1B.10 research recommendation #101: a parallel
+    """research recommendation #101: a parallel
     answer-text retrieval metric that substring-matches the
     BenchmarkItem.ground_truth against retrieved chunks, rather
     than evidence text. Predicts LLM-Judge better than the

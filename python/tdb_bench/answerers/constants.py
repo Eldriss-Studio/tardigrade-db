@@ -46,7 +46,7 @@ LLM_GATE_TEMPERATURE = 0.0
 # material to answer from.
 #
 # 25 chosen because measured item-level R@25 ≈ 84% on LoCoMo vs R@5
-# ≈ 30% (Phase 1B.2 audit, 2026-05-15). This is the retrieval-recall
+# ≈ 30% (bench audit audit, 2026-05-15). This is the retrieval-recall
 # ceiling the LLM can possibly reason over. Bumping further yields
 # diminishing returns and pushes prompt size up.
 #
@@ -55,7 +55,7 @@ LLM_GATE_INNER_TOP_K = 25
 
 # How many of the retrieved chunks reach the LLM prompt.
 #
-# Bumped 10 → 20 (Phase 1B audit 2026-05-16 #94 follow-up). Smoke #3
+# Bumped 10 → 20 (bench audit 2026-05-16 #94 follow-up). Smoke #3
 # diagnosed that LoCoMo evidence-marked gold ≠ answer-bearing text.
 # The retriever surfaces the marked-gold turn at R@1=1.00 but the
 # literal answer often lives in a different turn (e.g. evidence

@@ -1,4 +1,4 @@
-"""ATDD (Track A — A2.3, Python side):
+"""ATDD (Python side):
 
 `Engine.status()` surfaces `arena_bytes` and `arena_bytes_per_cell`
 to the Python bench harness so the footprint reporter

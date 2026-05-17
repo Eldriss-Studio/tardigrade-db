@@ -162,7 +162,7 @@ class TextChunker:
         stride and ignored ``self._boundary`` entirely, producing
         mid-word/mid-sentence fragment chunks. Those fragments
         carried degenerate hidden states that dominated retrieval
-        (LongMemEval Phase 0: cell 225 appeared in 99.2% of top-10s
+        (LongMemEval diagnostic: cell 225 appeared in 99.2% of top-10s
         across all 500 queries). Now: every non-final chunk's
         char-space end is pulled back to the most-recent boundary
         within a ``BOUNDARY_LOOKBACK_RATIO``-sized window; only
@@ -196,11 +196,11 @@ class TextChunker:
             start_char = pos
             end_char = min(start_char + len(decoded), len(text))
 
-            # Phase 1A.1b — boundary-aware START trim for non-first
+            # chunker boundary work — boundary-aware START trim for non-first
             # chunks. The overlap stride lands chunk N+1's start
             # ``overlap_tokens`` tokens back into chunk N, which for
             # any sub-word tokenizer almost always falls mid-word.
-            # Phase 0 diagnostic 2026-05-14 showed those mid-word
+            # retrieval diagnostic 2026-05-14 showed those mid-word
             # starts (especially mid-number, e.g. "0000" inside
             # "$10,000") produce anomalous hidden states that
             # dominate retrieval as hub cells. Snap start_char

@@ -1,4 +1,4 @@
-"""ATDD: Slice E5 — fairness preservation under Decorator widening.
+"""ATDD: fairness preservation under Decorator widening.
 
 The Decorator's private inner retrieval budget must not surface in
 ``validate_fairness``: every system still presents the same

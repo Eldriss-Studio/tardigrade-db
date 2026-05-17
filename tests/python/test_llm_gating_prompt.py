@@ -1,4 +1,4 @@
-"""ATDD: PromptBuilder + MockAnswerGenerator (Slice L1).
+"""ATDD: PromptBuilder + MockAnswerGenerator.
 
 The prompt is part of the experiment — it gets versioned via
 ``PROMPT_TEMPLATE_VERSION`` so cache keys and reproducibility tags pin
@@ -80,7 +80,7 @@ class TestPromptBuilder:
         assert PromptBuilder().template_version() == PROMPT_TEMPLATE_VERSION
 
     def test_permits_inference_from_evidence(self):
-        # Phase 1B audit 2026-05-16 #94 — the v1 prompt's strict
+        # bench audit 2026-05-16 #94 — the v1 prompt's strict
         # "only the evidence below" wording caused IDK refusals on
         # items needing trivial inference (paraphrase, multi-line
         # combination, relative-date resolution). The v2 wording

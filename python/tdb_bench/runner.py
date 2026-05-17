@@ -419,7 +419,7 @@ class BenchmarkRunner:
         row["retrieval_metrics"] = compute_retrieval_metrics(
             gold=list(gold), retrieved=list(q.evidence), ks=_RETRIEVAL_KS,
         )
-        # Answer-text retrieval (Phase 1B.10 research recommendation,
+        # Answer-text retrieval (research recommendation,
         # task #101). The evidence-text metric above measures "did we
         # find the LoCoMo-marked supporting context"; this metric
         # measures "did we put a chunk containing the answer text in
@@ -546,7 +546,7 @@ class BenchmarkRunner:
         the average — they have nothing to measure and would skew the
         denominator. Rows with empty retrieved evidence (real-zero) are
         counted. Returns ``{"n": <rows scored>, "recall@k": ..., ...}``.
-        Phase 1B audit 2026-05-16 #88 — audit-resistant headline.
+        bench audit 2026-05-16 #88 — audit-resistant headline.
         """
         return BenchmarkRunner._mean_retrieval_metrics(
             items, system, row_field="retrieval_metrics",
@@ -561,7 +561,7 @@ class BenchmarkRunner:
         Parallel to :meth:`_retrieval_aggregate` but reads the
         ``answer_text_metrics`` row field — substring-match of
         ``BenchmarkItem.ground_truth`` against retrieved chunks.
-        Phase 1B audit 2026-05-16 #101 — downstream-predictive metric
+        bench audit 2026-05-16 #101 — downstream-predictive metric
         that complements the audit-resistant evidence-text metric.
         """
         return BenchmarkRunner._mean_retrieval_metrics(
@@ -612,7 +612,7 @@ class BenchmarkRunner:
         ``multi-session``, … slices side by side. The key includes the
         dataset prefix because LongMemEval's ``temporal-reasoning`` and
         LoCoMo's ``temporal`` measure different things and must not be
-        merged. Phase 1B audit 2026-05-16 #89.
+        merged. bench audit 2026-05-16 #89.
         """
         buckets: dict[str, list[float]] = defaultdict(list)
         all_for_system: dict[str, int] = defaultdict(int)

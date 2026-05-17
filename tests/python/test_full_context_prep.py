@@ -1,10 +1,10 @@
-"""ATDD: full-conversation LoCoMo prep (Track B, slice B2.1).
+"""ATDD: full-conversation LoCoMo prep.
 
 `--locomo-context=full` mode produces full ~62 K-char conversation
 contexts (vs ~500 chars in evidence mode). This pins the shape so
 the challenger pipeline's ingest path can rely on it.
 
-Slice B2.1 only — the GPU smoke (B2.2 / B2.3) is gated on B1
+One slice — the GPU smoke (B2.2 / B2.3) is gated on B1
 (capture-model swap) and lives in
 ``tests/python/test_capture_model_swap.py``.
 """

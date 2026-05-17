@@ -1,4 +1,4 @@
-# ATDD tests for trace-linked multi-hop retrieval (Phase 31).
+# ATDD tests for trace-linked multi-hop retrieval.
 #
 # Design pattern: Graph Traversal (follow Python-side trace links
 # from retrieved packs to discover related packs).

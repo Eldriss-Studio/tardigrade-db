@@ -90,7 +90,7 @@ class TestCrossEncoderRerankerThreadSafety:
     thread-safe — without an internal lock, parallel `predict` calls
     race on shared state and yield non-deterministic scores. Observed
     as a 0.42 → 0.38 LoCoMo headline drift under `--workers 4`
-    (Phase 1B audit 2026-05-16 task #96)."""
+    (bench audit 2026-05-16 task #96)."""
 
     _QUERIES = [
         ("Where did Alice move?", "alice"),

@@ -1,4 +1,4 @@
-# ATDD acceptance tests for KnowledgePackStore (Phase 28).
+# ATDD acceptance tests for KnowledgePackStore.
 #
 # Design pattern: Facade (wraps chat template + KV computation + pack
 # storage + DynamicCache reconstruction + injection).

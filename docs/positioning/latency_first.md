@@ -132,11 +132,12 @@ this doc's claim.
 
 - **We do not claim** to beat Mem0 / Memobase / ByteRover on the
   LoCoMo Judge score. Our 50-item LoCoMo smoke under the LLM-gated
-  pipeline scored ~7 % (see audit doc Phase 1B.5 + Phase 1B.6).
-  That's a real number we publish honestly. Clean-data full-corpus
-  re-measurement and the head-to-head bench race are tracked in
+  pipeline scored ~7 % — see the bench audit at
   [`../experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md)
-  § Recommendations going forward (Track B).
+  for the trace. That's a real number we publish honestly.
+  Clean-data full-corpus re-measurement and the head-to-head bench
+  race are tracked in the same audit doc's "Recommendations going
+  forward" section.
 - **We do not claim** to be production-ready. This is a research
   prototype. APIs, on-disk formats, and guarantees may change.
 - **We do not claim** that the synthetic-key recall@5 = 82 % at 5K

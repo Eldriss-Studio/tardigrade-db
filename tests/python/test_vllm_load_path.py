@@ -644,7 +644,7 @@ def test_connector_init_back_compat_with_two_arg_call():
     )
 
 
-# -- Phase 1: Bounded Fingerprint Lifecycle (Bounded Cache pattern) -----------
+# -- Bounded Fingerprint Lifecycle (Bounded Cache pattern) -----------
 
 def _build_connector_for_save_path(tmp_path, max_fingerprints=4):
     """Connector with engine + save-path attributes for fingerprint tests.
@@ -809,7 +809,7 @@ def test_live_request_fingerprint_survives_eviction_of_others(tmp_path):
     assert 50 in c._pack_id_by_fingerprint, "E should be present"
 
 
-# -- Phase 2: Metadata Bridge (DTO pattern) -----------------------------------
+# -- Metadata Bridge (DTO pattern) -----------------------------------
 
 def _build_connector_with_load_state(tmp_path):
     """Connector pre-populated with matched packs for metadata bridge tests."""
@@ -949,7 +949,7 @@ def test_build_connector_meta_with_no_matches_returns_empty(tmp_path):
     assert len(meta.load_requests) == 0
 
 
-# -- Phase 3: Save-Side Retrieval Key Unification (Strategy + DTO patterns) ----
+# -- Save-Side Retrieval Key Unification (Strategy + DTO patterns) ----
 
 class _EngineKeyCapture:
     """Wrapper around Engine that captures retrieval keys passed to mem_write_pack."""

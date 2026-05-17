@@ -1,5 +1,5 @@
 """ATDD: TardigradeAdapter returns *chunk* text as evidence, not the
-parent item's full context (Phase 1B audit 2026-05-16 #97).
+parent item's full context (bench audit 2026-05-16 #97).
 
 The reranker already correctly uses ``_cell_to_chunk_text`` to score
 candidates. But the evidence path that builds the result handed to
@@ -131,7 +131,7 @@ class TestEvidenceIsChunkText:
         assert answer == ""
 
     def test_duplicate_chunk_text_emitted_only_once(self):
-        # Smoke #5 (Phase 1B audit 2026-05-16 #98) found that LoCoMo's
+        # Smoke #5 (bench audit 2026-05-16 #98) found that LoCoMo's
         # prep emits one row per QA, so a conversation with N QAs gets
         # ingested N times → identical chunk text under N distinct
         # cell IDs. Top-5 was returning 5 copies of the same chunk.

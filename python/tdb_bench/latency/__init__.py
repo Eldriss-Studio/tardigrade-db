@@ -1,4 +1,4 @@
-"""Latency benchmark primitives for the positioning reframe (Track A).
+"""Latency benchmark primitives for the positioning reframe.
 
 Strategy + Template Method harness that captures ingest time and
 query-latency percentiles at fixed corpus sizes. The primitives are

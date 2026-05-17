@@ -1,6 +1,6 @@
 """AT-1A.1, AT-1A.2 — TextChunker honors its BoundaryStrategy.
 
-Background: the 2026-05-14 Phase 0 diagnostic
+Background: the 2026-05-14 retrieval diagnostic
 (`docs/experiments/2026-05-14-bench-audit.md`) found that
 TextChunker._split_tokens accepted a BoundaryStrategy in __init__ but
 never invoked it. Chunks split purely by token count produced
@@ -178,7 +178,7 @@ class TestSubWordTokenizerBoundaryAwareness:
     own boundary strategy, so when sub-word tokens straddled word
     boundaries — typical for BPE tokenizers on natural English —
     chunks ended mid-word and produced anomalous hidden states that
-    dominated retrieval (LongMemEval Phase 0 diagnostic, 2026-05-14).
+    dominated retrieval (LongMemEval retrieval diagnostic, 2026-05-14).
 
     With the fix, every non-final chunk must end on a whole-word
     boundary even though the underlying tokenizer slices sub-word.
@@ -252,16 +252,16 @@ class TestSubWordTokenizerBoundaryAwareness:
             )
 
     def test_overlap_does_not_create_mid_word_starts(self):
-        """Phase 1A.1b: with non-zero overlap, each chunk after the
+        """chunker boundary work: with non-zero overlap, each chunk after the
         first starts ``overlap_tokens`` tokens BEFORE the previous
         chunk's clean end. Going back into the middle of the previous
         chunk's content lands mid-word for any sub-word tokenizer.
 
-        Phase 0 diagnostic (2026-05-14): the LongMemEval hub cells
+        retrieval diagnostic (2026-05-14): the LongMemEval hub cells
         were all chunks starting with numeric fragments
         (``0000 is...``, ``000 miles...``) — produced by the overlap
         landing inside a number like ``$10,000``. End-boundary trim
-        (Phase 1A.1) didn't fix this; start-boundary snap does.
+        (chunker boundary work) didn't fix this; start-boundary snap does.
         """
         text = "wonder marvel splash quartz blazon thrush galaxy " * 12
         chunker = TextChunker(

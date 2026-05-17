@@ -1,7 +1,7 @@
 //! AT-2 — `PerTokenRetriever::query_with_source` decodes only candidates
 //! and produces top-K equivalent to the eager `query` path.
 //!
-//! Slice 2 of the universal scalability fix. The test is at the
+//! Part of the universal scalability fix. The test is at the
 //! retriever's public surface (Kent Dodds): it exercises observable
 //! behavior — top-K equivalence and bounded source consultations —
 //! without poking internal state.

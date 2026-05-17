@@ -200,7 +200,7 @@ pub fn write_snapshot(
 
     let mut hasher = Sha256::new();
 
-    // Phase 1 — hash the payload first so we can include the digest
+    // Step 1: hash the payload first so we can include the digest
     // in the manifest. We walk the same set of files we'll
     // subsequently tar so the digest matches what restore will see.
     walk_files_for_hash(engine_dir, &mut hasher)?;
@@ -210,7 +210,7 @@ pub fn write_snapshot(
     let manifest_json = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| TardigradeError::SnapshotIntegrity(format!("manifest serialize: {e}")))?;
 
-    // Phase 2 — write the tar archive: manifest.json first, then the
+    // Step 2: write the tar archive: manifest.json first, then the
     // engine_state/ payload.
     let file = File::create(out_path).map_err(|e| TardigradeError::Io { source: e })?;
     let mut tar = Builder::new(file);
