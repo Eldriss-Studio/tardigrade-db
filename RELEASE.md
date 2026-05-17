@@ -87,6 +87,8 @@ If you publish wrong information, fix it the same session via `gh release edit -
 
 Use the `CHANGELOG.md` entry as the source of truth, but expand it into consumer-shaped sections (TL;DR, what's new grouped by theme, known limitations, full-changelog link). Attach the wheel(s) as release assets so people can download a known-good artifact without re-resolving from PyPI.
 
+**Format the body as flowing markdown** — one paragraph per line, no hard wrap at fixed columns. The release page renders in the same fixed-width container as `.md` files on github.com; hard-wrapped prose looks awkward and word-counts oddly there. Same convention as the rest of the docs.
+
 ```bash
 # Draft and publish in one shot. --notes-file lets you write
 # the body in your editor and pass it in; --notes is fine for
