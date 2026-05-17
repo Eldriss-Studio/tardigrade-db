@@ -10,6 +10,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _no changes yet_
 
+## [0.3.0] — 2026-05-17
+
+Scheduler release. Adds durable scheduled actions (the last big foundation primitive on the roadmap) plus a batch of post-v0.2.0 release-hygiene fixes.
+
+### Added
+
+- **Durable action scheduler.** `Engine::schedule(fires_at, action) -> ScheduledId`, `cancel_scheduled(id)`, `list_scheduled()`, `fire_due_scheduled(now)`. Initial built-in action is `ScheduledAction::EvictDraft { owner, threshold }`; the enum is serde-tagged so future variants extend the wire format. Schedule persists to a JSON sidecar at `<engine_dir>/scheduled_actions.json` and survives engine restart. Delivery is **at-least-once + idempotent actions = fire-once-in-effect across crashes** — entries stay durable until execute returns `Ok`, so a crash mid-fire replays the action safely. Background `MaintenanceWorker` fires due actions on each tick; consumers can also call `fire_due_scheduled()` directly for immediate firing after a known event. Documented contract on `ScheduledAction` so future variants must remain idempotent (`4bd9fe4`).
+- **PyO3 bindings for the scheduler.** `engine.schedule_evict_draft(fires_at_unix_secs, owner, threshold)`, `cancel_scheduled(id)`, `list_scheduled() -> list[dict]`, `fire_due_scheduled() -> int`. Dict shape is forward-compatible with future action types.
+- **`[llama]` optional extra.** `pip install tardigrade-db[llama]` pulls in `llama-cpp-python>=0.2` for consumers using the local-GGUF embedding path (`b336aa9`).
+
+### Changed
+
+- **`examples/llama_memory_test.py` is now portable.** Replaced the hardcoded macOS Ollama path with a `TARDIGRADE_LLAMA_GGUF` environment variable. Fails fast with actionable errors when the env var is unset, the file doesn't exist, or `llama-cpp-python` isn't installed. The `llama_cpp` import is deferred so `info` / usage paths run without the package installed (`b336aa9`).
+- **Release procedure docs.** RELEASE.md now requires: a fact-check pass against the published-artifact list before writing release notes; and flowing-markdown body (one paragraph per line, no hard wrap) so the rendered GitHub release page reads cleanly. Both rules added after v0.2.0 shipped with a wrong "single-platform wheel" claim and hard-wrapped body text (`955c2c2`, `d1c9b8c`).
+
+### Fixed
+
+- **Scheduler firing-model docstring.** Removed a stale "at-most-once" line that contradicted the at-least-once design documented two paragraphs lower (`dfcb9f1`).
+
+### Notes
+
+- Reflowed prose paragraphs in `RELEASE.md`, `CHANGELOG.md` ([0.2.0] block), `docs/guide/consumers.md`, and `examples/nodejs_consumer/README.md` from fixed-column hard wrap to one-paragraph-per-line. Cleaner GitHub rendering and lower diff churn on future edits.
+
 ## [0.2.0] — 2026-05-17
 
 Foundation-completion release. Adds the surface non-Python consumers need to plug in (CLI, HTTP/REST bridge, Node.js example), the persistence primitives consumers need to ship real workloads (owner registry, portable snapshot/restore, labeled checkpoints, streaming write buffer, synchronous sweep trigger), and ergonomic upgrades to the Python facade (builder pattern, encode_query convenience, multi-agent shared-engine support). Two runnable demos validate the whole surface.
