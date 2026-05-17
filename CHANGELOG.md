@@ -8,7 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_no changes yet_
+### Added
+
+- **Typed errors with diagnostic codes.** `TardigradeError` now derives `miette::Diagnostic` alongside `thiserror::Error`. Every variant gets a stable `#[diagnostic(code = "tdb::<area>::<name>")]` and a one-sentence `#[help(...)]` annotation that surfaces in `cargo doc` and miette's pretty output. Three new context-rich variants added alongside the existing string-bag ones: `EmptyCorpus { owner }` (distinguishes "no results" from "queried something that never had data"), `NoQueryKey { hint }` (surfaces query-key derivation failures), `FlushFailed { failed_offset, detail }` (structured failure mode for the streaming write buffer). Existing variants keep their `Display` shape verbatim — code that grep'd "cell not found: 42" or pattern-matched on variants from earlier versions still works (`5b0e230`).
+
+### Changed
+
+- **Simulated bench comparators removed.** `experiments/shared_llm_latency.py` previously reported cold-path and text-RAG baseline latencies, both via `time.sleep()` busy-waits using guessed values (~50 ms for Qwen3-0.6B prefill, ~50 ms for OpenAI embeddings, ~5 ms for a vector-DB lookup). None of those numbers were measured against real systems. Retracted both columns; the script now reports only the warm-path engine retrieval measurement (which is real). `docs/positioning/latency_first.md` updated with a retraction note (`2452640`).
+- **Pre-1.0 SemVer rule corrected in `RELEASE.md`.** The previous rule said "minor bump for new user-facing surface, patch bump for fixes" — wrong for the Cargo / Python-packaging convention where `^0.2` means `>=0.2.0, <0.3.0` and `0.X.0` signals incompatibility. Corrected to: patch for anything additive or backward-compatible (including milestone-sized additive batches), minor only for actual breaking changes. Adds an explicit "common mistake to avoid" callout. By the corrected rule, v0.2.0 and v0.3.0 were both over-bumped — but published versions are immutable, so the pattern corrects from here (`0f2e968`).
+- **Plan-phase identifiers stripped from bench code, tests, and the positioning doc.** Follow-up to the foundation-phase strip in v0.2.0 era: removed older Phase NN, Track A/B, Slice X, Step Na-LN.M codes that survived in `python/tdb_bench/*`, ~40 test files, and `docs/positioning/latency_first.md`. Dated audit citations preserved (e.g., "bench audit 2026-05-16") since dates are stable historical anchors; plan codes rot when plans are rewritten. Doc/experiment write-ups under `docs/experiments/*` and `docs/refs/*` left untouched — the phase codes there are the historical record (`032a6ea`).
 
 ## [0.3.0] — 2026-05-17
 
