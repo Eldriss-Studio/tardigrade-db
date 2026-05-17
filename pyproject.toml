@@ -25,6 +25,9 @@ dependencies = ["numpy>=1.24"]
 torch = ["torch>=2.0"]
 transformers = ["torch>=2.0", "transformers>=4.30"]
 
+[project.scripts]
+tardigrade = "tardigrade_cli.main:main"
+
 [project.urls]
 Repository = "https://github.com/Eldriss-Studio/tardigrade-db"
 Documentation = "https://eldriss-studio.github.io/tardigrade-db"
@@ -34,4 +37,4 @@ features = ["pyo3/extension-module"]
 manifest-path = "crates/tdb-python/Cargo.toml"
 module-name = "tardigrade_db._native"
 python-source = "python"
-python-packages = ["tardigrade_db", "tardigrade_hooks", "tardigrade_vllm", "tardigrade_mcp"]
+python-packages = ["tardigrade_db", "tardigrade_hooks", "tardigrade_vllm", "tardigrade_mcp", "tardigrade_cli"]

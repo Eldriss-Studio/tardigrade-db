@@ -1,0 +1,9 @@
+[package]
+name = "tardigrade-starter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Pin to a recent published version of tdb-engine. Update as needed.
+tdb-engine = { version = "0.1" }
+tdb-core = { version = "0.1" }
