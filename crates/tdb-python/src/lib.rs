@@ -347,6 +347,28 @@ impl Engine {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Enumerate every owner with at least one pack stored.
+    ///
+    /// Returns owners in ascending order. Foundation-completion M1.1.
+    fn list_owners(&self) -> PyResult<Vec<u64>> {
+        Ok(lock_engine(&self.inner)?.list_owners())
+    }
+
+    /// Return ``True`` iff the engine has at least one pack for ``owner``.
+    fn owner_exists(&self, owner: u64) -> PyResult<bool> {
+        Ok(lock_engine(&self.inner)?.owner_exists(owner))
+    }
+
+    /// Delete every pack belonging to ``owner``; return the count
+    /// deleted. Unlike :py:meth:`evict_draft_packs`, this is
+    /// unconditional — validated and core-tier packs are removed
+    /// too. Returns ``0`` when the owner has no packs.
+    fn delete_owner(&self, owner: u64) -> PyResult<usize> {
+        lock_engine(&self.inner)?
+            .delete_owner(owner)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Number of stages in the retrieval pipeline.
     fn pipeline_stage_count(&self) -> PyResult<usize> {
         Ok(lock_engine(&self.inner)?.pipeline_stage_count())
