@@ -1,4 +1,4 @@
-"""ATDD: M3.4 — Builder pattern for ``TardigradeClient``.
+"""ATDD: Builder pattern for ``TardigradeClient``.
 
 Today's constructor is positional/opaque: ``TardigradeClient(db_path,
 tokenizer=..., owner=..., kv_capture_fn=..., vamana_threshold=...)``.

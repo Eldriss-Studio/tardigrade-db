@@ -1,4 +1,4 @@
-//! ATDD for the portable snapshot/restore API (M1.2).
+//! ATDD for the portable snapshot/restore API.
 //!
 //! Pins eight slices: roundtrip parity, manifest-integrity, magic
 //! mismatch, format-version mismatch, codec mismatch, full-state
@@ -39,7 +39,7 @@ fn populated_engine(dir: &std::path::Path) -> Engine {
     engine
 }
 
-// ─── M1.2.1 — roundtrip parity ─────────────────────────────────────────
+// ─── roundtrip parity ─────────────────────────────────────────
 
 #[test]
 fn snapshot_roundtrip_preserves_pack_count_and_owners() {
@@ -59,7 +59,7 @@ fn snapshot_roundtrip_preserves_pack_count_and_owners() {
     assert_eq!(restored.list_owners(), vec![1, 7, 42]);
 }
 
-// ─── M1.2.2 — integrity (SHA mismatch) ─────────────────────────────────
+// ─── integrity (SHA mismatch) ─────────────────────────────────
 
 #[test]
 fn restore_rejects_archive_with_corrupted_payload() {
@@ -96,7 +96,7 @@ fn restore_rejects_archive_with_corrupted_payload() {
     );
 }
 
-// ─── M1.2.3 — magic mismatch ───────────────────────────────────────────
+// ─── magic mismatch ───────────────────────────────────────────
 
 #[test]
 fn restore_rejects_non_tardigrade_tar() {
@@ -121,7 +121,7 @@ fn restore_rejects_non_tardigrade_tar() {
     assert!(err.to_string().to_lowercase().contains("not a"), "unexpected error: {err}");
 }
 
-// ─── M1.2.4 — unsupported format_version ───────────────────────────────
+// ─── unsupported format_version ───────────────────────────────
 
 #[test]
 fn restore_rejects_unsupported_format_version() {
@@ -145,7 +145,7 @@ fn restore_rejects_unsupported_format_version() {
     assert!(msg.contains("format version") || msg.contains("99"), "msg: {msg}");
 }
 
-// ─── M1.2.5 — codec mismatch ───────────────────────────────────────────
+// ─── codec mismatch ───────────────────────────────────────────
 
 #[test]
 fn restore_rejects_unsupported_quantization_codec() {
@@ -169,7 +169,7 @@ fn restore_rejects_unsupported_quantization_codec() {
     assert!(msg.contains("codec") && msg.contains("q99"), "msg: {msg}");
 }
 
-// ─── M1.2.6 — owner enumeration survives ───────────────────────────────
+// ─── owner enumeration survives ───────────────────────────────
 
 #[test]
 fn restore_preserves_owner_registry_membership() {
@@ -188,7 +188,7 @@ fn restore_preserves_owner_registry_membership() {
     assert!(!restored.owner_exists(9999));
 }
 
-// ─── M1.2.7 — manifest carries metadata ────────────────────────────────
+// ─── manifest carries metadata ────────────────────────────────
 
 #[test]
 fn snapshot_manifest_carries_magic_version_and_codecs() {
@@ -206,7 +206,7 @@ fn snapshot_manifest_carries_magic_version_and_codecs() {
     assert!(manifest.created_at.starts_with('@'));
 }
 
-// ─── M1.2.8 — restore into fresh directory ─────────────────────────────
+// ─── restore into fresh directory ─────────────────────────────
 
 #[test]
 fn restore_creates_target_directory_when_missing() {
@@ -223,7 +223,7 @@ fn restore_creates_target_directory_when_missing() {
     assert!(nested.is_dir());
 }
 
-// ─── M1.2.9 — snapshot refuses to write inside engine_dir ──────────────
+// ─── snapshot refuses to write inside engine_dir ──────────────
 
 #[test]
 fn snapshot_refuses_out_path_inside_engine_dir() {

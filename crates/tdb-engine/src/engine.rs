@@ -231,7 +231,7 @@ pub struct Engine {
     /// `1 - cosine(token, corpus_mean)` before aggregation — distinctive tokens
     /// carry more weight than tokens aligned with the mean activation.
     token_reweighting: bool,
-    /// Optional streaming-ingest write buffer (M1.3). When `Some`,
+    /// Optional streaming-ingest write buffer. When `Some`,
     /// [`Engine::mem_write_pack`] appends to the buffer and returns
     /// the pre-assigned pack id synchronously; the actual fsync is
     /// deferred until the buffer reaches its size threshold or
@@ -979,7 +979,7 @@ impl Engine {
     /// fsync on each operation, so this is a semantic guarantee: after `flush()`
     /// returns, reopening the engine will see all prior writes.
     ///
-    /// Auto-drains the streaming write buffer (M1.3) if one is
+    /// Auto-drains the streaming write buffer if one is
     /// configured, so consumers using `flush()` as their durability
     /// barrier don't have to track the buffer separately.
     pub fn flush(&mut self) -> Result<()> {
@@ -989,7 +989,7 @@ impl Engine {
     }
 
     /// Snapshot the engine's persistent state into a portable tar
-    /// archive at `out_path` (M1.2).
+    /// archive at `out_path`.
     ///
     /// Flushes first, then packages the working directory under
     /// `engine_state/` alongside a versioned [`crate::snapshot::SnapshotManifest`]
@@ -1015,7 +1015,7 @@ impl Engine {
 
     /// Restore a snapshot archive at `in_path` into `target_dir`,
     /// validate its manifest, and return the engine opened on the
-    /// restored directory (M1.2).
+    /// restored directory.
     ///
     /// `target_dir` must be empty or non-existent. Errors thrown
     /// during restore are typed: [`TardigradeError::NotATardigradeSnapshot`],
@@ -1218,7 +1218,7 @@ impl Engine {
         Ok(pack_id)
     }
 
-    /// Enqueue a pack into the streaming write buffer (M1.3).
+    /// Enqueue a pack into the streaming write buffer.
     ///
     /// Pre-assigns the pack id, clones the pack into the buffer,
     /// and auto-flushes when the buffer reaches `max_batch_size`.
@@ -1244,7 +1244,7 @@ impl Engine {
     }
 
     /// Drain the streaming write buffer and persist every pending
-    /// pack with a single coalesced fsync (M1.3).
+    /// pack with a single coalesced fsync.
     ///
     /// No-op when the buffer is empty or when the engine was opened
     /// without a buffer. Idempotent — calling repeatedly with an

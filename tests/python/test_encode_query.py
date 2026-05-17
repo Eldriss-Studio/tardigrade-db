@@ -1,4 +1,4 @@
-"""ATDD: M3.3 — ``TardigradeClient.encode_query`` convenience.
+"""ATDD: ``TardigradeClient.encode_query`` convenience.
 
 A consumer that wants the raw retrieval key (e.g. to pass it
 directly into ``engine.mem_read_pack``, or to log it, or to cache

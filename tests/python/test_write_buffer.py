@@ -1,4 +1,4 @@
-"""ATDD: Python binding parity for the streaming write buffer (M1.3).
+"""ATDD: Python binding parity for the streaming write buffer.
 
 The Rust acceptance suite at
 ``crates/tdb-engine/tests/write_buffer_acceptance.rs`` covers the

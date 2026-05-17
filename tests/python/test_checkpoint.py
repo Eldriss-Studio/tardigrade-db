@@ -1,4 +1,4 @@
-"""ATDD: Python binding parity for ``CheckpointRepository`` (M3.1).
+"""ATDD: Python binding parity for ``CheckpointRepository``.
 
 Mirrors the Rust acceptance suite at
 ``crates/tdb-engine/tests/checkpoint_acceptance.rs``.

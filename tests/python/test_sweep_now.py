@@ -1,4 +1,4 @@
-"""ATDD: Python binding parity for ``Engine.sweep_now`` (M3.2).
+"""ATDD: Python binding parity for ``Engine.sweep_now``.
 
 Mirrors the Rust acceptance suite at
 ``crates/tdb-engine/tests/sweep_now_acceptance.rs``.

@@ -38,7 +38,7 @@ pub enum TardigradeError {
     #[error("capacity exceeded: {0}")]
     CapacityExceeded(String),
 
-    // ── Snapshot / restore errors (M1.2) ────────────────────────────────
+    // ── Snapshot / restore errors ────────────────────────────────
     #[error("not a TardigradeDB snapshot: {reason}")]
     NotATardigradeSnapshot { reason: String },
 

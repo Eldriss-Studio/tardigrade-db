@@ -1,4 +1,4 @@
-"""ATDD: M2.1 HTTP/REST bridge.
+"""ATDD: HTTP/REST bridge.
 
 The bridge is an Adapter over :class:`tardigrade_db.Engine` that
 exposes the foundation surface (store/query/owners/status/snapshot/
@@ -6,15 +6,15 @@ restore) over HTTP. Pydantic models drive request validation and
 OpenAPI generation; FastAPI's TestClient drives the integration
 tests below.
 
-Slices:
+Test classes:
 
-- ``TestOpenAPISchema`` — M2.1.1, route surface + problem+json
-  content-type on validation errors.
+- ``TestOpenAPISchema`` — route surface + problem+json content-type
+  on validation errors.
 - ``TestStoreAndQuery`` / ``TestOwners`` / ``TestStatus`` /
-  ``TestSnapshotRestore`` — M2.1.2, full parity with the direct
-  Python surface.
-- ``TestErrorResponses`` — M2.1.3, RFC 7807 envelope on validation
-  failures and engine errors.
+  ``TestSnapshotRestore`` — full parity with the direct Python
+  surface.
+- ``TestErrorResponses`` — RFC 7807 envelope on validation failures
+  and engine errors.
 """
 
 from __future__ import annotations

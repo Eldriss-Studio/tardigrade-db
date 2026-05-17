@@ -347,7 +347,7 @@ impl Engine {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Run a governance sweep synchronously (M3.2).
+    /// Run a governance sweep synchronously.
     ///
     /// Advances importance decay by ``hours`` and evicts Draft-tier
     /// packs that fall below ``eviction_threshold``. Returns the
@@ -362,7 +362,7 @@ impl Engine {
 
     /// Enumerate every owner with at least one pack stored.
     ///
-    /// Returns owners in ascending order. Foundation-completion M1.1.
+    /// Returns owners in ascending order.
     fn list_owners(&self) -> PyResult<Vec<u64>> {
         Ok(lock_engine(&self.inner)?.list_owners())
     }
@@ -425,7 +425,7 @@ impl Engine {
     }
 
     /// Open an engine at ``path`` with a streaming-ingest write
-    /// buffer enabled (M1.3). Buffered writes return their pack id
+    /// buffer enabled. Buffered writes return their pack id
     /// synchronously and defer the fsync until the buffer reaches
     /// ``max_batch_size`` or :py:meth:`flush_buffer` is called.
     ///
@@ -449,7 +449,7 @@ impl Engine {
         })
     }
 
-    /// Drain the streaming write buffer (M1.3). No-op when the
+    /// Drain the streaming write buffer. No-op when the
     /// engine was opened without a buffer or when the buffer is
     /// already empty.
     fn flush_buffer(&self) -> PyResult<()> {
@@ -1057,7 +1057,7 @@ impl Engine {
     }
 }
 
-/// Labeled checkpoint repository (M3.1).
+/// Labeled checkpoint repository.
 ///
 /// Wraps `tdb_engine::checkpoint::CheckpointRepository` so consumers
 /// can save engine snapshots under string labels with a

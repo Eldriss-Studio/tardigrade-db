@@ -1,4 +1,4 @@
-//! ATDD for the streaming write buffer (M1.3).
+//! ATDD for the streaming write buffer.
 //!
 //! Pins the buffered-ingest contract: when an engine is opened with
 //! a `BufferConfig`, single-pack writes accumulate in a bounded
@@ -30,7 +30,7 @@ fn make_pack(owner: OwnerId, marker: f32) -> KVPack {
     }
 }
 
-// ─── M1.3.1 — buffer disabled is the default (parity with prior) ────────
+// ─── buffer disabled is the default (parity with prior) ────────
 
 #[test]
 fn unbuffered_engine_makes_writes_immediately_visible() {
@@ -44,7 +44,7 @@ fn unbuffered_engine_makes_writes_immediately_visible() {
     assert!(engine.pack_exists(pid));
 }
 
-// ─── M1.3.2 — buffered writes batch into a single fsync window ──────────
+// ─── buffered writes batch into a single fsync window ──────────
 
 #[test]
 fn buffered_writes_are_invisible_until_flush() {
@@ -81,7 +81,7 @@ fn buffer_auto_flushes_when_max_batch_size_reached() {
     assert_eq!(engine.pack_count(), 4, "buffer should have auto-flushed at max_batch_size");
 }
 
-// ─── M1.3.3 — engine.flush() drains the write buffer ───────────────────
+// ─── engine.flush() drains the write buffer ───────────────────
 
 #[test]
 fn engine_flush_drains_the_write_buffer() {
@@ -102,7 +102,7 @@ fn engine_flush_drains_the_write_buffer() {
     assert_eq!(engine.pack_count(), 2);
 }
 
-// ─── M1.3.4 — flush_buffer is idempotent ───────────────────────────────
+// ─── flush_buffer is idempotent ───────────────────────────────
 
 #[test]
 fn flush_buffer_is_idempotent() {
@@ -122,7 +122,7 @@ fn flush_buffer_is_idempotent() {
     assert_eq!(engine.pack_count(), count_after_first);
 }
 
-// ─── M1.3.5 — pack ids are assigned at enqueue, stable through flush ────
+// ─── pack ids are assigned at enqueue, stable through flush ────
 
 #[test]
 fn pack_ids_are_returned_synchronously_and_resolve_after_flush() {
@@ -144,7 +144,7 @@ fn pack_ids_are_returned_synchronously_and_resolve_after_flush() {
     assert!(engine.pack_exists(pid_b));
 }
 
-// ─── M1.3.6 — durability after flush ────────────────────────────────────
+// ─── durability after flush ────────────────────────────────────
 
 #[test]
 fn buffered_writes_survive_close_and_reopen_after_flush() {

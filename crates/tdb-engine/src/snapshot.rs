@@ -1,4 +1,4 @@
-//! Portable snapshot/restore for the engine (M1.2).
+//! Portable snapshot/restore for the engine.
 //!
 //! Bundles the engine's persistent state into a single tar archive
 //! with a forensic-friendly manifest header. The format is adapted

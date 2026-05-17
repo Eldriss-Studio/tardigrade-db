@@ -1,6 +1,6 @@
-//! Labeled checkpoint repository (M3.1).
+//! Labeled checkpoint repository.
 //!
-//! Pattern: **Repository**. Wraps the M1.2 snapshot/restore API
+//! Pattern: **Repository**. Wraps the snapshot/restore API
 //! with a labelled, sequence-numbered slot layout so consumers
 //! can think in terms of `"autosave"` / `"chapter-3-end"` instead
 //! of bespoke tarball paths.

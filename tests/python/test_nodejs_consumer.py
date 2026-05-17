@@ -1,4 +1,4 @@
-"""ATDD: M2.2 — Node.js consumer round-trip.
+"""ATDD: Node.js consumer round-trip.
 
 Runs ``examples/nodejs_consumer/index.mjs`` against a real uvicorn
 server (in a background thread) and asserts the script exits 0.
