@@ -24,6 +24,7 @@ dependencies = ["numpy>=1.24"]
 [project.optional-dependencies]
 torch = ["torch>=2.0"]
 transformers = ["torch>=2.0", "transformers>=4.30"]
+llama = ["llama-cpp-python>=0.2"]
 
 [project.scripts]
 tardigrade = "tardigrade_cli.main:main"
