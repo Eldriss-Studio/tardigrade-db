@@ -74,6 +74,54 @@ class TestTardigradeClientBuilder:
         assert client._owner == 1
         assert client.pack_count() == 0
 
+    def test_with_engine_shares_state_across_clients(self, tmp_engine_dir):
+        """Multiple clients can share one underlying ``Engine``.
+
+        Critical for multi-agent demos where N owners need one
+        engine — opening the same ``engine_dir`` from N separate
+        ``Engine`` instances produces N isolated states, not one
+        shared one. ``with_engine`` lets the consumer build one
+        engine and inject it into each client.
+        """
+        from tardigrade_hooks import TardigradeClient
+        import tardigrade_db
+
+        engine = tardigrade_db.Engine(str(tmp_engine_dir))
+        client_a = (
+            TardigradeClient.builder()
+            .with_engine(engine)
+            .with_owner(1)
+            .build()
+        )
+        client_b = (
+            TardigradeClient.builder()
+            .with_engine(engine)
+            .with_owner(2)
+            .build()
+        )
+        client_a.store("fact for owner 1")
+        client_b.store("fact for owner 2")
+        # The shared engine sees both owners.
+        assert sorted(engine.list_owners()) == [1, 2]
+
+    def test_with_engine_and_with_engine_dir_are_mutually_exclusive(
+        self, tmp_engine_dir,
+    ):
+        from tardigrade_hooks import TardigradeClient
+        from tardigrade_hooks.builder import BuilderIncomplete
+        import tardigrade_db
+
+        engine = tardigrade_db.Engine(str(tmp_engine_dir))
+        with pytest.raises(BuilderIncomplete) as exc:
+            (
+                TardigradeClient.builder()
+                .with_engine(engine)
+                .with_engine_dir(tmp_engine_dir)
+                .build()
+            )
+        msg = str(exc.value).lower()
+        assert "engine_dir" in msg and "engine" in msg
+
     def test_builder_round_trip_stores_and_queries(self, tmp_engine_dir):
         from tardigrade_hooks import TardigradeClient
         client = (
