@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Interleaved prefill/decode scheduler."><title>tdb_engine::scheduler - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_engine" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Durable action scheduler."><title>tdb_engine::scheduler - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_engine" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
   .tdb-nav {
     position: fixed;
     top: 0;
@@ -33,7 +33,61 @@
   <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
 </div>
 
-</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module scheduler</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_engine/index.html">tdb_<wbr>engine</a><span class="version">0.2.0</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate tdb_<wbr>engine</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_engine</a></div><h1>Module <span>scheduler</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_engine/scheduler.rs.html#1-4">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Interleaved prefill/decode scheduler.</p>
-<p>Hides warm-reload latency (~500ms) behind the previous agent’s decode phase
-to keep the pipeline fully saturated.</p>
-</div></details></section></div></main></body></html>
+</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module scheduler</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_engine/index.html">tdb_<wbr>engine</a><span class="version">0.2.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module scheduler</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#firing-model" title="Firing model">Firing model</a></li><li><a href="#crash-semantics-at-least-once--idempotent-actions" title="Crash semantics: at-least-once + idempotent actions">Crash semantics: at-least-once + idempotent actions</a></li><li><a href="#on-disk-format" title="On-disk format">On-disk format</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#constants" title="Constants">Constants</a></li><li><a href="#types" title="Type Aliases">Type Aliases</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate tdb_<wbr>engine</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_engine</a></div><h1>Module <span>scheduler</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_engine/scheduler.rs.html#1-255">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Durable action scheduler.</p>
+<p>Lets consumers enqueue actions to fire at a future
+<code>SystemTime</code>. The schedule is persisted to a JSON sidecar
+inside the engine directory and reloaded on
+<a href="../engine/struct.Engine.html#method.open" title="associated function tdb_engine::engine::Engine::open"><code>crate::engine::Engine::open</code></a> — actions survive process
+restart, which is the whole point of having an engine-side
+scheduler instead of consumer-side cron.</p>
+<h3 id="firing-model"><a class="doc-anchor" href="#firing-model">§</a>Firing model</h3>
+<p>Each enqueued action fires <strong>at most once</strong>. The maintenance
+worker (or any caller) invokes
+<a href="../engine/struct.Engine.html#method.fire_due_scheduled" title="method tdb_engine::engine::Engine::fire_due_scheduled"><code>crate::engine::Engine::fire_due_scheduled</code></a> periodically;
+actions whose <code>fires_at &lt;= now</code> are executed and removed
+from the schedule. The persistence file is rewritten after
+every change.</p>
+<h3 id="crash-semantics-at-least-once--idempotent-actions"><a class="doc-anchor" href="#crash-semantics-at-least-once--idempotent-actions">§</a>Crash semantics: at-least-once + idempotent actions</h3>
+<p>Every scheduled action <strong>stays in the on-disk schedule
+until its execute call returns successfully.</strong> Then — and
+only then — the entry is removed and the schedule is
+re-persisted. This guarantees <strong>at-least-once</strong> delivery
+across process crashes:</p>
+<ul>
+<li>Crash before execute starts: action still in schedule,
+fires on next tick after restart.</li>
+<li>Crash mid-execute: action still in schedule, fires again
+on next tick. Re-firing must therefore be safe.</li>
+<li>Crash after execute returns but before the post-fire
+persist: action still in schedule, fires again on next
+tick. Re-firing must be safe.</li>
+</ul>
+<p><strong>The contract is that every <a href="enum.ScheduledAction.html" title="enum tdb_engine::scheduler::ScheduledAction"><code>ScheduledAction</code></a> variant
+must be idempotent</strong> — running it twice with the same
+inputs must produce the same end state as running it once.
+The built-in <code>EvictDraft(owner, threshold)</code> is naturally
+idempotent: the second call has nothing left to evict.
+Future variants that aren’t naturally idempotent (e.g.
+counter increments) must use idempotent semantics
+(“set importance to N”, not “+= N”) or implement
+consumer-side deduplication via the entry’s stable
+<a href="type.ScheduledId.html" title="type tdb_engine::scheduler::ScheduledId"><code>ScheduledId</code></a>.</p>
+<p>Combined with idempotent actions, at-least-once delivery
+yields <strong>fire-once-in-effect</strong> across crashes.</p>
+<h3 id="on-disk-format"><a class="doc-anchor" href="#on-disk-format">§</a>On-disk format</h3><div class="example-wrap"><pre class="language-json"><code>{
+  &quot;next_id&quot;: 4,
+  &quot;entries&quot;: [
+    {&quot;id&quot;: 1, &quot;fires_at_unix_nanos&quot;: 1234567890000000000,
+     &quot;action&quot;: {&quot;EvictDraft&quot;: {&quot;owner&quot;: 7, &quot;threshold&quot;: 15.0}}}
+  ]
+}</code></pre></div>
+<p><code>serde_json</code> is the only dependency. We write atomically:
+serialize to a temp file alongside the target, fsync, rename.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.DiskEntry.html" title="struct tdb_engine::scheduler::DiskEntry">Disk<wbr>Entry</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="struct" href="struct.ScheduleFile.html" title="struct tdb_engine::scheduler::ScheduleFile">Schedule<wbr>File</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>On-disk representation of the scheduler state.</dd><dt><a class="struct" href="struct.ScheduledEntry.html" title="struct tdb_engine::scheduler::ScheduledEntry">Scheduled<wbr>Entry</a></dt><dd>A single entry in the schedule. Exposed via
+<a href="struct.Scheduler.html#method.list" title="method tdb_engine::scheduler::Scheduler::list"><code>Scheduler::list</code></a> for observability.</dd><dt><a class="struct" href="struct.Scheduler.html" title="struct tdb_engine::scheduler::Scheduler">Scheduler</a></dt><dd>The durable action scheduler.</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.ScheduledAction.html" title="enum tdb_engine::scheduler::ScheduledAction">Scheduled<wbr>Action</a></dt><dd>Built-in actions the scheduler can fire.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.FIRST_SCHEDULED_ID.html" title="constant tdb_engine::scheduler::FIRST_SCHEDULED_ID">FIRST_<wbr>SCHEDULED_<wbr>ID</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>First scheduled-action id handed out by a fresh scheduler.
+Ids increase monotonically and never reuse a previously-
+assigned value, even across process restarts.</dd><dt><a class="constant" href="constant.SCHEDULE_FILENAME.html" title="constant tdb_engine::scheduler::SCHEDULE_FILENAME">SCHEDULE_<wbr>FILENAME</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>File-name suffix for the schedule sidecar inside the engine
+directory. Kept stable so external tooling can inspect or
+back up the schedule without parsing the engine state.</dd></dl><h2 id="types" class="section-header">Type Aliases<a href="#types" class="anchor">§</a></h2><dl class="item-table"><dt><a class="type" href="type.ScheduledId.html" title="type tdb_engine::scheduler::ScheduledId">Scheduled<wbr>Id</a></dt><dd>Identifier returned by <a href="struct.Scheduler.html#method.schedule" title="method tdb_engine::scheduler::Scheduler::schedule"><code>Scheduler::schedule</code></a>. Stable for
+the lifetime of the schedule entry — consumers can pass it
+back to <a href="struct.Scheduler.html#method.cancel" title="method tdb_engine::scheduler::Scheduler::cancel"><code>Scheduler::cancel</code></a> to remove the pending action.</dd></dl></section></div></main></body></html>

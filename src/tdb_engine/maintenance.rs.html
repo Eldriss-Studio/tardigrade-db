@@ -178,29 +178,34 @@
 <a href=#143 id=143 data-nosnippet>143</a>            <span class="kw">let </span>days = config.hours_per_tick / <span class="number">24.0</span>;
 <a href=#144 id=144 data-nosnippet>144</a>            eng.advance_days(days);
 <a href=#145 id=145 data-nosnippet>145</a>            <span class="kw">let </span>evicted = eng.evict_draft_packs(config.eviction_threshold, <span class="prelude-val">None</span>).unwrap_or(<span class="number">0</span>);
-<a href=#146 id=146 data-nosnippet>146</a>            drop(eng);
-<a href=#147 id=147 data-nosnippet>147</a>
-<a href=#148 id=148 data-nosnippet>148</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>s) = status.lock() {
-<a href=#149 id=149 data-nosnippet>149</a>                s.sweep_count += <span class="number">1</span>;
-<a href=#150 id=150 data-nosnippet>150</a>                s.total_packs_evicted += evicted <span class="kw">as </span>u64;
-<a href=#151 id=151 data-nosnippet>151</a>                s.last_sweep_epoch_secs = <span class="prelude-val">Some</span>(now_epoch_secs());
-<a href=#152 id=152 data-nosnippet>152</a>            }
-<a href=#153 id=153 data-nosnippet>153</a>            last_sweep = Instant::now();
-<a href=#154 id=154 data-nosnippet>154</a>        }
-<a href=#155 id=155 data-nosnippet>155</a>
-<a href=#156 id=156 data-nosnippet>156</a>        <span class="kw">if </span>last_compaction.elapsed() &gt;= config.compaction_interval
-<a href=#157 id=157 data-nosnippet>157</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>eng) = engine.lock()
-<a href=#158 id=158 data-nosnippet>158</a>        {
-<a href=#159 id=159 data-nosnippet>159</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(result) = eng.compact() {
-<a href=#160 id=160 data-nosnippet>160</a>                drop(eng);
-<a href=#161 id=161 data-nosnippet>161</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>s) = status.lock() {
-<a href=#162 id=162 data-nosnippet>162</a>                    s.compaction_count += <span class="number">1</span>;
-<a href=#163 id=163 data-nosnippet>163</a>                    s.total_bytes_reclaimed += result.bytes_reclaimed;
-<a href=#164 id=164 data-nosnippet>164</a>                    s.last_compaction_epoch_secs = <span class="prelude-val">Some</span>(now_epoch_secs());
-<a href=#165 id=165 data-nosnippet>165</a>                }
-<a href=#166 id=166 data-nosnippet>166</a>            }
-<a href=#167 id=167 data-nosnippet>167</a>            last_compaction = Instant::now();
-<a href=#168 id=168 data-nosnippet>168</a>        }
-<a href=#169 id=169 data-nosnippet>169</a>    }
-<a href=#170 id=170 data-nosnippet>170</a>}
+<a href=#146 id=146 data-nosnippet>146</a>            <span class="comment">// Fire any scheduled actions whose time has come.
+<a href=#147 id=147 data-nosnippet>147</a>            // Errors are swallowed at the loop level — the
+<a href=#148 id=148 data-nosnippet>148</a>            // scheduler keeps un-committed entries for retry on
+<a href=#149 id=149 data-nosnippet>149</a>            // the next tick.
+<a href=#150 id=150 data-nosnippet>150</a>            </span><span class="kw">let _ </span>= eng.fire_due_scheduled(SystemTime::now());
+<a href=#151 id=151 data-nosnippet>151</a>            drop(eng);
+<a href=#152 id=152 data-nosnippet>152</a>
+<a href=#153 id=153 data-nosnippet>153</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>s) = status.lock() {
+<a href=#154 id=154 data-nosnippet>154</a>                s.sweep_count += <span class="number">1</span>;
+<a href=#155 id=155 data-nosnippet>155</a>                s.total_packs_evicted += evicted <span class="kw">as </span>u64;
+<a href=#156 id=156 data-nosnippet>156</a>                s.last_sweep_epoch_secs = <span class="prelude-val">Some</span>(now_epoch_secs());
+<a href=#157 id=157 data-nosnippet>157</a>            }
+<a href=#158 id=158 data-nosnippet>158</a>            last_sweep = Instant::now();
+<a href=#159 id=159 data-nosnippet>159</a>        }
+<a href=#160 id=160 data-nosnippet>160</a>
+<a href=#161 id=161 data-nosnippet>161</a>        <span class="kw">if </span>last_compaction.elapsed() &gt;= config.compaction_interval
+<a href=#162 id=162 data-nosnippet>162</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>eng) = engine.lock()
+<a href=#163 id=163 data-nosnippet>163</a>        {
+<a href=#164 id=164 data-nosnippet>164</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(result) = eng.compact() {
+<a href=#165 id=165 data-nosnippet>165</a>                drop(eng);
+<a href=#166 id=166 data-nosnippet>166</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>s) = status.lock() {
+<a href=#167 id=167 data-nosnippet>167</a>                    s.compaction_count += <span class="number">1</span>;
+<a href=#168 id=168 data-nosnippet>168</a>                    s.total_bytes_reclaimed += result.bytes_reclaimed;
+<a href=#169 id=169 data-nosnippet>169</a>                    s.last_compaction_epoch_secs = <span class="prelude-val">Some</span>(now_epoch_secs());
+<a href=#170 id=170 data-nosnippet>170</a>                }
+<a href=#171 id=171 data-nosnippet>171</a>            }
+<a href=#172 id=172 data-nosnippet>172</a>            last_compaction = Instant::now();
+<a href=#173 id=173 data-nosnippet>173</a>        }
+<a href=#174 id=174 data-nosnippet>174</a>    }
+<a href=#175 id=175 data-nosnippet>175</a>}
 </code></pre></div></section></main></body></html>

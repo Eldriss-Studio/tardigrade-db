@@ -36,17 +36,17 @@
 </head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">read_snapshot</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_engine/index.html">tdb_<wbr>engine</a><span class="version">0.2.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">read_<wbr>snapshot</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#errors" title="Errors">Errors</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In tdb_<wbr>engine::<wbr>snapshot</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_engine</a>::<wbr><a href="index.html">snapshot</a></div><h1>Function <span class="fn">read_<wbr>snapshot</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_engine/snapshot.rs.html#292-388">Source</a> </span></div><pre class="rust item-decl"><code>pub fn read_snapshot(
     in_path: &amp;<a class="struct" href="https://doc.rust-lang.org/1.95.0/std/path/struct.Path.html" title="struct std::path::Path">Path</a>,
     target_dir: &amp;<a class="struct" href="https://doc.rust-lang.org/1.95.0/std/path/struct.Path.html" title="struct std::path::Path">Path</a>,
-) -&gt; <a class="type" href="../../tdb_core/error/type.Result.html" title="type tdb_core::error::Result">Result</a>&lt;<a class="struct" href="struct.SnapshotManifest.html" title="struct tdb_engine::snapshot::SnapshotManifest">SnapshotManifest</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Restore a snapshot archive into <code>target_dir</code> (which must be
+) -&gt; Result&lt;<a class="struct" href="struct.SnapshotManifest.html" title="struct tdb_engine::snapshot::SnapshotManifest">SnapshotManifest</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Restore a snapshot archive into <code>target_dir</code> (which must be
 empty or non-existent) and validate its manifest. The caller
 invokes <a href="../engine/struct.Engine.html#method.open" title="associated function tdb_engine::engine::Engine::open"><code>crate::engine::Engine::open</code></a> on <code>target_dir</code> afterwards.</p>
 <p>Returns the parsed manifest so callers can inspect or log the
 snapshot’s metadata.</p>
 <h2 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h2>
 <ul>
-<li><a href="../../tdb_core/error/enum.TardigradeError.html#variant.NotATardigradeSnapshot" title="variant tdb_core::error::TardigradeError::NotATardigradeSnapshot"><code>TardigradeError::NotATardigradeSnapshot</code></a> — magic missing.</li>
-<li><a href="../../tdb_core/error/enum.TardigradeError.html#variant.UnsupportedFormatVersion" title="variant tdb_core::error::TardigradeError::UnsupportedFormatVersion"><code>TardigradeError::UnsupportedFormatVersion</code></a> — unknown version.</li>
-<li><a href="../../tdb_core/error/enum.TardigradeError.html#variant.SnapshotCodecMismatch" title="variant tdb_core::error::TardigradeError::SnapshotCodecMismatch"><code>TardigradeError::SnapshotCodecMismatch</code></a> — codec incompatible.</li>
-<li><a href="../../tdb_core/error/enum.TardigradeError.html#variant.SnapshotIntegrity" title="variant tdb_core::error::TardigradeError::SnapshotIntegrity"><code>TardigradeError::SnapshotIntegrity</code></a> — SHA-256 mismatch.</li>
-<li><a href="../../tdb_core/error/enum.TardigradeError.html#variant.Io" title="variant tdb_core::error::TardigradeError::Io"><code>TardigradeError::Io</code></a> — disk failure.</li>
+<li>[<code>TardigradeError::NotATardigradeSnapshot</code>] — magic missing.</li>
+<li>[<code>TardigradeError::UnsupportedFormatVersion</code>] — unknown version.</li>
+<li>[<code>TardigradeError::SnapshotCodecMismatch</code>] — codec incompatible.</li>
+<li>[<code>TardigradeError::SnapshotIntegrity</code>] — SHA-256 mismatch.</li>
+<li>[<code>TardigradeError::Io</code>] — disk failure.</li>
 </ul>
 </div></details></section></div></main></body></html>

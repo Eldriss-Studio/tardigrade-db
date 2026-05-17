@@ -1,9 +1,9 @@
 (function() {
-    const implementors = Object.fromEntries([["tdb_core",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.95.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;<a class=\"struct\" href=\"https://doc.rust-lang.org/1.95.0/std/io/error/struct.Error.html\" title=\"struct std::io::error::Error\">Error</a>&gt; for <a class=\"enum\" href=\"tdb_core/error/enum.TardigradeError.html\" title=\"enum tdb_core::error::TardigradeError\">TardigradeError</a>",0]]]]);
+    const implementors = Object.fromEntries([["tdb_core",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.95.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;<a class=\"struct\" href=\"https://doc.rust-lang.org/1.95.0/std/io/error/struct.Error.html\" title=\"struct std::io::error::Error\">Error</a>&gt; for <a class=\"enum\" href=\"tdb_core/error/enum.TardigradeError.html\" title=\"enum tdb_core::error::TardigradeError\">TardigradeError</a>",0]]],["tdb_engine",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.95.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;&amp;<a class=\"struct\" href=\"tdb_engine/scheduler/struct.ScheduledEntry.html\" title=\"struct tdb_engine::scheduler::ScheduledEntry\">ScheduledEntry</a>&gt; for <a class=\"struct\" href=\"tdb_engine/scheduler/struct.DiskEntry.html\" title=\"struct tdb_engine::scheduler::DiskEntry\">DiskEntry</a>",0],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.95.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;<a class=\"struct\" href=\"tdb_engine/scheduler/struct.DiskEntry.html\" title=\"struct tdb_engine::scheduler::DiskEntry\">DiskEntry</a>&gt; for <a class=\"struct\" href=\"tdb_engine/scheduler/struct.ScheduledEntry.html\" title=\"struct tdb_engine::scheduler::ScheduledEntry\">ScheduledEntry</a>",0]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
         window.pending_implementors = implementors;
     }
 })()
-//{"start":59,"fragment_lengths":[449]}
+//{"start":59,"fragment_lengths":[449,910]}
