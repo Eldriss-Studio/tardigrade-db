@@ -1463,6 +1463,63 @@ impl Engine {
         self.governance.get(&retrieval_cell_id).map(|g| g.scorer.importance())
     }
 
+    /// Enumerate every owner that has at least one pack stored.
+    ///
+    /// Returns the unique [`OwnerId`]s in ascending order. The
+    /// implementation walks the pack directory and reads each pack's
+    /// retrieval cell to recover its owner — there is no separate
+    /// owner table to maintain, so this is durable-by-derivation.
+    ///
+    /// Useful for consumers with multiple parties (multi-agent
+    /// runtimes, multi-NPC games, multi-tenant `SaaS`) that need to
+    /// enumerate or audit which owners have memory recorded.
+    pub fn list_owners(&self) -> Vec<OwnerId> {
+        let mut owners: std::collections::BTreeSet<OwnerId> = std::collections::BTreeSet::new();
+        for &pack_id in self.pack_directory.pack_ids() {
+            let Some(cell_ids) = self.pack_directory.cell_ids(pack_id) else {
+                continue;
+            };
+            let Some(&retrieval_cell_id) = cell_ids.first() else {
+                continue;
+            };
+            if let Ok(cell) = self.pool.get(retrieval_cell_id) {
+                owners.insert(cell.owner);
+            }
+        }
+        owners.into_iter().collect()
+    }
+
+    /// Return `true` iff at least one pack belongs to `owner`.
+    ///
+    /// Convenience wrapper over [`Engine::list_owners`] for the
+    /// frequent "does this owner exist?" check.
+    pub fn owner_exists(&self, owner: OwnerId) -> bool {
+        self.list_owners().contains(&owner)
+    }
+
+    /// Remove every pack owned by `owner`, returning the count
+    /// deleted.
+    ///
+    /// Unlike [`Engine::evict_draft_packs`], this is unconditional —
+    /// validated and core-tier packs are removed too. The intended
+    /// use is "this user logged out" / "this NPC was killed" /
+    /// "this tenant was deleted." Each pack is deleted via
+    /// [`Engine::delete_pack`] which writes a deletion log entry
+    /// before the in-memory state changes, so the operation is
+    /// crash-safe with the existing recovery contract.
+    ///
+    /// Returns `Ok(0)` and is a no-op when `owner` has no packs.
+    pub fn delete_owner(&mut self, owner: OwnerId) -> Result<usize> {
+        let to_delete: Vec<PackId> =
+            self.list_packs(Some(owner)).into_iter().map(|(pack_id, _, _, _)| pack_id).collect();
+
+        let count = to_delete.len();
+        for pack_id in to_delete {
+            self.delete_pack(pack_id)?;
+        }
+        Ok(count)
+    }
+
     /// Enumerate all packs, optionally filtered by owner.
     ///
     /// Returns `(pack_id, owner, tier, importance)` sorted by importance
