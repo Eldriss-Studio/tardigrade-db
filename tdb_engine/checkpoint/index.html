@@ -1,0 +1,62 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Labeled checkpoint repository."><title>tdb_engine::checkpoint - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_engine" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module checkpoint</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_engine/index.html">tdb_<wbr>engine</a><span class="version">0.2.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module checkpoint</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#on-disk-layout" title="On-disk layout">On-disk layout</a></li><li><a href="#reliability-contract" title="Reliability contract">Reliability contract</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#constants" title="Constants">Constants</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate tdb_<wbr>engine</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_engine</a></div><h1>Module <span>checkpoint</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_engine/checkpoint.rs.html#1-222">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Labeled checkpoint repository.</p>
+<p>Pattern: <strong>Repository</strong>. Wraps the snapshot/restore API
+with a labelled, sequence-numbered slot layout so consumers
+can think in terms of <code>"autosave"</code> / <code>"chapter-3-end"</code> instead
+of bespoke tarball paths.</p>
+<h3 id="on-disk-layout"><a class="doc-anchor" href="#on-disk-layout">§</a>On-disk layout</h3><div class="example-wrap"><pre class="language-text"><code>&lt;root&gt;/
+  &lt;label&gt;/
+    0001.tar      ← first checkpoint with this label
+    0002.tar      ← second checkpoint with this label
+    ...
+  &lt;other-label&gt;/
+    0001.tar</code></pre></div>
+<p>Sequence numbers are zero-padded to four digits so filesystem
+lexicographic order matches numeric order — useful when an
+external tool (CLI, file browser) lists the directory.</p>
+<h3 id="reliability-contract"><a class="doc-anchor" href="#reliability-contract">§</a>Reliability contract</h3>
+<p>Each save delegates to <a href="../engine/struct.Engine.html#method.snapshot" title="method tdb_engine::engine::Engine::snapshot"><code>crate::engine::Engine::snapshot</code></a>,
+which itself calls <code>flush()</code> first — the checkpoint therefore
+captures durable state at flush completion. Restore is
+identical to <a href="../engine/struct.Engine.html#method.restore_from" title="associated function tdb_engine::engine::Engine::restore_from"><code>crate::engine::Engine::restore_from</code></a> of the
+same tar.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.CheckpointEntry.html" title="struct tdb_engine::checkpoint::CheckpointEntry">Checkpoint<wbr>Entry</a></dt><dd>A single saved checkpoint produced by
+<a href="struct.CheckpointRepository.html#method.save_from" title="method tdb_engine::checkpoint::CheckpointRepository::save_from"><code>CheckpointRepository::save_from</code></a>.</dd><dt><a class="struct" href="struct.CheckpointRepository.html" title="struct tdb_engine::checkpoint::CheckpointRepository">Checkpoint<wbr>Repository</a></dt><dd>Repository pattern: durable, label-scoped checkpoint storage.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.CHECKPOINT_EXTENSION.html" title="constant tdb_engine::checkpoint::CHECKPOINT_EXTENSION">CHECKPOINT_<wbr>EXTENSION</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Extension used for the tarball each checkpoint produces.</dd><dt><a class="constant" href="constant.LAST_SEQ_BEFORE_FIRST.html" title="constant tdb_engine::checkpoint::LAST_SEQ_BEFORE_FIRST">LAST_<wbr>SEQ_<wbr>BEFORE_<wbr>FIRST</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Sentinel “no entries yet” sequence — the first save under a
+label becomes <code>LAST_SEQ_BEFORE_FIRST + 1 == 1</code>.</dd><dt><a class="constant" href="constant.SEQ_PAD_WIDTH.html" title="constant tdb_engine::checkpoint::SEQ_PAD_WIDTH">SEQ_<wbr>PAD_<wbr>WIDTH</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>File-name format width for sequence numbers — four digits gives
+space for ten thousand checkpoints per label before the
+padding overflows (after which the format still sorts
+correctly numerically, just not lexicographically).</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.format_seq_filename.html" title="fn tdb_engine::checkpoint::format_seq_filename">format_<wbr>seq_<wbr>filename</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl></section></div></main></body></html>
