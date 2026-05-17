@@ -228,6 +228,62 @@ pub struct Engine {
     /// `1 - cosine(token, corpus_mean)` before aggregation — distinctive tokens
     /// carry more weight than tokens aligned with the mean activation.
     token_reweighting: bool,
+    /// Optional streaming-ingest write buffer (M1.3). When `Some`,
+    /// [`Engine::mem_write_pack`] appends to the buffer and returns
+    /// the pre-assigned pack id synchronously; the actual fsync is
+    /// deferred until the buffer reaches its size threshold or
+    /// [`Engine::flush_buffer`] / [`Engine::flush`] is called.
+    write_buffer: Option<WriteBuffer>,
+}
+
+/// Configuration for the optional streaming-ingest write buffer.
+///
+/// Buffered writes collapse N pack fsyncs into one per batch.
+/// Trade-off: queries do not see a pack until the buffer is
+/// flushed (or auto-flushed when `max_batch_size` is reached).
+///
+/// Picked at `Engine::open_with_write_buffer` time; cannot be
+/// changed afterwards without reopening the engine.
+#[derive(Debug, Clone, Copy)]
+pub struct BufferConfig {
+    /// Auto-flush when this many packs are buffered. Picking a
+    /// value matters: small values reduce visibility latency but
+    /// give up fsync amortisation; large values amortise harder
+    /// but defer durability longer.
+    pub max_batch_size: usize,
+    /// Idle-timer flush (milliseconds). `0` disables the timer
+    /// — only `max_batch_size` and explicit flush trigger writes.
+    /// (Timer-driven flush requires a background thread; deferred
+    /// to a follow-up commit. The field is reserved here so the
+    /// configuration shape is stable.)
+    pub max_idle_ms: u64,
+}
+
+/// Internal: a bounded queue of pre-assigned `(pack_id, pack)`
+/// pairs awaiting a coalesced fsync.
+#[derive(Debug)]
+struct WriteBuffer {
+    config: BufferConfig,
+    pending: Vec<(PackId, KVPack)>,
+}
+
+impl WriteBuffer {
+    fn new(config: BufferConfig) -> Self {
+        Self { config, pending: Vec::with_capacity(config.max_batch_size) }
+    }
+}
+
+/// Per-pack metadata stitched together during a coalesced flush so
+/// all in-memory bookkeeping (pipeline, slb, governance,
+/// `pack_directory`) can run in one pass after the single fsync.
+struct PackInfo {
+    pack_id: PackId,
+    owner: tdb_core::OwnerId,
+    retrieval_key: Vec<f32>,
+    retrieval_cell_id: CellId,
+    cell_ids: Vec<CellId>,
+    scorer: ImportanceScorer,
+    tier_sm: TierStateMachine,
 }
 
 impl Engine {
@@ -348,10 +404,32 @@ impl Engine {
             text_store,
             deletion_log,
             token_reweighting: false,
+            write_buffer: None,
         };
 
         engine.refresh()?;
 
+        Ok(engine)
+    }
+
+    /// Open an engine with a streaming-ingest write buffer enabled.
+    ///
+    /// Writes via [`Engine::mem_write_pack`] return their assigned
+    /// pack id synchronously but defer the fsync until the buffer
+    /// reaches `config.max_batch_size` or [`Engine::flush_buffer`]
+    /// is called. [`Engine::flush`] also drains the buffer, so any
+    /// existing flush-as-durability-barrier code keeps working.
+    ///
+    /// Consumers expecting reads to see their writes immediately
+    /// should leave the buffer off (`Engine::open`).
+    ///
+    /// Reliability contract (per CLAUDE.md):
+    /// - Unbuffered writes: confirmed-immediately at fsync.
+    /// - Buffered writes: confirmed-on-flush. A crash before flush
+    ///   loses the buffered packs by design.
+    pub fn open_with_write_buffer(dir: &Path, config: BufferConfig) -> Result<Self> {
+        let mut engine = Self::open(dir)?;
+        engine.write_buffer = Some(WriteBuffer::new(config));
         Ok(engine)
     }
 
@@ -897,7 +975,12 @@ impl Engine {
     /// Ensures all durable components have fsynced. Individual writes already
     /// fsync on each operation, so this is a semantic guarantee: after `flush()`
     /// returns, reopening the engine will see all prior writes.
+    ///
+    /// Auto-drains the streaming write buffer (M1.3) if one is
+    /// configured, so consumers using `flush()` as their durability
+    /// barrier don't have to track the buffer separately.
     pub fn flush(&mut self) -> Result<()> {
+        self.flush_buffer()?;
         self.wal.checkpoint()?;
         Ok(())
     }
@@ -1008,7 +1091,16 @@ impl Engine {
     ///
     /// All layers are persisted with a single fsync. The retrieval key is
     /// indexed for search. Returns the assigned pack ID.
+    ///
+    /// When the engine was opened with
+    /// [`Engine::open_with_write_buffer`], this method instead
+    /// appends the pack to the buffer, returns its pre-assigned
+    /// pack id, and defers the fsync until the buffer reaches
+    /// `max_batch_size` or [`Engine::flush_buffer`] is called.
     pub fn mem_write_pack(&mut self, pack: &KVPack) -> Result<PackId> {
+        if self.write_buffer.is_some() {
+            return self.enqueue_buffered_pack(pack);
+        }
         let pack_id = self.next_pack_id;
         self.next_pack_id += 1;
 
@@ -1100,6 +1192,174 @@ impl Engine {
         self.pack_directory.insert_pack(pack_id, cell_ids);
 
         Ok(pack_id)
+    }
+
+    /// Enqueue a pack into the streaming write buffer (M1.3).
+    ///
+    /// Pre-assigns the pack id, clones the pack into the buffer,
+    /// and auto-flushes when the buffer reaches `max_batch_size`.
+    /// Called by [`Engine::mem_write_pack`] when a buffer is
+    /// configured.
+    fn enqueue_buffered_pack(&mut self, pack: &KVPack) -> Result<PackId> {
+        let pack_id = self.next_pack_id;
+        self.next_pack_id += 1;
+
+        let should_flush = {
+            let buf = self
+                .write_buffer
+                .as_mut()
+                .expect("enqueue_buffered_pack called without a write buffer");
+            buf.pending.push((pack_id, pack.clone()));
+            buf.pending.len() >= buf.config.max_batch_size
+        };
+
+        if should_flush {
+            self.flush_buffer()?;
+        }
+        Ok(pack_id)
+    }
+
+    /// Drain the streaming write buffer and persist every pending
+    /// pack with a single coalesced fsync (M1.3).
+    ///
+    /// No-op when the buffer is empty or when the engine was opened
+    /// without a buffer. Idempotent — calling repeatedly with an
+    /// empty buffer is safe and free.
+    pub fn flush_buffer(&mut self) -> Result<()> {
+        let drained: Vec<(PackId, KVPack)> = match self.write_buffer.as_mut() {
+            Some(buf) if !buf.pending.is_empty() => std::mem::take(&mut buf.pending),
+            _ => return Ok(()),
+        };
+        self.persist_packs_coalesced(&drained)
+    }
+
+    /// Persist a slice of `(pack_id, pack)` tuples with a single
+    /// `pool.append_batch` fsync. The pack ids must already be
+    /// reserved (we do not increment `next_pack_id` here).
+    fn persist_packs_coalesced(&mut self, packs: &[(PackId, KVPack)]) -> Result<()> {
+        if packs.is_empty() {
+            return Ok(());
+        }
+        let now_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+
+        // Detect key dimension from the first pack if not already
+        // pinned (mirrors the single-pack path).
+        if self.key_dim.is_none() {
+            let dim = mean_pool_key(&packs[0].1.retrieval_key).len();
+            self.key_dim = Some(dim);
+            self.slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, dim);
+        }
+
+        let (all_cells, infos, texts) = self.build_packs_for_persist(packs, now_nanos);
+
+        // Single coalesced fsync for all cells across all packs.
+        self.pool.append_batch(&all_cells)?;
+        if !texts.is_empty() {
+            self.text_store.store_batch(&texts).map_err(|e| TardigradeError::Io { source: e })?;
+        }
+
+        // Index in-memory state for each pack.
+        for info in infos {
+            let slb_key = mean_pool_key(&info.retrieval_key);
+            self.pipeline.insert(info.retrieval_cell_id, info.owner, &info.retrieval_key);
+            self.slb.insert(info.retrieval_cell_id, info.owner, &slb_key);
+            self.governance.insert(
+                info.retrieval_cell_id,
+                CellGovernance {
+                    scorer: info.scorer,
+                    tier_sm: info.tier_sm,
+                    days_since_update: 0.0,
+                },
+            );
+            self.pack_directory.insert_pack(info.pack_id, info.cell_ids);
+        }
+
+        // Lazy Vamana activation.
+        if self.vamana.is_none() && self.pool.cell_count() >= self.vamana_threshold {
+            self.activate_vamana()?;
+        }
+        Ok(())
+    }
+
+    /// Pure-CPU phase of [`Engine::persist_packs_coalesced`]: turns
+    /// pending packs into the flat cell vector to fsync, the
+    /// per-pack `PackInfo` records for in-memory bookkeeping, and
+    /// the text-store batch entries. No I/O happens here.
+    fn build_packs_for_persist<'a>(
+        &mut self,
+        packs: &'a [(PackId, KVPack)],
+        now_nanos: u64,
+    ) -> (Vec<tdb_core::MemoryCell>, Vec<PackInfo>, Vec<(PackId, &'a str)>) {
+        let mut all_cells: Vec<tdb_core::MemoryCell> = Vec::new();
+        let mut infos: Vec<PackInfo> = Vec::with_capacity(packs.len());
+        let mut texts: Vec<(PackId, &str)> = Vec::new();
+
+        for (pack_id, pack) in packs {
+            let retrieval_cell_id = self.next_id;
+            self.next_id += 1;
+
+            let mut scorer = ImportanceScorer::new(pack.salience);
+            scorer.on_update();
+            let mut tier_sm = TierStateMachine::new();
+            tier_sm.evaluate(scorer.importance());
+
+            let mut cell_ids = Vec::with_capacity(1 + pack.layers.len());
+            all_cells.push(
+                MemoryCellBuilder::new(
+                    retrieval_cell_id,
+                    pack.owner,
+                    PACK_RETRIEVAL_LAYER,
+                    pack.retrieval_key.clone(),
+                    vec![],
+                )
+                .importance(scorer.importance())
+                .tier(tier_sm.current())
+                .token_span(*pack_id, 0)
+                .created_at(now_nanos)
+                .updated_at(now_nanos)
+                .build(),
+            );
+            cell_ids.push(retrieval_cell_id);
+
+            for layer in &pack.layers {
+                let cid = self.next_id;
+                self.next_id += 1;
+                all_cells.push(
+                    MemoryCellBuilder::new(
+                        cid,
+                        pack.owner,
+                        layer.layer_idx,
+                        pack.retrieval_key.clone(),
+                        layer.data.clone(),
+                    )
+                    .importance(scorer.importance())
+                    .tier(tier_sm.current())
+                    .token_span(*pack_id, 0)
+                    .created_at(now_nanos)
+                    .updated_at(now_nanos)
+                    .build(),
+                );
+                cell_ids.push(cid);
+            }
+
+            if let Some(text) = pack.text.as_deref() {
+                texts.push((*pack_id, text));
+            }
+
+            infos.push(PackInfo {
+                pack_id: *pack_id,
+                owner: pack.owner,
+                retrieval_key: pack.retrieval_key.clone(),
+                retrieval_cell_id,
+                cell_ids,
+                scorer,
+                tier_sm,
+            });
+        }
+
+        (all_cells, infos, texts)
     }
 
     /// Attach additional retrieval keys ("views") to an existing pack.
