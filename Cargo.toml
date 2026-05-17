@@ -35,6 +35,15 @@ half = { version = "2", features = ["num-traits"] }
 bytemuck = { version = "1", features = ["derive"] }
 lru = "0.16"
 
+# Snapshot / persistence packaging (M1.2). `tar` for portable
+# archive packaging, `serde`/`serde_json` for the manifest header,
+# `sha2` for content-integrity hashes. All mature low-churn crates
+# used in production storage engines.
+tar = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
 # Shared dev dependencies (used via [dev-dependencies] foo = { workspace = true })
 criterion = { version = "0.8", features = ["html_reports"] }
 rstest = "0.26"

@@ -369,6 +369,48 @@ impl Engine {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Snapshot the engine state to a portable tar archive at
+    /// ``out_path``. Returns the manifest as a dict with keys
+    /// ``magic``, ``format_version``, ``created_at``, ``pack_count``,
+    /// ``owner_count``, ``sha256``.
+    ///
+    /// ``out_path`` must be outside the engine's working directory —
+    /// otherwise the tar walker would read its own output.
+    fn snapshot(&self, py: Python<'_>, out_path: &str) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        let manifest = lock_engine(&self.inner)?
+            .snapshot(std::path::Path::new(out_path))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("magic", &manifest.magic)?;
+        dict.set_item("format_version", manifest.format_version)?;
+        dict.set_item("created_at", &manifest.created_at)?;
+        dict.set_item("pack_count", manifest.stats.pack_count)?;
+        dict.set_item("owner_count", manifest.stats.owner_count)?;
+        dict.set_item("sha256", &manifest.sha256)?;
+        dict.set_item("quantization_codec", &manifest.codecs.quantization)?;
+        dict.set_item("key_codec", &manifest.codecs.key)?;
+        Ok(dict.into())
+    }
+
+    /// Restore a snapshot archive at ``in_path`` into ``target_dir``
+    /// and return a freshly opened :class:`Engine`.
+    ///
+    /// ``target_dir`` must be empty or non-existent. Raises
+    /// :py:exc:`RuntimeError` with a typed message on integrity,
+    /// magic, version, or codec mismatch.
+    #[staticmethod]
+    fn restore_from(in_path: &str, target_dir: &str) -> PyResult<Self> {
+        let engine = tdb_engine::engine::Engine::restore_from(
+            std::path::Path::new(in_path),
+            std::path::Path::new(target_dir),
+        )
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(engine)),
+            maintenance_worker: None,
+        })
+    }
+
     /// Number of stages in the retrieval pipeline.
     fn pipeline_stage_count(&self) -> PyResult<usize> {
         Ok(lock_engine(&self.inner)?.pipeline_stage_count())

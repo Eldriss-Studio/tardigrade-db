@@ -37,6 +37,19 @@ pub enum TardigradeError {
 
     #[error("capacity exceeded: {0}")]
     CapacityExceeded(String),
+
+    // ── Snapshot / restore errors (M1.2) ────────────────────────────────
+    #[error("not a TardigradeDB snapshot: {reason}")]
+    NotATardigradeSnapshot { reason: String },
+
+    #[error("unsupported snapshot format version {found}, supported: {supported}")]
+    UnsupportedFormatVersion { found: u8, supported: u8 },
+
+    #[error("snapshot codec mismatch for {field}: snapshot={snapshot}, engine={engine}")]
+    SnapshotCodecMismatch { field: String, snapshot: String, engine: String },
+
+    #[error("snapshot integrity check failed: {0}")]
+    SnapshotIntegrity(String),
 }
 
 pub type Result<T> = std::result::Result<T, TardigradeError>;
