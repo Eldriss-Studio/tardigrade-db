@@ -16,6 +16,10 @@ tdb-storage = { workspace = true }
 tdb-retrieval = { workspace = true }
 tdb-index = { workspace = true }
 tdb-governance = { workspace = true }
+tar = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

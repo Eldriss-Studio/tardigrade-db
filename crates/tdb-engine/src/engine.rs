@@ -902,6 +902,45 @@ impl Engine {
         Ok(())
     }
 
+    /// Snapshot the engine's persistent state into a portable tar
+    /// archive at `out_path` (M1.2).
+    ///
+    /// Flushes first, then packages the working directory under
+    /// `engine_state/` alongside a versioned [`crate::snapshot::SnapshotManifest`]
+    /// containing magic bytes, format version, codec identifiers,
+    /// stats, and a SHA-256 of the payload. The archive is
+    /// portable across machines so long as the receiving engine
+    /// supports the same `format_version` and codecs.
+    ///
+    /// See [`crate::snapshot`] for the on-disk layout and
+    /// reliability contract. Pair with [`Engine::restore_from`] for
+    /// the read side.
+    pub fn snapshot(
+        &mut self,
+        out_path: &std::path::Path,
+    ) -> Result<crate::snapshot::SnapshotManifest> {
+        self.flush()?;
+        let stats = crate::snapshot::SnapshotStats {
+            pack_count: self.pack_count(),
+            owner_count: self.list_owners().len(),
+        };
+        crate::snapshot::write_snapshot(&self.dir, out_path, stats)
+    }
+
+    /// Restore a snapshot archive at `in_path` into `target_dir`,
+    /// validate its manifest, and return the engine opened on the
+    /// restored directory (M1.2).
+    ///
+    /// `target_dir` must be empty or non-existent. Errors thrown
+    /// during restore are typed: [`TardigradeError::NotATardigradeSnapshot`],
+    /// [`TardigradeError::UnsupportedFormatVersion`],
+    /// [`TardigradeError::SnapshotCodecMismatch`],
+    /// [`TardigradeError::SnapshotIntegrity`].
+    pub fn restore_from(in_path: &std::path::Path, target_dir: &std::path::Path) -> Result<Self> {
+        let _manifest = crate::snapshot::read_snapshot(in_path, target_dir)?;
+        Self::open(target_dir)
+    }
+
     /// Simulate passage of time for governance decay.
     pub fn advance_days(&mut self, days: f32) {
         for gov in self.governance.values_mut() {
