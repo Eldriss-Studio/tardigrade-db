@@ -9,12 +9,12 @@
 //!
 //! ## Firing model
 //!
-//! Each enqueued action fires **at most once**. The maintenance
-//! worker (or any caller) invokes
+//! The maintenance worker (or any caller) invokes
 //! [`crate::engine::Engine::fire_due_scheduled`] periodically;
-//! actions whose `fires_at <= now` are executed and removed
-//! from the schedule. The persistence file is rewritten after
-//! every change.
+//! actions whose `fires_at <= now` are executed, then removed
+//! from the schedule once execute returns `Ok`. The persistence
+//! file is rewritten after every state change. Delivery is
+//! **at-least-once across crashes** — see the next section.
 //!
 //! ## Crash semantics: at-least-once + idempotent actions
 //!
