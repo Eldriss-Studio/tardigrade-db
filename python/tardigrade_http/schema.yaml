@@ -1,0 +1,407 @@
+openapi: 3.1.0
+info:
+  title: TardigradeDB HTTP Bridge
+  description: REST adapter over the TardigradeDB Engine. Endpoints under `/mem/*`
+    expose store/query/owners/status/snapshot/restore.
+  version: 1.0.0
+paths:
+  /mem/store:
+    post:
+      summary: Store
+      operationId: store_mem_store_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoreRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /mem/query:
+    post:
+      summary: Query
+      operationId: query_mem_query_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /mem/owners:
+    get:
+      summary: Owners
+      operationId: owners_mem_owners_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnersResponse'
+  /mem/status:
+    get:
+      summary: Status
+      operationId: status_mem_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+  /mem/save:
+    post:
+      summary: Save
+      operationId: save_mem_save_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /mem/restore:
+    post:
+      summary: Restore
+      operationId: restore_mem_restore_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    Manifest:
+      properties:
+        magic:
+          type: string
+          title: Magic
+        format_version:
+          type: integer
+          title: Format Version
+        created_at:
+          type: string
+          title: Created At
+        pack_count:
+          type: integer
+          title: Pack Count
+        owner_count:
+          type: integer
+          title: Owner Count
+        sha256:
+          type: string
+          title: Sha256
+        quantization_codec:
+          type: string
+          title: Quantization Codec
+        key_codec:
+          type: string
+          title: Key Codec
+      type: object
+      required:
+      - magic
+      - format_version
+      - created_at
+      - pack_count
+      - owner_count
+      - sha256
+      - quantization_codec
+      - key_codec
+      title: Manifest
+      description: 'Mirror of :class:`tdb_engine::snapshot::SnapshotManifest`.
+
+
+        Field names match the Rust struct so consumers can rely on a
+
+        stable wire contract across languages.'
+    OwnersResponse:
+      properties:
+        owners:
+          items:
+            type: integer
+          type: array
+          title: Owners
+      type: object
+      required:
+      - owners
+      title: OwnersResponse
+    QueryRequest:
+      properties:
+        owner:
+          type: integer
+          minimum: 0.0
+          title: Owner
+        query_text:
+          type: string
+          minLength: 1
+          title: Query Text
+        k:
+          type: integer
+          maximum: 100.0
+          minimum: 1.0
+          title: K
+          default: 5
+      type: object
+      required:
+      - owner
+      - query_text
+      title: QueryRequest
+      description: Body of ``POST /mem/query``.
+    QueryResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/QueryResult'
+          type: array
+          title: Results
+      type: object
+      required:
+      - results
+      title: QueryResponse
+    QueryResult:
+      properties:
+        pack_id:
+          type: integer
+          title: Pack Id
+        score:
+          type: number
+          title: Score
+        text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Text
+      type: object
+      required:
+      - pack_id
+      - score
+      title: QueryResult
+    RestoreRequest:
+      properties:
+        snapshot_path:
+          type: string
+          minLength: 1
+          title: Snapshot Path
+        target_dir:
+          type: string
+          minLength: 1
+          title: Target Dir
+      type: object
+      required:
+      - snapshot_path
+      - target_dir
+      title: RestoreRequest
+      description: 'Body of ``POST /mem/restore``.
+
+
+        Restores the snapshot at ``snapshot_path`` into ``target_dir``;
+
+        the bridge does *not* hot-swap its running engine. To use the
+
+        restored engine the consumer should relaunch the bridge with
+
+        ``TARDIGRADE_HTTP_DB=target_dir``.'
+    RestoreResponse:
+      properties:
+        ok:
+          type: boolean
+          title: Ok
+        pack_count:
+          type: integer
+          title: Pack Count
+      type: object
+      required:
+      - ok
+      - pack_count
+      title: RestoreResponse
+    SaveRequest:
+      properties:
+        snapshot_path:
+          type: string
+          minLength: 1
+          title: Snapshot Path
+      type: object
+      required:
+      - snapshot_path
+      title: SaveRequest
+      description: "Body of ``POST /mem/save``.\n\nSnapshots are engine-wide \u2014\
+        \ they capture the whole working\ndirectory, not a single owner. ``snapshot_path``\
+        \ must be\noutside the engine's directory (the bridge propagates the\nengine's\
+        \ foot-gun guard)."
+    SaveResponse:
+      properties:
+        manifest:
+          $ref: '#/components/schemas/Manifest'
+      type: object
+      required:
+      - manifest
+      title: SaveResponse
+    StatusResponse:
+      properties:
+        cell_count:
+          type: integer
+          title: Cell Count
+        pack_count:
+          type: integer
+          title: Pack Count
+        segment_count:
+          type: integer
+          title: Segment Count
+        slb_occupancy:
+          type: integer
+          title: Slb Occupancy
+        slb_capacity:
+          type: integer
+          title: Slb Capacity
+        vamana_active:
+          type: boolean
+          title: Vamana Active
+        pipeline_stages:
+          type: integer
+          title: Pipeline Stages
+        governance_entries:
+          type: integer
+          title: Governance Entries
+        trace_edges:
+          type: integer
+          title: Trace Edges
+        arena_bytes:
+          type: integer
+          title: Arena Bytes
+        arena_bytes_per_cell:
+          type: number
+          title: Arena Bytes Per Cell
+      type: object
+      required:
+      - cell_count
+      - pack_count
+      - segment_count
+      - slb_occupancy
+      - slb_capacity
+      - vamana_active
+      - pipeline_stages
+      - governance_entries
+      - trace_edges
+      - arena_bytes
+      - arena_bytes_per_cell
+      title: StatusResponse
+      description: Mirror of :meth:`Engine.status` dict.
+    StoreRequest:
+      properties:
+        owner:
+          type: integer
+          minimum: 0.0
+          title: Owner
+          description: Owner ID for the memory.
+        fact_text:
+          type: string
+          minLength: 1
+          title: Fact Text
+          description: Fact to remember.
+        salience:
+          type: number
+          maximum: 100.0
+          minimum: 0.0
+          title: Salience
+          description: Initial importance score in [0, 100].
+          default: 80.0
+      type: object
+      required:
+      - owner
+      - fact_text
+      title: StoreRequest
+      description: Body of ``POST /mem/store``.
+    StoreResponse:
+      properties:
+        pack_id:
+          type: integer
+          title: Pack Id
+      type: object
+      required:
+      - pack_id
+      title: StoreResponse
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
