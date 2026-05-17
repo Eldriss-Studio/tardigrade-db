@@ -171,3 +171,27 @@ PYTHONPATH=python python experiments/footprint_audit.py \
 
 Both write JSON consumed by future regression comparison. Both run
 in under 6 seconds on RTX 3070 Ti and require no API key.
+
+### Shared-LLM-path retrieval latency (M1.4)
+
+Three retrieval paths compared at three corpus sizes. The
+warm path measures TardigradeDB's architectural payoff —
+when the LLM is already running, retrieval is a dot product
+with no extra model spend. The cold path measures the cost
+of encoding a query from scratch (current bench shape). The
+RAG baseline simulates a typical text-RAG pipeline (embedding
+API + vector-DB lookup) using published p50 latencies.
+
+Notes: Pure-synthetic benchmark. Model prefill and embedding-API costs are simulated with busy-waits using published p50 values for Qwen3-0.6B (CPU prefill ≈ 50ms) and OpenAI text-embedding-3-small (~50ms). Re-measure with real models when integrating with a specific consumer.
+
+| Corpus | Path | p50 (ms) | p95 (ms) | p99 (ms) |
+|---|---|---:|---:|---:|
+| 100 | cold (encode + retrieve) | 50.84 | 51.00 | 51.12 |
+| 100 | warm (shared-LLM KV reuse) | 0.63 | 0.70 | 1.00 |
+| 100 | text-RAG baseline (embed + vector-DB) | 55.83 | 55.95 | 56.02 |
+| 1000 | cold (encode + retrieve) | 54.24 | 54.65 | 55.08 |
+| 1000 | warm (shared-LLM KV reuse) | 3.92 | 4.33 | 4.62 |
+| 1000 | text-RAG baseline (embed + vector-DB) | 59.24 | 59.61 | 60.04 |
+| 5000 | cold (encode + retrieve) | 65.79 | 66.35 | 66.64 |
+| 5000 | warm (shared-LLM KV reuse) | 15.49 | 16.21 | 17.01 |
+| 5000 | text-RAG baseline (embed + vector-DB) | 70.77 | 71.29 | 71.35 |
