@@ -195,6 +195,9 @@ pub struct WriteRequest {
 /// Sentinel layer index for KV Pack retrieval key cells.
 const PACK_RETRIEVAL_LAYER: u16 = 0xFFFE;
 
+/// Hours per simulated day, for converting sweep cadence units.
+const HOURS_PER_DAY: f32 = 24.0;
+
 pub struct Engine {
     pool: BlockPool,
     /// Cold-path retrieval: `BruteForce` + Vamana (when active).
@@ -1063,6 +1066,27 @@ impl Engine {
             self.delete_pack(pack_id)?;
         }
         Ok(count)
+    }
+
+    /// Run a governance sweep synchronously: apply time-decay to all
+    /// owners, then evict Draft-tier packs that fall below
+    /// `eviction_threshold`. Returns the number of packs evicted.
+    ///
+    /// Equivalent to one tick of the background
+    /// [`crate::maintenance::MaintenanceWorker`], but blocking. Use
+    /// when a known event (episode boundary, save-game checkpoint,
+    /// agent reset) should commit tier transitions before the next
+    /// read instead of waiting for the next sweep interval.
+    ///
+    /// `hours` controls the simulated time advance — the daily decay
+    /// curve fires once per integral day, so a value below 24 advances
+    /// the clock without applying decay this call. Pass `0.0` to skip
+    /// decay and just run the eviction pass.
+    pub fn sweep_now(&mut self, hours: f32, eviction_threshold: f32) -> Result<usize> {
+        if hours > 0.0 {
+            self.advance_days(hours / HOURS_PER_DAY);
+        }
+        self.evict_draft_packs(eviction_threshold, None)
     }
 
     /// Compact storage segments by rewriting live cells and deleting dead ones.

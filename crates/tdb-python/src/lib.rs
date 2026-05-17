@@ -347,6 +347,19 @@ impl Engine {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Run a governance sweep synchronously (M3.2).
+    ///
+    /// Advances importance decay by ``hours`` and evicts Draft-tier
+    /// packs that fall below ``eviction_threshold``. Returns the
+    /// number of packs evicted. Use after a known event when you
+    /// want tier transitions visible before the next read.
+    #[pyo3(signature = (hours=0.0, eviction_threshold=15.0))]
+    fn sweep_now(&self, hours: f32, eviction_threshold: f32) -> PyResult<usize> {
+        lock_engine(&self.inner)?
+            .sweep_now(hours, eviction_threshold)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Enumerate every owner with at least one pack stored.
     ///
     /// Returns owners in ascending order. Foundation-completion M1.1.
