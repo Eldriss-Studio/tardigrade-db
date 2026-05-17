@@ -411,6 +411,38 @@ impl Engine {
         })
     }
 
+    /// Open an engine at ``path`` with a streaming-ingest write
+    /// buffer enabled (M1.3). Buffered writes return their pack id
+    /// synchronously and defer the fsync until the buffer reaches
+    /// ``max_batch_size`` or :py:meth:`flush_buffer` is called.
+    ///
+    /// ``max_idle_ms`` is reserved for a future idle-timer flush
+    /// (currently has no effect); pass ``0``.
+    #[staticmethod]
+    #[pyo3(signature = (path, max_batch_size, max_idle_ms=0))]
+    fn open_with_write_buffer(
+        path: &str,
+        max_batch_size: usize,
+        max_idle_ms: u64,
+    ) -> PyResult<Self> {
+        let engine = tdb_engine::engine::Engine::open_with_write_buffer(
+            std::path::Path::new(path),
+            tdb_engine::engine::BufferConfig { max_batch_size, max_idle_ms },
+        )
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(engine)),
+            maintenance_worker: None,
+        })
+    }
+
+    /// Drain the streaming write buffer (M1.3). No-op when the
+    /// engine was opened without a buffer or when the buffer is
+    /// already empty.
+    fn flush_buffer(&self) -> PyResult<()> {
+        lock_engine(&self.inner)?.flush_buffer().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Number of stages in the retrieval pipeline.
     fn pipeline_stage_count(&self) -> PyResult<usize> {
         Ok(lock_engine(&self.inner)?.pipeline_stage_count())
