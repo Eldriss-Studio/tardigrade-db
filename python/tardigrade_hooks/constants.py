@@ -19,12 +19,12 @@ DEFAULT_CHUNK_TOKENS: int = 512
 CHUNK_OVERLAP_TOKENS: int = 64
 MIN_CHUNK_TOKENS: int = 32
 
-# -- Chunker boundary lookback (Phase 1A.1 of retrieval debug plan) --------
+# -- Chunker boundary lookback (chunker boundary work of retrieval debug plan) --------
 # When the hard token boundary lands mid-word/mid-sentence, the chunker
 # searches backward by up to `BOUNDARY_LOOKBACK_RATIO * max_tokens`-worth
 # of characters for a clean break. Beyond that it gives up and hard-cuts —
 # only triggers on runaway content with no natural boundary (e.g., a
-# 200-token URL). Set 2026-05-14 after Phase 0 diagnostic traced
+# 200-token URL). Set 2026-05-14 after retrieval diagnostic traced
 # LongMemEval hub-cell dominance to fragment-chunks produced by the
 # boundary-unaware splitter.
 BOUNDARY_LOOKBACK_RATIO: float = 0.25

@@ -1,7 +1,7 @@
 //! AT-1 — `BlockPoolCellSource` returns each cell's encoded key.
 //!
 //! Pins the `CellSource` contract at the storage→retrieval seam before
-//! any retriever change. Slice 1 of the universal scalability fix.
+//! any retriever change. Part of the universal scalability fix.
 
 use tdb_core::memory_cell::MemoryCellBuilder;
 use tdb_core::{CellId, LayerId, OwnerId};

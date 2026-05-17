@@ -1,4 +1,4 @@
-"""ATDD: FootprintReporter (Track A, slice A2.1/A2.2).
+"""ATDD: FootprintReporter.
 
 `FootprintReporter` snapshots process-level RSS via psutil *and*
 engine-level arena bytes via `engine.status()` so the positioning

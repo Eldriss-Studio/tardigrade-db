@@ -1,4 +1,4 @@
-"""ATDD: challenger profile in default.json (Track B, slice B4).
+"""ATDD: challenger profile in default.json.
 
 Adds a third profile that bundles the upgraded LoCoMo-race stack:
 Qwen3-1.7B capture, phase1_oracle_full data, justify_then_judge

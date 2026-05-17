@@ -198,4 +198,4 @@ class TestRunnerParity:
         # Skip this end-to-end and just verify the runner shape.
         # Skip-pattern: we'll test the actual parallel path via the
         # adapter+evaluator unit, not against a real Dataset.
-        pytest.skip("Runner-level e2e requires dataset adapter; verified via Phase 2 smoke.")
+        pytest.skip("Runner-level e2e requires dataset adapter; verified via the integration smoke.")

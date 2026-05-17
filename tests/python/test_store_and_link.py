@@ -1,4 +1,4 @@
-# ATDD tests for store_and_link() API (Phase 35).
+# ATDD tests for store_and_link() API.
 #
 # The agent decides what to link. The engine records the link.
 # This is the canonical way to attach new details to existing memories.

@@ -20,7 +20,7 @@
 //! pre-scaling (`SmoothQuant` pattern) is not required at this scale
 //! of outlier dominance — INT8 alone handles it.
 //!
-//! Slice A2 of the retrieval correctness fix
+//! Part of the retrieval correctness fix
 //! (`docs/refs/external-references.md` §A3f).
 //!
 //! [llm-int8]: https://arxiv.org/abs/2208.07339

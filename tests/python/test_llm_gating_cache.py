@@ -1,4 +1,4 @@
-"""ATDD: CachedAnswerGenerator decorator (Slice L7).
+"""ATDD: CachedAnswerGenerator decorator.
 
 Cache-Aside over any :class:`AnswerGenerator`. Keyed by
 ``(model_name, prompt_hash, template_version)`` so:

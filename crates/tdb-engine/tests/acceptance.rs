@@ -731,7 +731,7 @@ fn test_batch_write_with_causal_edges() {
     assert!(ancestors_1.contains(&root_id), "Cell {} should trace to root {root_id}", ids[1]);
 }
 
-// -- Phase 22: Per-Token Engine Integration ATDD -----------------------------
+// -- Per-Token Engine Integration ATDD -----------------------------
 
 /// ATDD 27: Engine retrieves per-token encoded cells correctly.
 #[test]
@@ -1067,7 +1067,7 @@ fn test_engine_vamana_still_does_not_change_candidate_reduced_ranking() {
     assert_eq!(with_vamana, exact_pipeline);
 }
 
-// -- Phase 29: KV Pack ATDD ──────────────────────────────────────────────────
+// -- KV Pack ATDD ──────────────────────────────────────────────────
 
 /// ATDD 30: Write a KV Pack, all layers stored atomically.
 #[test]
@@ -1649,7 +1649,7 @@ fn test_correctness_report_detects_vamana_regression() {
     assert!(has_vamana_regression(&before, &after, &expected));
 }
 
-// -- Phase 30: Pack Materialization ATDD ────────────────────────────────────
+// -- Pack Materialization ATDD ────────────────────────────────────
 
 const OUT_OF_ORDER_LAYER_A: u16 = 3;
 const OUT_OF_ORDER_LAYER_B: u16 = 0;
@@ -1796,7 +1796,7 @@ fn test_pack_governance() {
     assert!(imp_after.unwrap() < imp_before.unwrap(), "Importance should decay");
 }
 
-// -- Phase 37: Pack-level Rust APIs ─────────────────────────────────────────
+// -- Pack-level Rust APIs ─────────────────────────────────────────
 
 /// ATDD: `load_pack_by_id` returns complete pack without retrieval scoring.
 #[test]
@@ -2406,7 +2406,7 @@ fn refresh_test_pack(seed: f32) -> KVPack {
     }
 }
 
-/// Step 5a-L1.1: cross-handle write visibility after refresh.
+/// cross-handle write visibility after refresh.
 /// GIVEN two Engine handles open at the same dir,
 /// WHEN handle A writes a pack and handle B calls `refresh()`,
 /// THEN B.`pack_count()` reflects A's write.
@@ -2429,7 +2429,7 @@ fn test_refresh_picks_up_writes_from_other_handle() {
     assert!(b.pack_exists(pack_id));
 }
 
-/// Step 5a-L1.2: refresh must be idempotent — calling it twice with no
+/// refresh must be idempotent — calling it twice with no
 /// intervening writes yields the same state.
 #[test]
 fn test_refresh_is_idempotent() {
@@ -2444,7 +2444,7 @@ fn test_refresh_is_idempotent() {
     assert_eq!(b.pack_count(), count_after_first, "second refresh must be a no-op");
 }
 
-/// Step 5a-L1.3: WAL-derived state (`TraceGraph`) must also re-apply.
+/// WAL-derived state (`TraceGraph`) must also re-apply.
 /// GIVEN handle A links two packs in the trace graph,
 /// WHEN handle B calls `refresh()`,
 /// THEN B can traverse the link via `pack_links()`.
@@ -2468,7 +2468,7 @@ fn test_refresh_picks_up_trace_edges() {
     );
 }
 
-/// Step 5a-L1.5: SLB dimension must adapt when another handle writes cells
+/// SLB dimension must adapt when another handle writes cells
 /// with a different key dimension than the empty engine's SLB default (128).
 ///
 /// Regression for: `pyo3_runtime.PanicException`
@@ -2502,7 +2502,7 @@ fn test_refresh_rebuilds_slb_when_key_dim_changes() {
     let _results = reader.mem_read_pack(&query, 1, None).unwrap();
 }
 
-/// Step 5a-L1.4: `DeletionLog` mutations from another handle must propagate.
+/// `DeletionLog` mutations from another handle must propagate.
 /// GIVEN A writes then deletes a pack,
 /// WHEN B refreshes (after each step),
 /// THEN B sees the pack first, then sees it gone.
@@ -3019,7 +3019,7 @@ fn test_engine_status_reflects_current_state() {
     assert!(status.slb_occupancy > 0);
 }
 
-/// ATDD (Track A — A2.3): status surfaces footprint fields used by the
+/// ATDD: status surfaces footprint fields used by the
 /// `positioning/latency_first.md` doc — `arena_bytes` (sum of segment
 /// file sizes) and `arena_bytes_per_cell` (per-cell average, derived).
 #[test]

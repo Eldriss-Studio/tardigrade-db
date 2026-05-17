@@ -176,7 +176,7 @@ def test_projected_strategy_deterministic_default_projection():
     np.testing.assert_array_equal(r1, r2)
 
 
-# ── Phase 3: Unified save+load strategy ──────────────────────────────────
+# ── Unified save+load strategy ──────────────────────────────────
 
 
 def test_compute_for_save_defaults_to_compute():

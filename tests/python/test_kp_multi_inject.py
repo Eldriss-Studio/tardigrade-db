@@ -1,4 +1,4 @@
-# ATDD acceptance tests for multi-memory KV injection (Phase 30).
+# ATDD acceptance tests for multi-memory KV injection.
 #
 # Design pattern: Strategy (CompositionStrategy protocol) + Facade
 # (KnowledgePackStore.generate_multi wraps retrieval + composition).

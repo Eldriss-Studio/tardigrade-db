@@ -4,7 +4,7 @@ The prompt is part of the experiment. ``PROMPT_TEMPLATE_VERSION`` pins
 the template so:
 
 * response cache keys can detect prompt-template changes
-  (Slice L7);
+ ;
 * run metadata records which template produced which results
   (reproducibility);
 * prompt experiments are version-tracked rather than mutated in place.

@@ -1,4 +1,4 @@
-"""ATDD: RetrieveThenReadAdapter (Slice L3).
+"""ATDD: RetrieveThenReadAdapter.
 
 Decorator wraps any ``BenchmarkAdapter`` and replaces the inner
 adapter's ``answer`` with an LLM-generated string from
@@ -216,7 +216,7 @@ class TestRetrieveThenReadDecoratorPassThrough:
 
 
 class TestRetrieveThenReadDecoratorEvidenceCapBothSides:
-    """Slice E2 + E3 combined: evidence is capped on BOTH sides of the
+    """Combined: evidence is capped on BOTH sides of the
     Decorator — the prompt sees up to ``LLM_GATE_PROMPT_TOP_K`` and the
     serialized ``result.evidence`` is capped to the runner's ``top_k`` for
     fair JSON reporting alongside non-gated systems.
@@ -249,7 +249,7 @@ class TestRetrieveThenReadDecoratorEvidenceCapBothSides:
 
 
 class TestRetrieveThenReadDecoratorInnerBudget:
-    """Slice E1: the Decorator owns its retrieval budget and asks the
+    """the Decorator owns its retrieval budget and asks the
     inner adapter for ``LLM_GATE_INNER_TOP_K`` chunks regardless of the
     outer ``top_k`` the runner passes in.
     """
@@ -268,7 +268,7 @@ class TestRetrieveThenReadDecoratorInnerBudget:
 
 
 class TestRetrieveThenReadDecoratorEnvOverrides:
-    """Slice E4: per-run knobs without touching the bench profile."""
+    """per-run knobs without touching the bench profile."""
 
     def test_inner_top_k_env_override(self, monkeypatch):
         monkeypatch.setenv("TDB_LLM_GATE_INNER_TOP_K", "12")

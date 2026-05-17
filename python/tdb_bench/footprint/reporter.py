@@ -1,6 +1,6 @@
 """``FootprintReporter`` — engine + process footprint at a moment in time.
 
-Companion to the latency-bench v2 harness (Track A slice A1): same
+Companion to the latency-bench v2 harness (the bench-harness latency module): same
 shape of Strategy + Repository primitives, but the measurement is
 bytes (not seconds). Combines:
 

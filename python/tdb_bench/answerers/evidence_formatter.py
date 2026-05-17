@@ -1,6 +1,6 @@
 """Filter + cap retrieved-evidence strings before they hit the prompt.
 
-The Decorator adapter (Slice L3) receives ``AdapterQueryResult.evidence``
+The Decorator adapter receives ``AdapterQueryResult.evidence``
 from the inner adapter as a ``list[str]`` already (the inner adapter
 does the cell-handle → text mapping). The formatter's job is the
 slice between that raw list and the prompt:

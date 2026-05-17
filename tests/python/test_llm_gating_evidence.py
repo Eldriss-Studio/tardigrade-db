@@ -1,4 +1,4 @@
-"""ATDD: EvidenceFormatter (Slice L2).
+"""ATDD: EvidenceFormatter.
 
 Sits between the inner adapter's ``AdapterQueryResult.evidence``
 (``list[str]``) and the prompt. Filter, cap, preserve rank order.

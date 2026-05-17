@@ -1,4 +1,4 @@
-"""ATDD: RetryingGenerator decorator (Slice L6).
+"""ATDD: RetryingGenerator decorator.
 
 Bounded retry with exponential backoff. Surfaces ``GeneratorExhausted``
 after ``max_attempts`` so the bench adapter can record a per-item

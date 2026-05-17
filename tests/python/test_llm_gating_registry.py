@@ -1,4 +1,4 @@
-"""ATDD: registry + end-to-end LLM-gated bench smoke (Slice L8).
+"""ATDD: registry + end-to-end LLM-gated bench smoke.
 
 Two test classes:
 

@@ -1,6 +1,6 @@
 """AT-B1 — `HuggingFaceKVHook` batch path equivalence with the serial path.
 
-Slice B1 of the ingestion correctness/perf workstream. Pins that
+Pins that
 batched forward passes through the hook produce the same
 `WriteDecision` per chunk as the previous serial path, so the GPU-
 batching speedup is correctness-preserving.

@@ -4,7 +4,7 @@ Two doubles:
 
 * :class:`MockAnswerGenerator` — returns a configured answer and
   records calls. Used by unit tests for the Decorator adapter
-  (Slice L3) and the cache + retry decorators (Slices L6/L7).
+  and the cache + retry decorators (Slices L6/L7).
 * :class:`NoOpAnswerGenerator` — Null Object. Returns ``""``. Lets
   the adapter's negative path be tested without API calls.
 """

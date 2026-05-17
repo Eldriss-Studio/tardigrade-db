@@ -7,7 +7,7 @@ a single `mem_write_batch` call. Both engines are then queried with
 the same probe; the top-K results must match.
 
 Closes the test gap left when the bench adapter was migrated to
-`mem_write_batch` in Slice B2 without a focused equivalence test.
+`mem_write_batch` in the batched-write path without a focused equivalence test.
 """
 from __future__ import annotations
 

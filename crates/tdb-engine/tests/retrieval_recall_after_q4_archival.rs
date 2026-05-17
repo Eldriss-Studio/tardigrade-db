@@ -12,7 +12,7 @@
 //! INT8 precision is preserved and recall@1 is near-perfect on
 //! synthetic targeted data.
 //!
-//! Slice A4 of the retrieval correctness fix
+//! Part of the retrieval correctness fix
 //! (`docs/refs/external-references.md` §A3f).
 
 use tdb_core::OwnerId;

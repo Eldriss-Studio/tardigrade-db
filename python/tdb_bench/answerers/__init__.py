@@ -1,6 +1,6 @@
 """LLM answer generation for retrieve-then-read evaluation.
 
-Slice L1 (this module): protocol + mock + prompt builder.
+This module: protocol + mock + prompt builder.
 
 The retrieve-then-read pipeline is the canonical evaluation protocol
 for memory-augmented QA systems (LoCoMo, LongMemEval, BEIR-derived

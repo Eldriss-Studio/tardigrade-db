@@ -74,7 +74,7 @@ class CrossEncoderReranker:
         # `predict` calls race on shared internal state (KV caches,
         # attention scratch buffers) and produce non-deterministic
         # scores. Observed as a 0.42 → 0.38 LoCoMo headline regression
-        # under `--workers 4` (Phase 1B audit 2026-05-16 task #96).
+        # under `--workers 4` (bench audit 2026-05-16 task #96).
         # A per-instance lock serialises the model call while leaving
         # the rest of `rerank` (Python data shuffling) free to run
         # concurrently from other threads holding different rerankers.

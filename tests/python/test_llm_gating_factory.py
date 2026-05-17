@@ -1,4 +1,4 @@
-"""ATDD: build_answerer_from_env factory (part of Slice L8).
+"""ATDD: build_answerer_from_env factory (part of the bench harness).
 
 Env-driven Factory Method: assembles the answerer chain
 (``Retry → Cache → DeepSeek``) from environment variables so the

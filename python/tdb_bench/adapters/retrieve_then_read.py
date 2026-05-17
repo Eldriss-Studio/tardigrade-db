@@ -11,7 +11,7 @@ ByteRover, MemMachine).
 The Decorator widens its inner retrieval call to
 ``LLM_GATE_INNER_TOP_K`` (env-overridable, default 25) so the LLM has
 enough material to answer. Measurement: item-level R@25 ≈ 84% on
-LoCoMo vs R@5 ≈ 30% (Phase 1B.2 audit) — feeding only top-5 caused
+LoCoMo vs R@5 ≈ 30% (bench audit) — feeding only top-5 caused
 ~70% of generated answers to be "I don't know."
 
 The widening is **private to the Decorator**. The bench runner still

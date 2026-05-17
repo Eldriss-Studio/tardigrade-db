@@ -1,4 +1,4 @@
-"""ATDD: JustifyThenJudgeEvaluator (Track B, slice B3).
+"""ATDD: JustifyThenJudgeEvaluator.
 
 Implements the canonical leaderboard pipeline:
 ``retrieve → answer → justify → judge`` — Mem0/Memobase/ByteRover

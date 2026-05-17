@@ -1,4 +1,4 @@
-"""ATDD: latency_benchmark_v2 primitives (Track A, slice A1).
+"""ATDD: latency_benchmark_v2 primitives.
 
 Unit-tests the Strategy + Template Method primitives that drive
 the latency-benchmark harness against a mock engine. The harness

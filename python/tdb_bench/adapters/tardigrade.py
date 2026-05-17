@@ -74,7 +74,7 @@ if _RLS_MODE != RLS_MODE_NONE:
 _CHUNK_TOKENS = int(os.getenv("TDB_BENCH_CHUNK_TOKENS", "128"))
 _CHUNK_OVERLAP = int(os.getenv("TDB_BENCH_CHUNK_OVERLAP", "16"))
 
-# Slice B1 — GPU batching for the ingest forward pass.
+# GPU batching for the ingest forward pass.
 # Default 8 chunks per batched forward pass fits the RTX 3070 Ti's
 # 8 GB VRAM with Qwen3-0.6B at chunk size 128 with comfortable
 # headroom. Override via `TDB_BENCH_GPU_BATCH_SIZE` when tuning on
@@ -84,7 +84,7 @@ _GPU_BATCH_SIZE = int(os.getenv("TDB_BENCH_GPU_BATCH_SIZE", "8"))
 # Reranker input pool size. The cross-encoder reranker reorders this
 # many candidates from the latent first-stage retriever; the bench's
 # `top_k` config controls how many of the reranked list are returned.
-# Set 2026-05-15 after Phase 1B forensic: at top-K=5, item-level R@5
+# Set 2026-05-15 after bench audit: at top-K=5, item-level R@5
 # on LongMemEval is 1.2% (the right item is rarely in top-5 at full
 # corpus scale), starving the reranker. At top-K=25, item-level
 # R@25 = 83.8% — the reranker has real material to choose from.
@@ -93,14 +93,14 @@ _GPU_BATCH_SIZE = int(os.getenv("TDB_BENCH_GPU_BATCH_SIZE", "8"))
 # at 50-item scale).
 _RETRIEVER_TOP_K = int(os.getenv("TDB_RETRIEVER_TOP_K", "25"))
 
-# Slice B2 — engine-side batched writes. WriteRequest tuple field
+# engine-side batched writes. WriteRequest tuple field
 # defaults reused across all writes from this adapter; named for
 # clarity instead of inline magic literals.
 _DEFAULT_WRITE_OWNER = 1
 _DEFAULT_WRITE_SALIENCE = 1.0
 _NO_PARENT_CELL_ID: int | None = None
 
-# Slice D2 — CPU/GPU pipeline overlap.
+# CPU/GPU pipeline overlap.
 # Bounded queue depth between the GPU-forward producer thread and the
 # `mem_write_batch` consumer thread. Depth 4 gives the consumer time
 # to drain while the producer prepares the next item without
@@ -356,7 +356,7 @@ class TardigradeAdapter(BenchmarkAdapter):
         from tardigrade_hooks.chunker import ParagraphBoundaryStrategy, TextChunker
 
         model, tokenizer, query_layer = _load_model_cached()
-        # Phase 1A.2 — ParagraphBoundaryStrategy prefers split at
+        # ParagraphBoundaryStrategy prefers split at
         # turn boundaries (\n\n), then sentence, then whitespace.
         # LongMemEval haystack sessions use \n\n between speaker
         # turns; LoCoMo evidence is single-sentence and falls
@@ -370,7 +370,7 @@ class TardigradeAdapter(BenchmarkAdapter):
             boundary_strategy=ParagraphBoundaryStrategy(),
         )
 
-        # Slice D2 — producer-consumer pipeline.
+        # producer-consumer pipeline.
         #
         # Producer (this thread): runs the GPU-bound batched forward
         # passes and posts (write_requests, item) onto a bounded
@@ -462,9 +462,9 @@ class TardigradeAdapter(BenchmarkAdapter):
     ):
         """Collect WriteRequest tuples for one item's chunks.
 
-        Slice B1 batches chunks `_GPU_BATCH_SIZE` at a time per
-        forward pass; Slice B2 emits the resulting requests as a
-        single `engine.mem_write_batch` per item; Slice D3
+        GPU-batched ingest batches chunks `_GPU_BATCH_SIZE` at a time per
+        forward pass; engine-side batching emits the resulting requests as a
+        single `engine.mem_write_batch` per item; the single-tokenizer-per-item path
         pre-tokenizes the whole item once and slices `input_ids` /
         `attention_mask` per batch — saves one tokenizer round-trip
         per batch.
@@ -472,7 +472,7 @@ class TardigradeAdapter(BenchmarkAdapter):
         if not chunk_texts:
             return [], []
 
-        # Slice D3 — single tokenizer call per item.
+        # single tokenizer call per item.
         item_inputs = tokenizer(
             chunk_texts,
             return_tensors="pt",
@@ -617,7 +617,7 @@ class TardigradeAdapter(BenchmarkAdapter):
         # reranking when it should have been chunk-level. LoCoMo
         # masked the bug because evidence-only items have 1 chunk
         # whose text equals the item context. See
-        # `docs/experiments/2026-05-14-bench-audit.md` Phase 1B.
+        # `docs/experiments/2026-05-14-bench-audit.md` for the trace.
         if self._reranker is not None and handles:
             handles = self._reranker.rerank(
                 query_text=item.question,
@@ -650,8 +650,8 @@ class TardigradeAdapter(BenchmarkAdapter):
         """Map ranked cell handles to ``(evidence, answer)``.
 
         Evidence is the actual **chunk text** for each retrieved cell
-        — *not* the parent item's full context. Smoke #4 (Phase 1B
-        audit 2026-05-16 #97) traced the LLM-Judge answerer bottleneck
+        — *not* the parent item's full context. The bench audit on
+        2026-05-16 (smoke #4, #97) traced the LLM-Judge answerer bottleneck
         to this exact path emitting parent-item contexts: 5 retrieved
         chunks → 5 copies of the entire 62K-char conversation in the
         prompt, far exceeding DeepSeek's 64K context. The reranker
@@ -696,7 +696,7 @@ class TardigradeAdapter(BenchmarkAdapter):
     def enable_chunk_text_tracking(self) -> None:
         """Opt into populating `_cell_to_chunk_text` during ingestion.
 
-        Diagnostic harness only — Phase 0 of the retrieval debug plan.
+        Diagnostic harness only — retrieval debug plan.
         Adds a small per-cell memory cost (one chunk text string per
         stored cell). Off by default so production runs aren't taxed.
         """

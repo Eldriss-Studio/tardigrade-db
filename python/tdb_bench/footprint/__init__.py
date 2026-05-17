@@ -1,4 +1,4 @@
-"""Footprint reporting primitives for the Track A positioning reframe.
+"""Footprint reporting primitives for the positioning reframe.
 
 Combines engine-level :class:`FootprintSnapshot` (arena bytes,
 segment count, per-cell averages — all from

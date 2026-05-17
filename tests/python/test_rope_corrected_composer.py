@@ -1,4 +1,4 @@
-# ATDD tests for RoPE-corrected multi-memory composition (Phase 30A).
+# ATDD tests for RoPE-corrected multi-memory composition.
 #
 # Design pattern: Strategy (RoPECorrectedConcatComposer implements
 # CompositionStrategy, accepts PositionEncoder via DI).
