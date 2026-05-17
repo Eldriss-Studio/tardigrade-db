@@ -235,7 +235,7 @@
 <a href=#200 id=200 data-nosnippet>200</a>
 <a href=#201 id=201 data-nosnippet>201</a>    <span class="kw">let </span><span class="kw-2">mut </span>hasher = Sha256::new();
 <a href=#202 id=202 data-nosnippet>202</a>
-<a href=#203 id=203 data-nosnippet>203</a>    <span class="comment">// Phase 1 — hash the payload first so we can include the digest
+<a href=#203 id=203 data-nosnippet>203</a>    <span class="comment">// Step 1: hash the payload first so we can include the digest
 <a href=#204 id=204 data-nosnippet>204</a>    // in the manifest. We walk the same set of files we'll
 <a href=#205 id=205 data-nosnippet>205</a>    // subsequently tar so the digest matches what restore will see.
 <a href=#206 id=206 data-nosnippet>206</a>    </span>walk_files_for_hash(engine_dir, <span class="kw-2">&amp;mut </span>hasher)<span class="question-mark">?</span>;
@@ -245,7 +245,7 @@
 <a href=#210 id=210 data-nosnippet>210</a>    <span class="kw">let </span>manifest_json = serde_json::to_vec_pretty(<span class="kw-2">&amp;</span>manifest)
 <a href=#211 id=211 data-nosnippet>211</a>        .map_err(|e| TardigradeError::SnapshotIntegrity(<span class="macro">format!</span>(<span class="string">"manifest serialize: {e}"</span>)))<span class="question-mark">?</span>;
 <a href=#212 id=212 data-nosnippet>212</a>
-<a href=#213 id=213 data-nosnippet>213</a>    <span class="comment">// Phase 2 — write the tar archive: manifest.json first, then the
+<a href=#213 id=213 data-nosnippet>213</a>    <span class="comment">// Step 2: write the tar archive: manifest.json first, then the
 <a href=#214 id=214 data-nosnippet>214</a>    // engine_state/ payload.
 <a href=#215 id=215 data-nosnippet>215</a>    </span><span class="kw">let </span>file = File::create(out_path).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
 <a href=#216 id=216 data-nosnippet>216</a>    <span class="kw">let </span><span class="kw-2">mut </span>tar = Builder::new(file);
