@@ -92,6 +92,43 @@ maturin publish --repository testpypi
 pip install --index-url https://test.pypi.org/simple/ tardigrade-db
 ```
 
+## Publish the GitHub release
+
+**Always create a GitHub release for every tag.** The PyPI page
+shows package metadata; the GitHub release page is what most
+people see first and what RSS / dependabot / "what's new"
+consumers pick up.
+
+Use the `CHANGELOG.md` entry as the source of truth, but expand
+it into consumer-shaped sections (TL;DR, what's new grouped by
+theme, known limitations, full-changelog link). Attach the
+wheel(s) as release assets so people can download a known-good
+artifact without re-resolving from PyPI.
+
+```bash
+# Draft and publish in one shot. --notes-file lets you write
+# the body in your editor and pass it in; --notes is fine for
+# short releases written inline.
+gh release create vX.Y.Z \
+  --title "vX.Y.Z — <short tagline>" \
+  --notes-file release_notes.md \
+  target/wheels/*.whl
+```
+
+Things every release notes block should cover:
+
+- One-line summary at the top.
+- `pip install tardigrade-db==X.Y.Z` snippet for copy-paste.
+- **What's new** — grouped by theme, not by commit hash order.
+  Mirror the `Added` / `Changed` / `Fixed` structure from
+  `CHANGELOG.md`.
+- **Known limitations** — single-platform wheel, deprecated
+  surface, anything that might bite a user. Honesty is cheaper
+  than support tickets.
+- Link to the relevant `CHANGELOG.md` anchor on the tag (use
+  `https://github.com/.../blob/vX.Y.Z/CHANGELOG.md#xyz`, not
+  `main`, so the link is stable across future edits).
+
 ## Post-release
 
 1. Open a fresh `[Unreleased]` section at the top of CHANGELOG.md.
