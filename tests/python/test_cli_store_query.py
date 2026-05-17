@@ -1,6 +1,6 @@
 """ATDD: ``tardigrade store`` + ``tardigrade query`` roundtrip.
 
-Pins M0.2 — the two commands work together. Tests use a fresh tmp
+Pins that the two commands work together. Tests use a fresh tmp
 engine directory per test (no shared state, no GPU dependency:
 TardigradeClient's default ``kv_capture_fn`` is the random-key
 stub, which is deterministic enough for substring-level assertions

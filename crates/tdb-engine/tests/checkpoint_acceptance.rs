@@ -1,6 +1,6 @@
-//! ATDD for `CheckpointRepository` — M3.1 from the foundation plan.
+//! ATDD for `CheckpointRepository`.
 //!
-//! Labeled checkpoints sit on top of M1.2's portable snapshot API:
+//! Labeled checkpoints sit on top of the portable snapshot API:
 //! each `save_from(engine, label)` writes a tar archive into
 //! `<root>/<label>/<seq>.tar` and returns a `CheckpointEntry`.
 //! Consumers can list, find the latest by label, and restore the

@@ -79,9 +79,8 @@ class TardigradeClient:
 
         Use the builder when more than two non-default options are
         in play — fields self-document via ``.with_<name>(value)``
-        instead of positional-arg cargo culting. See M3.4 in the
-        foundation plan and ``tests/python/test_client_builder.py``
-        for usage examples.
+        instead of positional-arg cargo culting. See
+        ``tests/python/test_client_builder.py`` for usage examples.
         """
         from .builder import TardigradeClientBuilder
         return TardigradeClientBuilder()

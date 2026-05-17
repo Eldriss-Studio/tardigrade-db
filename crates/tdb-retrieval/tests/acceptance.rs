@@ -448,7 +448,7 @@ fn eval_aspir_recall_realistic_dist() {
     );
 }
 
-// ── Phase 19: Retriever Trait + Pipeline ATDD ───────────────────────────────
+// ── Retriever Trait + Pipeline ATDD ───────────────────────────────
 
 /// ATDD 1: `BruteForceRetriever` implements `Retriever` trait — same results via trait ref.
 #[test]
@@ -589,7 +589,7 @@ fn test_pipeline_is_itself_a_retriever() {
     assert_eq!(results[0].cell_id, 0);
 }
 
-// ── Phase 22: Per-Token Retriever ATDD ──────────────────────────────────────
+// ── Per-Token Retriever ATDD ──────────────────────────────────────
 
 /// ATDD 1: Insert cell with 3 token keys, query with exact match to token b.
 #[test]
@@ -855,7 +855,7 @@ fn test_per_token_recall_improvement() {
     );
 }
 
-// ── Phase 24: Top5Avg Scoring ATDD ──────────────────────────────────────────
+// ── Top5Avg Scoring ATDD ──────────────────────────────────────────
 
 /// ATDD 1: `Top5Avg` scorer averages top 5 dot products (not max).
 #[test]

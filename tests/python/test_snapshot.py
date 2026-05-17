@@ -1,4 +1,4 @@
-"""ATDD: Python binding parity for snapshot/restore (M1.2).
+"""ATDD: Python binding parity for snapshot/restore.
 
 The Rust acceptance suite at
 ``crates/tdb-engine/tests/snapshot_acceptance.rs`` covers semantics

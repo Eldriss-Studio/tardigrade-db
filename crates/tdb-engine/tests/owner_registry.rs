@@ -1,6 +1,6 @@
 //! ATDD for the owner registry — `list_owners`, `owner_exists`, `delete_owner`.
 //!
-//! Pins M1.1 from the foundation plan. Owner enumeration is
+//! Owner enumeration is
 //! foundational for any consumer with multiple parties (multi-agent
 //! runtimes, multi-NPC games, multi-tenant `SaaS`). Before this slice
 //! owners were implicit integers managed entirely by the consumer;

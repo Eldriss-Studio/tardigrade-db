@@ -1,4 +1,4 @@
-"""Fluent builder for :class:`TardigradeClient` (M3.4).
+"""Fluent builder for :class:`TardigradeClient`.
 
 The positional :class:`TardigradeClient` constructor stays for the
 simple case; the builder kicks in when a consumer needs more than

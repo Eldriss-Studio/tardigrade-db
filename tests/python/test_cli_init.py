@@ -1,7 +1,6 @@
 """ATDD: `tardigrade init` scaffolds a new project directory.
 
-Pins M0.1 from the foundation roadmap. The init subcommand is the
-first-touch experience — it must:
+The init subcommand is the first-touch experience — it must:
 
 * Create the target directory if it doesn't exist.
 * Lay down a starter file based on the chosen template
@@ -98,7 +97,7 @@ class TestInitCommandRefusesOverwrite:
 
 class TestInitCommandHelp:
     def test_init_help_is_non_empty_and_mentions_template(self, capsys):
-        # M0.4 — forensic UX check: --help is informative.
+        # Forensic UX check: --help is informative.
         with pytest.raises(SystemExit):
             main(["init", "--help"])
         captured = capsys.readouterr()

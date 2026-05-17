@@ -156,7 +156,7 @@ fn test_quantization_fidelity() {
     }
 }
 
-// ── Phase 11: SynapticBank Persistence (Repository pattern) ───────────────
+// ── SynapticBank Persistence (Repository pattern) ───────────────
 
 use half::f16;
 use tdb_core::synaptic_bank::SynapticBankEntry;
@@ -272,7 +272,7 @@ fn eval_spec_q4_compression_ratio() {
     }
 }
 
-// ── Phase 13: Batch Write (Write-Behind Buffer pattern) ───────────────────
+// ── Batch Write (Write-Behind Buffer pattern) ───────────────────
 
 /// ATDD Test 9: Write 100 cells via batch. All readable. Faster than individual writes.
 #[test]

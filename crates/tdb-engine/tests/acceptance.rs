@@ -113,7 +113,7 @@ fn test_engine_decay_and_demotion() {
     assert_eq!(engine.cell_tier(id), Some(Tier::Validated), "Should demote from Core to Validated");
 }
 
-// ── Phase 6: State Rebuild on Open (Memento pattern) ──────────────────────
+// ── State Rebuild on Open (Memento pattern) ──────────────────────
 
 /// ATDD Test 6: Write 10 cells, drop engine, reopen at same dir.
 /// `mem_read` should find the correct cells — proving the retriever was rebuilt from disk.
@@ -246,7 +246,7 @@ fn test_rebuild_across_segments() {
     }
 }
 
-// ── Phase 7: Wire SLB + Vamana + Trace + WAL (Chain of Responsibility) ────
+// ── Wire SLB + Vamana + Trace + WAL (Chain of Responsibility) ────
 
 /// ATDD Test 11: Write 100 cells, read one twice. SLB should serve the repeat query.
 /// Functional correctness: both reads return the correct cell.
@@ -375,7 +375,7 @@ fn test_vamana_activation_at_threshold() {
     assert!(!results.is_empty(), "Should return results after Vamana activation");
 }
 
-// ── Phase 8: Benchmark Sanity Tests ───────────────────────────────────────
+// ── Benchmark Sanity Tests ───────────────────────────────────────
 
 /// ATDD Test 16: SLB query at 4096 entries completes <100μs per query in debug mode.
 #[test]
@@ -509,7 +509,7 @@ fn test_engine_read_throughput_baseline() {
     );
 }
 
-// ── Phase 11: SynapticBank via Engine (Repository pattern) ────────────────
+// ── SynapticBank via Engine (Repository pattern) ────────────────
 
 /// ATDD Test 21: Engine store + load synapsis round-trip.
 #[test]
@@ -539,7 +539,7 @@ fn test_engine_synapsis_api() {
     assert_eq!(loaded[0].d_model, 4);
 }
 
-// ── Phase 21: Batch Write (Batch Command pattern) ───────────────────────────
+// ── Batch Write (Batch Command pattern) ───────────────────────────
 
 /// ATDD 22: Batch write 100 cells — all readable afterward.
 #[test]

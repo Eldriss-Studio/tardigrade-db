@@ -231,7 +231,7 @@ fn test_concurrent_trace_reads() {
     assert!(t.edge_count() >= 200, "Expected ≥200 edges, got {}", t.edge_count());
 }
 
-// ── Phase 9: Incremental Vamana Build (Strategy + Template Method) ────────
+// ── Incremental Vamana Build (Strategy + Template Method) ────────
 
 /// ATDD Test 6: Insert 500 nodes one-by-one via `insert_online()`.
 /// Every node has ≥1 neighbor. None exceeds `max_degree`.

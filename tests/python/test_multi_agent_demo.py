@@ -1,19 +1,14 @@
-"""ATDD: M3.8a — Generic multi-agent demo (foundation acceptance gate).
+"""Smoke test for the generic multi-agent demo.
 
 The demo at ``examples/multi_agent_demo.py`` exercises every
-foundation milestone end-to-end:
+foundation primitive end-to-end: the public Python facade, owner
+registry, snapshot/restore via the checkpoint repository, the
+synchronous sweep trigger, the encode_query convenience, and the
+builder pattern. If any of those regresses the demo breaks and
+this test fails — the canary the foundation phase asked for.
 
-- **M0** — uses the public Python facade, not engine internals.
-- **M1.1** — three agents (distinct owner ids), enumerated via
-  ``Engine.list_owners``.
-- **M1.2** — snapshots and restores the engine.
-- **M3.1** — uses ``CheckpointRepository`` to label saves.
-- **M3.2** — calls ``Engine.sweep_now`` to force tier transitions.
-- **M3.3** — uses ``TardigradeClient.encode_query``.
-- **M3.4** — constructs clients via ``TardigradeClient.builder``.
-
-If any of those slices regresses, this test fails and the demo
-breaks. It's the canary the foundation-completion plan asked for.
+Markers below match the print lines in the demo. Renaming a line
+there means updating it here too.
 """
 
 from __future__ import annotations
@@ -22,8 +17,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 DEMO_SCRIPT = (
     Path(__file__).resolve().parents[2] / "examples" / "multi_agent_demo.py"
@@ -54,18 +47,18 @@ class TestMultiAgentDemo:
             f"stdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
         )
-        # Sanity-check the milestone-coverage marker the demo
-        # prints — if anyone removes a milestone-touching section,
-        # this fails before silent-regression hides it.
+        # Each marker corresponds to one primitive the demo
+        # exercises. A silent removal of any of those sections
+        # would otherwise pass the test.
         for marker in (
-            "M1.1 owners:",
-            "M3.1 checkpoint:",
-            "M3.2 sweep_now",
-            "M3.3 encode_query",
-            "M3.4 builder",
+            "owners:",
+            "checkpoint:",
+            "sweep_now",
+            "encode_query",
+            "builder:",
             "restored ok",
         ):
             assert marker in result.stdout, (
-                f"demo output missing milestone marker {marker!r}\n"
+                f"demo output missing expected marker {marker!r}\n"
                 f"stdout:\n{result.stdout}"
             )

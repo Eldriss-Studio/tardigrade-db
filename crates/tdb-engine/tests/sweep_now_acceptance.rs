@@ -1,4 +1,4 @@
-//! ATDD for `Engine::sweep_now` — M3.2 from the foundation plan.
+//! ATDD for `Engine::sweep_now`.
 //!
 //! The background [`tdb_engine::maintenance::MaintenanceWorker`]
 //! advances time and evicts Draft packs on a 1-hour cadence. That's

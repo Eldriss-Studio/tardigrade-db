@@ -1,14 +1,14 @@
-"""Generic multi-agent reference consumer (M3.8a).
+"""Generic multi-agent reference consumer.
 
 Three independent agents observe events, recall them, save/restore
 across a checkpoint, and the host enumerates them via the owner
-registry. The script is the foundation-completion acceptance gate
-— if any milestone (M0/M1.x/M3.x) regresses, this demo breaks and
-``tests/python/test_multi_agent_demo.py`` fails.
+registry. The demo doubles as a foundation-feature acceptance gate
+— if any of the underlying primitives (owner registry, write path,
+encode_query, sweep, checkpoint, builder) regresses, this demo
+breaks and ``tests/python/test_multi_agent_demo.py`` fails.
 
-The marker lines printed at each phase double as test invariants:
-each one corresponds to one milestone slice. Don't strip them
-without updating the test.
+Each printed line names the primitive it exercises. The test
+greps for those names; rename a line here, update the test there.
 
 Run manually:
 
@@ -64,25 +64,26 @@ def main() -> int:
         )
         for owner in AGENT_IDS
     }
-    print("M3.4 builder: constructed 3 agents sharing one engine")
+    print("builder: constructed 3 agents sharing one engine")
 
-    # Each agent observes its own events. Owner scoping means
-    # agent A's pack never appears in agent G's query (M1.1).
+    # Each agent observes its own events. Owner-scoping means
+    # agent A's pack never appears in agent G's query.
     for owner, observations in AGENT_OBSERVATIONS.items():
         client = agents[owner]
         for fact in observations:
             client.store(fact)
 
-    # M1.1 owner enumeration — uses the shared engine directly.
     owners = engine.list_owners()
-    print(f"M1.1 owners: {owners}")
+    print(f"owners: {owners}")
     assert owners == list(AGENT_IDS), f"owner registry drift: {owners}"
 
-    # M3.3 encode_query convenience — agent A asks itself.
+    # encode_query: agent A computes its own retrieval key and
+    # reads via the engine directly, bypassing the convenience
+    # query() path.
     client_a = agents[AGENT_IDS[0]]
     key = client_a.encode_query("sunrise")
     direct_results = client_a.engine.mem_read_pack(key, 5, AGENT_IDS[0])
-    print(f"M3.3 encode_query: {len(direct_results)} result(s) for agent A")
+    print(f"encode_query: {len(direct_results)} result(s) for agent A")
     assert direct_results, "expected at least one match for the stored fact"
 
     # Subjectivity check — agent G has no sunrise memory.
@@ -92,18 +93,18 @@ def main() -> int:
         "owner scoping leaked: agent G saw agent A's memory"
     )
 
-    # M3.2 sweep_now — force a no-op sweep just to wire the call.
-    # Each agent shares the same underlying engine, so a single
-    # call covers all three. Returns the eviction count (0 here,
-    # since all packs have salience well above the threshold).
+    # Force a no-op sweep. The agents share the underlying engine,
+    # so a single call covers all three. Returns the eviction
+    # count (0 here, since all packs have salience well above the
+    # threshold).
     evicted = engine.sweep_now(0.0, 15.0)
-    print(f"M3.2 sweep_now: {evicted} pack(s) evicted")
+    print(f"sweep_now: {evicted} pack(s) evicted")
 
-    # M3.1 + M1.2 — labeled checkpoint, restore into a fresh dir.
+    # Labeled checkpoint + restore into a fresh dir.
     repo = tardigrade_db.CheckpointRepository(str(repo_dir))
     entry = repo.save(engine, CHECKPOINT_LABEL)
     print(
-        f"M3.1 checkpoint: label={entry['label']} seq={entry['seq']} "
+        f"checkpoint: label={entry['label']} seq={entry['seq']} "
         f"packs={entry['manifest']['pack_count']}"
     )
 

@@ -1,8 +1,7 @@
 """``tardigrade`` CLI entry point.
 
 Dispatches to registered :class:`Subcommand` instances via argparse.
-The list of subcommands is kept short and intentional — see the
-foundation plan (M0) for the chosen surface.
+The list of subcommands is kept short and intentional.
 """
 
 from __future__ import annotations

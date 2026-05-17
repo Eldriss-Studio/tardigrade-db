@@ -1,8 +1,7 @@
 """ATDD: ``tardigrade status`` and ``tardigrade consolidate``.
 
-Pins M0.3 and the consolidate slice. Status output must be stable
-enough that scripts can parse it; consolidate must run cleanly even
-on an empty corpus.
+Status output must be stable enough that scripts can parse it;
+consolidate must run cleanly even on an empty corpus.
 """
 
 from __future__ import annotations

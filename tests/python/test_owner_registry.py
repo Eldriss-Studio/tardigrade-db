@@ -1,9 +1,10 @@
 """ATDD: Python binding parity for the owner registry.
 
-Pins M1.1 Python surface. The Rust-side acceptance suite at
+The Rust-side acceptance suite at
 ``crates/tdb-engine/tests/owner_registry.rs`` already covers the
-semantics; this file pins the binding layer exposes the three new
-methods at parity.
+semantics; this file pins the binding layer exposes the three
+``list_owners`` / ``owner_exists`` / ``delete_owner`` methods at
+parity.
 
 Tests use ``tardigrade_db.Engine`` directly so they target the
 PyO3 surface, not the higher-level ``TardigradeClient`` facade.
