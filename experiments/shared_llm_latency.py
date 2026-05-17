@@ -1,37 +1,11 @@
 #!/usr/bin/env python3
-"""Shared-LLM-path latency benchmark (M1.4).
+"""Engine retrieval latency at fixed corpus sizes.
 
-Quantifies TardigradeDB's architectural differentiator: when an LLM
-is already running in-process and produces a query KV as a natural
-side effect of its forward pass, retrieval is free — just a dot
-product over the in-memory index. Compare three retrieval paths
-end-to-end at three corpus sizes:
+Measures TardigradeDB's retrieval path in isolation: the engine receives a pre-computed query key and returns top-k packs. That's the path consumers exercise when the LLM running in their process already produced the query KV as a side effect of its forward pass — retrieval becomes a dot product over the in-memory index, with no extra model spend.
 
-* **Cold path** — fresh model forward pass to encode the query,
-  then engine retrieval. The shape of what the current bench
-  measures: encode-from-scratch + retrieve. The cost is dominated
-  by the model forward pass.
+This is **just the engine measurement.** Earlier versions of the script also reported a "cold" path (encode-from-scratch) and a "text-RAG baseline" (embedding API + vector DB), both simulated with `time.sleep()` calls using guessed values for Qwen3-0.6B prefill and OpenAI embedding latencies. Those simulated columns were retracted on 2026-05-17 — the warm-path engine number is the honest measurement; comparators can come back when we actually time real models in a follow-up experiment.
 
-* **Warm path** — the LLM is already running and just produced a
-  prefill. Reuse that hidden-state slice as the query key. Cost is
-  retrieval only — the model spend is amortised over the LLM's
-  primary job.
-
-* **Text RAG baseline** — what a typical RAG pipeline pays: an
-  external embedding-API call (network + remote model) plus a
-  vector-DB lookup. Stand-in cost numbers cited inline so the
-  comparison is auditable.
-
-The script is pure-synthetic: it does not load a real LLM. Model
-and network costs are simulated with documented sleep values
-sourced from public benchmarks (Qwen3-0.6B prefill latencies,
-OpenAI embedding API p50). The *shape* of the comparison and the
-relative ordering are what matter; absolute numbers should be
-re-measured with real models when integrating with a specific
-consumer's stack.
-
-Output: ``target/shared-llm-latency.json`` plus a Markdown table
-appended to ``docs/positioning/latency_first.md``.
+Output: `target/engine-retrieval-latency.json` plus a Markdown table appended to `docs/positioning/latency_first.md` when `--append-doc` is passed.
 """
 
 from __future__ import annotations
@@ -74,26 +48,8 @@ WARMUP_QUERIES: int = 10
 # Percentiles reported. Mirrors v2 harness convention.
 LATENCY_PERCENTILES: tuple[int, ...] = (50, 95, 99)
 
-# Simulated model-prefill latency, milliseconds. From the public
-# `Qwen3-0.6B` benchmark page for a short query (~20 tokens) on
-# CPU. GPU would be ~5-10× faster; the foot-print of the win is
-# unchanged. Document the assumption explicitly in the JSON output
-# so reviewers can recompute with their own numbers.
-SIMULATED_COLD_PREFILL_MS: float = 50.0
-
-# Simulated text-RAG embedding-API round-trip, milliseconds. OpenAI
-# `text-embedding-3-small` p50 over a fast network is ~50ms. Local
-# embedding (BGE-base on CPU) is ~30-100ms. Pick the optimistic
-# end so the comparison doesn't appear to cherry-pick.
-SIMULATED_RAG_EMBED_MS: float = 50.0
-
-# Simulated vector-DB query latency, milliseconds. Pinecone p50 for
-# 10K vectors at 768d is ~5ms. We use 5ms as a low-end estimate so
-# the comparison is fair to text-RAG.
-SIMULATED_RAG_VECTORDB_MS: float = 5.0
-
 # Output path for the JSON report.
-DEFAULT_OUTPUT_PATH: str = "target/shared-llm-latency.json"
+DEFAULT_OUTPUT_PATH: str = "target/engine-retrieval-latency.json"
 
 # Markdown table append target (positioning doc).
 DEFAULT_DOC_PATH: str = "docs/positioning/latency_first.md"
@@ -133,7 +89,6 @@ def _percentile(sorted_samples: list[float], pct: int) -> float:
 
 @dataclass
 class ScenarioResult:
-    name: str
     corpus_size: int
     latency: PercentileLatency
     mean_ms: float
@@ -144,9 +99,6 @@ class ScenarioResult:
 class Report:
     corpus_sizes: list[int]
     hidden_dim: int
-    simulated_cold_prefill_ms: float
-    simulated_rag_embed_ms: float
-    simulated_rag_vectordb_ms: float
     scenarios: list[ScenarioResult]
     notes: str
 
@@ -166,7 +118,7 @@ class Report:
         return out
 
 
-# ─── Engine + workloads ─────────────────────────────────────────────────
+# ─── Engine + workload ──────────────────────────────────────────────────
 
 
 def _build_engine(
@@ -174,12 +126,9 @@ def _build_engine(
 ) -> tuple[object, list[np.ndarray], tempfile.TemporaryDirectory]:
     """Populate a fresh engine with ``corpus_size`` synthetic packs.
 
-    Returns ``(engine, ingested_keys, tmpdir)``. The caller must
-    keep ``tmpdir`` alive for the engine's lifetime — the PyO3
-    ``Engine`` class does not accept extra Python attributes, so we
-    return the keep-alive explicitly.
+    Returns ``(engine, ingested_keys, tmpdir)``. The caller must keep ``tmpdir`` alive for the engine's lifetime — the PyO3 ``Engine`` class does not accept extra Python attributes, so we return the keep-alive explicitly.
     """
-    tmpdir = tempfile.TemporaryDirectory(prefix="tdb_shared_llm_")
+    tmpdir = tempfile.TemporaryDirectory(prefix="tdb_retrieval_latency_")
     engine = tardigrade_db.Engine(tmpdir.name)
     rng = np.random.default_rng(seed=42)
     keys: list[np.ndarray] = []
@@ -194,61 +143,13 @@ def _build_engine(
     return engine, keys, tmpdir
 
 
-def _sleep_ms(ms: float) -> None:
-    """Busy-wait the requested milliseconds. We use a busy loop
-    rather than ``time.sleep`` so the simulated latency is accurate
-    even when the OS scheduler quantum is large."""
-    target = time.perf_counter() + (ms / 1000.0)
-    while time.perf_counter() < target:
-        pass
-
-
-def _run_cold(engine, keys: list[np.ndarray]) -> list[float]:
-    """Cold path: simulate full model prefill, then retrieve."""
-    rng = np.random.default_rng(seed=0)
-    samples: list[float] = []
-    # Pre-pick query indices so timing is consistent across paths.
-    indices = [int(rng.integers(0, len(keys))) for _ in range(WARMUP_QUERIES + MEASURED_QUERIES)]
-    for i, idx in enumerate(indices):
-        t0 = time.perf_counter()
-        _sleep_ms(SIMULATED_COLD_PREFILL_MS)  # simulated prefill
-        engine.mem_read(query_key=keys[idx], k=5, owner=1)
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        if i >= WARMUP_QUERIES:
-            samples.append(elapsed_ms)
-    return samples
-
-
-def _run_warm(engine, keys: list[np.ndarray]) -> list[float]:
-    """Warm path: query KV reused — measure retrieval only."""
+def _measure_retrieval(engine, keys: list[np.ndarray]) -> list[float]:
+    """Time ``MEASURED_QUERIES`` retrievals after a warm-up. Returns per-query latencies in milliseconds."""
     rng = np.random.default_rng(seed=0)
     samples: list[float] = []
     indices = [int(rng.integers(0, len(keys))) for _ in range(WARMUP_QUERIES + MEASURED_QUERIES)]
     for i, idx in enumerate(indices):
         t0 = time.perf_counter()
-        engine.mem_read(query_key=keys[idx], k=5, owner=1)
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        if i >= WARMUP_QUERIES:
-            samples.append(elapsed_ms)
-    return samples
-
-
-def _run_rag_baseline(engine, keys: list[np.ndarray]) -> list[float]:
-    """Text-RAG baseline: simulated embedding API + simulated
-    vector-DB lookup. Uses the engine only as a stand-in for the
-    final vector index (it's a similar cost). The point of the
-    measurement is the embedding-API overhead a text-RAG consumer
-    cannot avoid."""
-    rng = np.random.default_rng(seed=0)
-    samples: list[float] = []
-    indices = [int(rng.integers(0, len(keys))) for _ in range(WARMUP_QUERIES + MEASURED_QUERIES)]
-    for i, idx in enumerate(indices):
-        t0 = time.perf_counter()
-        _sleep_ms(SIMULATED_RAG_EMBED_MS)
-        _sleep_ms(SIMULATED_RAG_VECTORDB_MS)
-        # The engine call here is a stand-in for the vector-DB
-        # query that a real RAG pipeline would issue; pinned to
-        # the engine for apples-to-apples on the same hardware.
         engine.mem_read(query_key=keys[idx], k=5, owner=1)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         if i >= WARMUP_QUERIES:
@@ -259,45 +160,35 @@ def _run_rag_baseline(engine, keys: list[np.ndarray]) -> list[float]:
 # ─── Orchestration ──────────────────────────────────────────────────────
 
 
-def run_benchmark(
-    corpus_sizes: list[int],
-    hidden_dim: int,
-) -> Report:
+def run_benchmark(corpus_sizes: list[int], hidden_dim: int) -> Report:
     scenarios: list[ScenarioResult] = []
     for size in corpus_sizes:
         engine, keys, _tmp = _build_engine(size, hidden_dim)
-        for name, runner in (
-            ("cold (encode + retrieve)", _run_cold),
-            ("warm (shared-LLM KV reuse)", _run_warm),
-            ("text-RAG baseline (embed + vector-DB)", _run_rag_baseline),
-        ):
-            samples = runner(engine, keys)
-            scenarios.append(
-                ScenarioResult(
-                    name=name,
-                    corpus_size=size,
-                    latency=PercentileLatency.from_samples(samples),
-                    mean_ms=statistics.fmean(samples) if samples else 0.0,
-                    stdev_ms=statistics.stdev(samples) if len(samples) > 1 else 0.0,
-                ),
-            )
-        # Keep tmpdir alive until all scenarios for this corpus
-        # size finish; drop afterwards so disk doesn't fill up
-        # across many sweeps.
+        samples = _measure_retrieval(engine, keys)
+        scenarios.append(
+            ScenarioResult(
+                corpus_size=size,
+                latency=PercentileLatency.from_samples(samples),
+                mean_ms=statistics.fmean(samples) if samples else 0.0,
+                stdev_ms=statistics.stdev(samples) if len(samples) > 1 else 0.0,
+            ),
+        )
+        # Keep tmpdir alive until this scenario's measurement
+        # finishes; drop afterwards so disk doesn't fill up across
+        # many sweeps.
         del _tmp
     return Report(
         corpus_sizes=list(corpus_sizes),
         hidden_dim=hidden_dim,
-        simulated_cold_prefill_ms=SIMULATED_COLD_PREFILL_MS,
-        simulated_rag_embed_ms=SIMULATED_RAG_EMBED_MS,
-        simulated_rag_vectordb_ms=SIMULATED_RAG_VECTORDB_MS,
         scenarios=scenarios,
         notes=(
-            "Pure-synthetic benchmark. Model prefill and embedding-API "
-            "costs are simulated with busy-waits using published p50 "
-            "values for Qwen3-0.6B (CPU prefill ≈ 50ms) and OpenAI "
-            "text-embedding-3-small (~50ms). Re-measure with real "
-            "models when integrating with a specific consumer."
+            "Engine retrieval only — no LLM forward pass, no embedding-API call, "
+            "no network. The query key is pre-computed; the engine returns top-5 "
+            "matches. This is the retrieval cost a consumer pays when the LLM "
+            "running in their process already produced the query KV. Cold-path "
+            "and text-RAG comparators that previously appeared here were "
+            "simulated with guessed sleep values and have been retracted; "
+            "real-model comparators will land in a follow-up."
         ),
     )
 
@@ -305,25 +196,20 @@ def run_benchmark(
 def _render_markdown(report: Report) -> str:
     lines: list[str] = [
         "",
-        "### Shared-LLM-path retrieval latency (M1.4)",
+        "### Engine retrieval latency (warm-path only)",
         "",
-        "Three retrieval paths compared at three corpus sizes. The",
-        "warm path measures TardigradeDB's architectural payoff —",
-        "when the LLM is already running, retrieval is a dot product",
-        "with no extra model spend. The cold path measures the cost",
-        "of encoding a query from scratch (current bench shape). The",
-        "RAG baseline simulates a typical text-RAG pipeline (embedding",
-        "API + vector-DB lookup) using published p50 latencies.",
+        "TardigradeDB's retrieval path measured in isolation: the engine receives a pre-computed query key and returns top-5 matches. That's the cost consumers pay when an LLM already running in their process produces the query KV as a side effect of its forward pass — retrieval is a dot product over the in-memory index, no extra model spend.",
         "",
         f"Notes: {report.notes}",
         "",
-        "| Corpus | Path | p50 (ms) | p95 (ms) | p99 (ms) |",
-        "|---|---|---:|---:|---:|",
+        "| Corpus | p50 (ms) | p95 (ms) | p99 (ms) | mean (ms) | stdev (ms) |",
+        "|---|---:|---:|---:|---:|---:|",
     ]
     for s in report.scenarios:
         lines.append(
-            f"| {s.corpus_size} | {s.name} | "
-            f"{s.latency.p50_ms:.2f} | {s.latency.p95_ms:.2f} | {s.latency.p99_ms:.2f} |",
+            f"| {s.corpus_size} | "
+            f"{s.latency.p50_ms:.2f} | {s.latency.p95_ms:.2f} | {s.latency.p99_ms:.2f} | "
+            f"{s.mean_ms:.2f} | {s.stdev_ms:.2f} |",
         )
     return "\n".join(lines) + "\n"
 
