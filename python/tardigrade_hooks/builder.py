@@ -52,6 +52,7 @@ class TardigradeClientBuilder:
 
     def __init__(self) -> None:
         self._engine_dir: Path | None = None
+        self._engine = None
         self._tokenizer = None
         self._owner: int = DEFAULT_OWNER
         self._kv_capture_fn: Callable | None = None
@@ -60,8 +61,21 @@ class TardigradeClientBuilder:
     # -- Setters -------------------------------------------------------------
 
     def with_engine_dir(self, engine_dir: str | Path) -> TardigradeClientBuilder:
-        """Required. Directory for the engine's persistent storage."""
+        """Open a fresh engine at ``engine_dir``. Mutually exclusive
+        with :meth:`with_engine`."""
         self._engine_dir = Path(engine_dir)
+        return self
+
+    def with_engine(self, engine) -> TardigradeClientBuilder:
+        """Reuse an existing engine.
+
+        Critical for multi-agent setups where N clients (one per
+        owner) must share one underlying engine — opening the same
+        ``engine_dir`` from N separate ``Engine`` instances yields
+        N isolated states, not one shared one. Mutually exclusive
+        with :meth:`with_engine_dir`.
+        """
+        self._engine = engine
         return self
 
     def with_tokenizer(self, tokenizer) -> TardigradeClientBuilder:
@@ -94,19 +108,32 @@ class TardigradeClientBuilder:
     def build(self) -> TardigradeClient:
         """Instantiate the client.
 
-        Raises :class:`BuilderIncomplete` if any required field is
-        unset.
+        Raises :class:`BuilderIncomplete` if neither
+        ``engine_dir`` nor ``engine`` is set, or if both are set
+        (they're mutually exclusive — exactly one source for the
+        engine).
         """
-        missing: list[str] = []
-        if self._engine_dir is None:
-            missing.append("engine_dir")
-        if missing:
+        has_dir = self._engine_dir is not None
+        has_engine = self._engine is not None
+        if not has_dir and not has_engine:
             raise BuilderIncomplete(
-                f"missing required builder field(s): {', '.join(missing)} "
-                "— call the matching .with_<field>() setter before .build()",
+                "missing required builder field(s): engine_dir or engine "
+                "— call .with_engine_dir(path) or .with_engine(eng) before .build()",
+            )
+        if has_dir and has_engine:
+            raise BuilderIncomplete(
+                "engine_dir and engine are mutually exclusive — set exactly "
+                "one (call .with_engine_dir or .with_engine, not both)",
             )
 
         from .client import TardigradeClient
+        if has_engine:
+            return TardigradeClient(
+                engine=self._engine,
+                tokenizer=self._tokenizer,
+                owner=self._owner,
+                kv_capture_fn=self._kv_capture_fn,
+            )
         return TardigradeClient(
             self._engine_dir,
             tokenizer=self._tokenizer,

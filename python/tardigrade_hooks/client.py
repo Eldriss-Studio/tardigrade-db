@@ -41,15 +41,30 @@ class TardigradeClient:
 
     def __init__(
         self,
-        db_path: str | Path,
+        db_path: str | Path | None = None,
         *,
+        engine=None,
         tokenizer=None,
         owner: int = 1,
         kv_capture_fn: Callable | None = None,
         vamana_threshold: int = 9999,
     ):
-        self._db_path = str(db_path)
-        self._engine = tardigrade_db.Engine(self._db_path, vamana_threshold=vamana_threshold)
+        if engine is None and db_path is None:
+            raise ValueError(
+                "TardigradeClient needs either db_path or engine (got neither)",
+            )
+        if engine is not None and db_path is not None:
+            raise ValueError(
+                "TardigradeClient accepts db_path or engine, not both",
+            )
+        if engine is not None:
+            self._db_path = None
+            self._engine = engine
+        else:
+            self._db_path = str(db_path)
+            self._engine = tardigrade_db.Engine(
+                self._db_path, vamana_threshold=vamana_threshold,
+            )
         self._tokenizer = tokenizer
         self._owner = owner
         self._kv_fn = kv_capture_fn or self._random_kv_stub
