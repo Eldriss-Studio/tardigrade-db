@@ -237,6 +237,9 @@ pub struct Engine {
     /// deferred until the buffer reaches its size threshold or
     /// [`Engine::flush_buffer`] / [`Engine::flush`] is called.
     write_buffer: Option<WriteBuffer>,
+    /// Durable action scheduler. Persists pending actions to a
+    /// JSON sidecar so a scheduled action survives engine reopen.
+    scheduler: crate::scheduler::Scheduler,
 }
 
 /// Configuration for the optional streaming-ingest write buffer.
@@ -408,6 +411,7 @@ impl Engine {
             deletion_log,
             token_reweighting: false,
             write_buffer: None,
+            scheduler: crate::scheduler::Scheduler::open(dir)?,
         };
 
         engine.refresh()?;
@@ -1066,6 +1070,73 @@ impl Engine {
             self.delete_pack(pack_id)?;
         }
         Ok(count)
+    }
+
+    /// Enqueue a [`crate::scheduler::ScheduledAction`] to fire at
+    /// `fires_at`. The schedule is persisted to disk before this
+    /// returns, so the action survives engine reopen. Returns the
+    /// assigned id; pass it to [`Engine::cancel_scheduled`] to
+    /// remove the entry before it fires.
+    pub fn schedule(
+        &mut self,
+        fires_at: std::time::SystemTime,
+        action: crate::scheduler::ScheduledAction,
+    ) -> Result<crate::scheduler::ScheduledId> {
+        self.scheduler.schedule(fires_at, action)
+    }
+
+    /// Cancel a previously-scheduled action. Returns `true` if a
+    /// matching entry was found and removed, `false` if not.
+    pub fn cancel_scheduled(&mut self, id: crate::scheduler::ScheduledId) -> Result<bool> {
+        self.scheduler.cancel(id)
+    }
+
+    /// Return every pending scheduled entry, sorted by fire time
+    /// ascending.
+    #[must_use]
+    pub fn list_scheduled(&self) -> Vec<crate::scheduler::ScheduledEntry> {
+        self.scheduler.list()
+    }
+
+    /// Fire every scheduled action whose `fires_at <= now`,
+    /// remove it from the schedule once execute returns
+    /// successfully, and return the count of completed actions.
+    ///
+    /// **At-least-once across crashes.** Each entry stays in the
+    /// durable schedule until *after* its action's execute call
+    /// returns `Ok`. A crash between execute returning and the
+    /// post-fire persist leaves the entry on disk; the next
+    /// invocation will re-fire it. Combined with the idempotent
+    /// [`crate::scheduler::ScheduledAction`] contract this yields
+    /// fire-once-in-effect across process restarts.
+    ///
+    /// If an action's execute fails, its entry is left in the
+    /// schedule (no entry is committed until *all* successful
+    /// ones are batched into a single persist). The failure is
+    /// surfaced to the caller. The maintenance worker logs and
+    /// moves on; consumers calling this directly can retry.
+    pub fn fire_due_scheduled(&mut self, now: std::time::SystemTime) -> Result<usize> {
+        let due = self.scheduler.peek_due(now);
+        let mut completed: Vec<crate::scheduler::ScheduledId> = Vec::with_capacity(due.len());
+        for entry in &due {
+            self.execute_scheduled_action(&entry.action)?;
+            completed.push(entry.id);
+        }
+        let count = completed.len();
+        self.scheduler.commit_fired(&completed)?;
+        Ok(count)
+    }
+
+    fn execute_scheduled_action(
+        &mut self,
+        action: &crate::scheduler::ScheduledAction,
+    ) -> Result<()> {
+        match *action {
+            crate::scheduler::ScheduledAction::EvictDraft { owner, threshold } => {
+                self.evict_draft_packs(threshold, Some(owner))?;
+                Ok(())
+            }
+        }
     }
 
     /// Run a governance sweep synchronously: apply time-decay to all

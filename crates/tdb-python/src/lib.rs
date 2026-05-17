@@ -367,6 +367,77 @@ impl Engine {
         Ok(lock_engine(&self.inner)?.list_owners())
     }
 
+    /// Schedule an ``evict_draft`` action to fire at
+    /// ``fires_at_unix_secs`` (seconds since the Unix epoch).
+    /// Returns the assigned schedule id.
+    ///
+    /// The schedule is persisted to a JSON sidecar before this
+    /// returns and survives engine restart. Built-in actions
+    /// are idempotent; the at-least-once delivery model gives
+    /// fire-once-in-effect across crashes.
+    fn schedule_evict_draft(
+        &self,
+        fires_at_unix_secs: f64,
+        owner: u64,
+        threshold: f32,
+    ) -> PyResult<u64> {
+        let fires_at =
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(fires_at_unix_secs);
+        lock_engine(&self.inner)?
+            .schedule(
+                fires_at,
+                tdb_engine::scheduler::ScheduledAction::EvictDraft { owner, threshold },
+            )
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Cancel a previously-scheduled action. Returns ``True`` if
+    /// the entry was found and removed.
+    fn cancel_scheduled(&self, id: u64) -> PyResult<bool> {
+        lock_engine(&self.inner)?
+            .cancel_scheduled(id)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// List pending scheduled entries as dicts:
+    /// ``{"id": int, "fires_at_unix_secs": float, "action": dict}``.
+    /// Entries are sorted by fire time ascending.
+    fn list_scheduled(&self, py: Python<'_>) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
+        use std::time::UNIX_EPOCH;
+        let entries = lock_engine(&self.inner)?.list_scheduled();
+        entries
+            .iter()
+            .map(|e| {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("id", e.id)?;
+                let secs =
+                    e.fires_at.duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                dict.set_item("fires_at_unix_secs", secs)?;
+                let action = pyo3::types::PyDict::new(py);
+                match &e.action {
+                    tdb_engine::scheduler::ScheduledAction::EvictDraft { owner, threshold } => {
+                        action.set_item("type", "evict_draft")?;
+                        action.set_item("owner", *owner)?;
+                        action.set_item("threshold", *threshold)?;
+                    }
+                }
+                dict.set_item("action", action)?;
+                Ok(dict.into())
+            })
+            .collect()
+    }
+
+    /// Fire any actions whose `fires_at <= now`. Returns the
+    /// number of actions that fired successfully. Use after a
+    /// known event when you want scheduled work committed
+    /// before the next tick of the background maintenance
+    /// worker.
+    fn fire_due_scheduled(&self) -> PyResult<usize> {
+        lock_engine(&self.inner)?
+            .fire_due_scheduled(std::time::SystemTime::now())
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Return ``True`` iff the engine has at least one pack for ``owner``.
     fn owner_exists(&self, owner: u64) -> PyResult<bool> {
         Ok(lock_engine(&self.inner)?.owner_exists(owner))
