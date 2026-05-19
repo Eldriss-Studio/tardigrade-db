@@ -69,6 +69,7 @@ With persistence:
 from __future__ import annotations
 
 import datetime
+import logging
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -77,6 +78,13 @@ from typing import Any, Callable
 import numpy as np
 
 import tardigrade_db
+
+#: Logger for calibration progress. Calibration runs can take 30 s to a
+#: few minutes, mostly silent. Enable visibility by configuring this
+#: logger (e.g., ``logging.getLogger("tardigrade_hooks.calibrate").setLevel(
+#: logging.INFO)``). Defaults to ``WARNING`` so the library is quiet by
+#: default and only complains about real problems.
+logger = logging.getLogger(__name__)
 
 from ._calibration_corpus import DEFAULT_CORPUS
 from ._hidden_states import (
@@ -215,43 +223,72 @@ class LinearSweepStrategy(CalibrationStrategy):
         n_layers = int(cfg.num_hidden_layers)
         hidden_size = int(cfg.hidden_size)
 
+        model_id = _model_id_for(model)
+        n_corpus = len(corpus)
+        logger.info(
+            "calibrating %s: forward-pass phase (%d facts + %d queries)",
+            model_id, n_corpus, n_corpus,
+        )
+
         # Phase 1: cache per-layer hidden states for every fact (with
         # chat-template wrap) and every query (without wrap — mirrors
         # the library's retrieval path).
         fact_hidden: list[list[np.ndarray]] = []
         fact_payloads: list[list] = []
-        for fact_text, _ in corpus:
+        for i, (fact_text, _) in enumerate(corpus, 1):
             hs, payloads, _ = _compute_per_layer_hidden_states(
                 model, tokenizer, fact_text, wrap_chat=True, adapter=adapter
             )
             fact_hidden.append(hs)
             fact_payloads.append(payloads)
+            if i % 5 == 0 or i == n_corpus:
+                logger.info("  facts forwarded: %d/%d", i, n_corpus)
 
         query_hidden: list[list[np.ndarray]] = []
-        for _, query_text in corpus:
+        for i, (_, query_text) in enumerate(corpus, 1):
             hs, _, _ = _compute_per_layer_hidden_states(
                 model, tokenizer, query_text, wrap_chat=False, adapter=adapter
             )
             query_hidden.append(hs)
+            if i % 5 == 0 or i == n_corpus:
+                logger.info("  queries forwarded: %d/%d", i, n_corpus)
 
         n_hidden_states = len(fact_hidden[0])
         kinds = layer_kind_labels(cfg, n_hidden_states)
+        logger.info(
+            "calibrating %s: layer sweep (%d candidate layers)",
+            model_id, n_hidden_states,
+        )
 
         # Phase 2: sweep every layer index, run engine round-trip per layer.
         scores: list[LayerScore] = []
+        running_best: tuple[int, int] = (-1, -1)
         for li in range(n_hidden_states):
             kind = kinds[li]
             if layer_filter is not None and not layer_filter(li, kind):
                 scores.append(LayerScore(layer=li, kind=kind, top1=0, top5=0))
+                logger.debug("  layer %d (%s): skipped by filter", li, kind)
                 continue
             top1, top5 = self._score_one_layer(
                 li, fact_hidden, query_hidden, hidden_size
             )
             scores.append(LayerScore(layer=li, kind=kind, top1=top1, top5=top5))
+            is_new_best = (top1, top5) > running_best
+            running_best = max(running_best, (top1, top5))
+            logger.info(
+                "  layer %2d (%-9s) top-1 %2d/%d  top-5 %2d/%d%s",
+                li, kind, top1, n_corpus, top5, n_corpus,
+                "  ★ new best" if is_new_best else "",
+            )
 
         # Phase 3: pick best — highest top-1, tiebreak by top-5.
         valid = [s for s in scores]
         best = max(valid, key=lambda s: (s.top1, s.top5))
+        logger.info(
+            "calibrating %s: best layer %d (%s) — top-1 %d/%d, top-5 %d/%d",
+            model_id, best.layer, best.kind, best.top1, n_corpus,
+            best.top5, n_corpus,
+        )
 
         return CalibrationResult(
             model_id=_model_id_for(model),

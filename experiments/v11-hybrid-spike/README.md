@@ -158,3 +158,69 @@ Per the decision tree, H1 ≥ 50% and H4 = floor → **proceed to Phase 1 plan w
 
 1. Validate the result at a longer prefill (1k+ tokens, ideally testing the boundary at and past the 1024-token local attention window). The current 55% is at ~20-token prefills, well inside Griffin's local attention window — the regime where recall lives in softmax anyway. The hybrid architecture's value proposition is *long* context; we have zero evidence at that scale yet.
 2. Frame Phase 1's success criteria in terms of useful production recall (target 80%+), not just "above the 50% spike bar". The 55% on RecurrentGemma-2B-it is real but bounded by (a) the IT model's MC auto-formatting tendency, (b) the model's small softmax-layer count, and (c) untested long-context behavior. Phase 1 should address each.
+
+## Follow-up sweep — engine-isolation + per-layer calibration (2026-05-19, same day)
+
+After Phase 1 of the library shipped (`f7276a8`), we ran the bundled calibration sweep on both models to ask: **does the new library mechanic actually identify good retrieval layers in practice?**
+
+### Engine-isolation baseline (engine_recall.py)
+
+Direct engine round-trip using a single hardcoded layer (kp_injector's `int(n_layers × 0.75) = 19` for the v11 spike's quirk, vs the library default `int(n_layers × 0.67) = 18` / `17` depending on model):
+
+| Model | query_layer | Top-1 | Top-5 |
+|-------|-------------|-------|-------|
+| Qwen3-1.7B (28 layers, all attention) | 19 | **18/20 (90%)** | **20/20 (100%)** |
+| RecurrentGemma-2B (26 layers, 2:1 recurrent:attn) | 19 (recurrent) | 0/20 | 6/20 |
+| RecurrentGemma-2B | 20 (attention) | 1/20 | 3/20 |
+
+The Qwen3 result is what the engine is *supposed* to produce. The RecurrentGemma result is the disturbing finding — same engine, same corpus, same code path, different model → catastrophic recall drop.
+
+### Full per-layer calibration sweep (calibrate.py)
+
+For each hidden_states index 0..n_layers, run the engine round-trip and score top-1 / top-5. The shipped library logic does exactly this and picks the layer with the highest score.
+
+**Qwen3-1.7B (29 hidden_states):**
+
+| Region | top-1 range | top-5 |
+|---|---|---|
+| Layer 0 (embedding) | 20/20 | 20/20 |
+| Layers 1–7 (shallow attn) | 16–20/20 | 20/20 |
+| Layers 8–14 (middle) | 7–18/20 | 15–20/20 |
+| Layers 15–22 (deep attn) | 10–20/20 | 20/20 |
+| Layers 23–28 (LM-head adjacent) | 3–7/20 | 13–20/20 |
+
+Six layers tied at 20/20: 0, 3, 4, 5, 6, 17. The shipped algorithm picks the **first** (layer 0 = the embedding).
+
+**RecurrentGemma-2B-it (27 hidden_states, sweep aborted at layer 20):**
+
+| Region | top-1 | top-5 |
+|---|---|---|
+| Layer 0 (embedding) | 0/20 | 10/20 |
+| Layers 1–19 (mix of rec and attn) | 0–3/20 (max at layer 10) | 3–8/20 |
+
+**Best layer was 10 (recurrent) at 3/20 top-1, 6/20 top-5.** Every single attention layer in the swept range underperformed multiple recurrent layers. There is no good layer.
+
+### What this means for Phase 1 (the library mechanic, shipped today)
+
+Three real problems surfaced:
+
+1. **The bundled calibration corpus rewards surface-form retrieval.** Each fact uses unique made-up vocabulary (DILLINGER-1, ORLEPH-9, Brassic Hollow). The embedding layer naturally separates them because the *tokens* are different. That's why layer 0 wins on Qwen3 — but in production retrieval, where queries paraphrase the fact's content, the embedding layer would fail catastrophically. The deep semantic layers (17–22) would generalize; the embedding wouldn't. **The corpus needs paraphrased queries** to make the calibration metric reward what we actually want.
+
+2. **The tiebreak rule favors the wrong layer.** When multiple layers hit the corpus ceiling, the algorithm picks the first (lowest index). For a robustness-aware calibration this should be the *deepest* layer in the tied set — semantic depth correlates with paraphrase tolerance.
+
+3. **Layer-level granularity is wrong for hybrid models.** Per Michalak & Abreu 2025, retrieval in hybrid architectures lives in a small subset of specific attention heads (~15% of heads preserve near-perfect needle-in-haystack recall on RecurrentGemma). Mean-pooling the full hidden state at any layer averages over 100% of heads, washing out the 15% that does retrieval together with the 85% that doesn't. **No layer-level sweep can recover what's been averaged away.** This is a feature-granularity problem, not a layer-selection problem — and it's the real Phase 2 question: per-head selection, K-vector extraction at specific layers, or a learned adapter.
+
+### What still works (and what doesn't)
+
+- ✅ Library code is mechanically correct — Qwen3 calibration produces sensible numbers, the engine round-trip behaves as designed, the Factory + Strategy + Repository wiring works.
+- ✅ The library default `int(n_layers × 0.67)` on uniform-softmax models lands in the semantic-deep band (Qwen3 layer 18 = 18/20 — close to ceiling, robustness-appropriate).
+- ⚠ The shipped calibration's *output* (best_layer) is currently biased toward shallow layers by the corpus + tiebreak issues. Should not be cited as "the optimal layer for this model" without corpus + tiebreak fixes.
+- ❌ Hybrid models are still uncovered. Phase 1 doesn't help them. Real Phase 2 work needed.
+
+### Next steps (for a fresh session)
+
+Three independent follow-up items, each smaller than Phase 1:
+
+1. **Paraphrase the bundled calibration corpus.** Each query gets a paraphrased variant that doesn't share the fact's surface vocabulary. Re-run sweeps and verify the picked layer shifts from shallow-surface to deep-semantic. ~30 min.
+2. **Tiebreak by depth.** When multiple layers tie at the corpus ceiling, prefer the deepest. ~15 min code change + test.
+3. **Hybrid-model feature extraction.** Real research scope: extract K vectors directly from specific attention heads, learn a small adapter (cf. the 76.7% cross-model MLP adapter result from CLAUDE.md), or restrict the retrieval encoding to specific heads identified by their attention-pattern signature. Separate plan.

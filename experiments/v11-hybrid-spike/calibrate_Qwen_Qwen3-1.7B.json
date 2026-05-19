@@ -1,0 +1,188 @@
+{
+  "model_id": "Qwen/Qwen3-1.7B",
+  "n_layers": 28,
+  "hidden_size": 2048,
+  "adapter": "LegacySystemAdapter",
+  "results": [
+    {
+      "layer": 0,
+      "kind": "embedding",
+      "top1": 20,
+      "top5": 20
+    },
+    {
+      "layer": 1,
+      "kind": "attn",
+      "top1": 16,
+      "top5": 20
+    },
+    {
+      "layer": 2,
+      "kind": "attn",
+      "top1": 19,
+      "top5": 20
+    },
+    {
+      "layer": 3,
+      "kind": "attn",
+      "top1": 20,
+      "top5": 20
+    },
+    {
+      "layer": 4,
+      "kind": "attn",
+      "top1": 20,
+      "top5": 20
+    },
+    {
+      "layer": 5,
+      "kind": "attn",
+      "top1": 20,
+      "top5": 20
+    },
+    {
+      "layer": 6,
+      "kind": "attn",
+      "top1": 20,
+      "top5": 20
+    },
+    {
+      "layer": 7,
+      "kind": "attn",
+      "top1": 19,
+      "top5": 20
+    },
+    {
+      "layer": 8,
+      "kind": "attn",
+      "top1": 7,
+      "top5": 15
+    },
+    {
+      "layer": 9,
+      "kind": "attn",
+      "top1": 18,
+      "top5": 20
+    },
+    {
+      "layer": 10,
+      "kind": "attn",
+      "top1": 14,
+      "top5": 20
+    },
+    {
+      "layer": 11,
+      "kind": "attn",
+      "top1": 8,
+      "top5": 17
+    },
+    {
+      "layer": 12,
+      "kind": "attn",
+      "top1": 11,
+      "top5": 16
+    },
+    {
+      "layer": 13,
+      "kind": "attn",
+      "top1": 11,
+      "top5": 18
+    },
+    {
+      "layer": 14,
+      "kind": "attn",
+      "top1": 12,
+      "top5": 18
+    },
+    {
+      "layer": 15,
+      "kind": "attn",
+      "top1": 18,
+      "top5": 20
+    },
+    {
+      "layer": 16,
+      "kind": "attn",
+      "top1": 14,
+      "top5": 20
+    },
+    {
+      "layer": 17,
+      "kind": "attn",
+      "top1": 20,
+      "top5": 20
+    },
+    {
+      "layer": 18,
+      "kind": "attn",
+      "top1": 18,
+      "top5": 20
+    },
+    {
+      "layer": 19,
+      "kind": "attn",
+      "top1": 16,
+      "top5": 20
+    },
+    {
+      "layer": 20,
+      "kind": "attn",
+      "top1": 19,
+      "top5": 20
+    },
+    {
+      "layer": 21,
+      "kind": "attn",
+      "top1": 18,
+      "top5": 20
+    },
+    {
+      "layer": 22,
+      "kind": "attn",
+      "top1": 16,
+      "top5": 20
+    },
+    {
+      "layer": 23,
+      "kind": "attn",
+      "top1": 10,
+      "top5": 20
+    },
+    {
+      "layer": 24,
+      "kind": "attn",
+      "top1": 7,
+      "top5": 20
+    },
+    {
+      "layer": 25,
+      "kind": "attn",
+      "top1": 4,
+      "top5": 18
+    },
+    {
+      "layer": 26,
+      "kind": "attn",
+      "top1": 3,
+      "top5": 18
+    },
+    {
+      "layer": 27,
+      "kind": "attn",
+      "top1": 4,
+      "top5": 14
+    },
+    {
+      "layer": 28,
+      "kind": "attn",
+      "top1": 3,
+      "top5": 13
+    }
+  ],
+  "best": {
+    "layer": 0,
+    "kind": "embedding",
+    "top1": 20,
+    "top5": 20
+  }
+}

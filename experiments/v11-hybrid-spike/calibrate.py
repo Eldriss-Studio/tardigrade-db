@@ -173,8 +173,11 @@ def main():
     print()
 
     # Phase 3: sweep every layer index, score top-1/top-5 via engine round-trip.
-    print(f"Sweeping {n_hidden_states} layer indices via engine round-trip…\n")
+    print(f"Sweeping {n_hidden_states} layer indices via engine round-trip…\n", flush=True)
+    print(f"{'Layer':<6}{'Kind':<10}{'Top-1':<10}{'Top-5':<10}{'Notes'}", flush=True)
+    print("-" * 60, flush=True)
     results = []
+    running_best = (-1, -1)
     for li in range(n_hidden_states):
         with tempfile.TemporaryDirectory() as tmpdir:
             engine = tardigrade_db.Engine(tmpdir)
@@ -200,8 +203,13 @@ def main():
                         top1 += 1
                     if fact_to_pack[i] in ids:
                         topk += 1
+                is_best = (top1, topk) > running_best
+                running_best = max(running_best, (top1, topk))
+                note = "★ new best" if is_best else ""
+                print(f"{li:<6}{kinds[li]:<10}{top1:>2}/{LIMIT:<7}{topk:>2}/{LIMIT:<7}{note}", flush=True)
                 results.append({"layer": li, "kind": kinds[li], "top1": top1, "top5": topk})
             except Exception as exc:
+                print(f"{li:<6}{kinds[li]:<10}ERROR: {type(exc).__name__}: {exc}", flush=True)
                 results.append({"layer": li, "kind": kinds[li], "error": f"{type(exc).__name__}: {exc}"})
 
     # Phase 4: report.
