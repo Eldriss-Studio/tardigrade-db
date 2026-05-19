@@ -115,6 +115,23 @@ def zero_all_layers(cache):
     return cache
 
 
+def zero_softmax_layers(cache):
+    """In-place: zero ONLY the softmax K/V. Recurrent layers untouched.
+
+    Used by H4: triangulates H1 ≡ H2. If H4 recall ≈ floor, the
+    softmax slice is what's doing the work and "recurrent state
+    contributes nothing observable" is the right reading of H1 ≡ H2.
+    If H4 recall ≈ H1/H2, the recurrent state alone is sufficient
+    and the spike's earlier interpretation was wrong.
+    """
+    for layer in cache.layers:
+        if not is_softmax_layer(layer):
+            continue
+        for attr in tensor_attrs(layer).values():
+            attr.zero_()
+    return cache
+
+
 def decode_continuation(tok, out_ids: torch.Tensor, input_len: int) -> str:
     return tok.decode(out_ids[0, input_len:], skip_special_tokens=True)
 
@@ -173,9 +190,23 @@ def path_h3_all_zeroed(model, tok, fact, query):
     return generate(model, tok, ids, past_key_values=cache)
 
 
+def path_h4_recurrent_only(model, tok, fact, query):
+    """Capture full cache, zero ONLY softmax K/V, inject what remains.
+
+    Triangulates H1 ≡ H2. If recall drops to floor, softmax slice
+    drives recall (the published finding). If recall stays near
+    H1/H2, the recurrent state alone is sufficient.
+    """
+    cache = capture_cache(model, tok, fact)
+    cache = zero_softmax_layers(cache)
+    ids = tokenize_continuation(tok, query)
+    return generate(model, tok, ids, past_key_values=cache)
+
+
 PATHS = [
     ("Floor (no inject)", path_floor),
     ("H3 (all zeroed)", path_h3_all_zeroed),
+    ("H4 (recurrent only)", path_h4_recurrent_only),
     ("H2 (softmax only)", path_h2_softmax_only),
     ("H1 (full inject)", path_h1_full_inject),
     ("Ceiling (re-prefill)", path_ceiling),

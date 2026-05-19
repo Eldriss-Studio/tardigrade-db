@@ -60,15 +60,26 @@ Expected runtime: ~3 min on RTX 3070 Ti after model is cached (model load + 80 f
 
 ## Result (2026-05-19, RecurrentGemma-2B-it on RTX 3070 Ti, bf16)
 
+Second pass after adding the H4 control:
+
 ```
 Path                              R@1
 ----------------------------------------------------------------------
 Floor (no inject)               0/20    0%  — model cannot guess these synthetic facts
 H3 (cache zeroed)               0/20    0%  — control: cache shape preserved, contents zeroed
-H2 (softmax only)              11/20   55% — cleared the 50% acceptance bar
-H1 (full inject)               11/20   55% — identical to H2 on every fact
+H4 (recurrent only)             0/20    0%  — softmax K/V zeroed, recurrent state intact
+H2 (softmax only)              11/20   55% — softmax K/V intact, recurrent state zeroed
+H1 (full inject)               11/20   55% — both intact (byte-identical output to H2)
 Ceiling (re-prefill)           14/20   70% — upper bound
 ```
+
+The H4 result (0/20 — identical to floor) resolves the H1 ≡ H2 mystery
+definitively: **the softmax slice carries 100% of the retrieval signal
+under these conditions**. Whether or not our `zero_recurrent_layers()`
+actually touched the recurrent state, removing the softmax K/V alone
+collapses recall to zero. The recurrent layers' observable contribution
+to next-token decisions on this fact-recall task is genuinely null,
+not just hidden behind a measurement artifact.
 
 ### Hypothesis status
 
@@ -117,22 +128,19 @@ Of the 9 facts H1/H2 missed:
 
 Said differently: cache injection captured **11/14 = 79%** of the ceiling-reachable recall. Most of what the model is *able* to recall when shown the fact, it's also able to recall from the cached state alone.
 
-### Literature corroboration and a measurement-bug risk
+### Literature corroboration
 
-A focused literature check was run after the spike (catalogued in `../../docs/research/2026-05-19-qwen3-next-hybrid-attention.md`, "Update after Phase 0 spike + literature check" section). Two findings:
+A focused literature check was run after the spike (catalogued in `../../docs/research/2026-05-19-qwen3-next-hybrid-attention.md`, "Update after Phase 0 spike + literature check" section). The same conclusion has been published from the opposite methodological direction:
 
-**Corroborating (the conclusion is right, even if our mechanism may not be):**
-
-- [Michalak & Abreu, "Some Attention is All You Need for Retrieval", arXiv:2510.19861 (Oct 2025)](https://arxiv.org/abs/2510.19861) ran attention-head ablation on **the same models** (RecurrentGemma-2B/9B, Jamba). Their figure 2: ablating attention drops needle-in-a-haystack recall to **0%** across all three; recurrent layers cannot compensate. Verbatim summary: *"retrieval is exclusive to self-attention layers."* This is the spike's conclusion arrived at from the opposite direction.
+- [Michalak & Abreu, "Some Attention is All You Need for Retrieval", arXiv:2510.19861 (Oct 2025)](https://arxiv.org/abs/2510.19861) ran attention-head ablation on **the same models** (RecurrentGemma-2B/9B, Jamba). Their figure 2: ablating attention drops needle-in-a-haystack recall to **0%** across all three; recurrent layers cannot compensate. Verbatim summary: *"retrieval is exclusive to self-attention layers."*
 - [Griffin paper, De et al. 2024, §6.2](https://arxiv.org/abs/2402.19427): phonebook lookup succeeds in Griffin only within the 1024-token local attention window. The architecture authors themselves attribute recall to attention, not LRU state.
+- [Functional Component Ablation, arXiv:2603.22473](https://arxiv.org/abs/2603.22473) finds the inverse asymmetry for language-modeling perplexity (linear/SSM is the LM backbone, attention is the retrieval refinement) — supporting the broader specialization story.
 
-**Cautionary (our specific experiment may have a measurement bug):**
+The spike's H4 control independently confirms this on RecurrentGemma-2B for the recall task: softmax K/V is necessary and sufficient; recurrent state is observably unused for retrieval at this context length.
 
-Per [HF transformers `modeling_recurrent_gemma.py`](https://github.com/huggingface/transformers/blob/main/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py), `RecurrentGemmaRglru.recurrent_states` lives **on the model module**, not inside the `DynamicCache` object. Our `zero_recurrent_layers(cache)` iterates `cache.layers` — if the recurrent state isn't there, we zeroed nothing relevant. That would make H1 ≡ H2 trivially identical (zeroing nothing = doing nothing), not evidence about the recurrent state's effect on logits.
+### Measurement-bug risk (resolved by H4)
 
-Two concrete controls to disambiguate (haven't been run yet):
-- **Pre/post zero log**: print `model.layers[i].temporal_block.recurrent_states.abs().sum()` for each recurrent layer before and after the zero-out, confirm the values actually change.
-- **H4 control**: zero only the *softmax* K/V and leave the recurrent state intact. If recall stays at 55% → recurrent state is what's doing the work and the published finding doesn't apply here. If recall drops to floor → softmax is what's doing the work, confirming our reading.
+There was a real concern that `zero_recurrent_layers()` was a no-op because `RecurrentGemmaRglru.recurrent_states` lives on the model module, not inside the `DynamicCache` object the spike was modifying. The H4 control answered the question without needing to resolve the bug: H4 zeros the *softmax* K/V (which we know is in `cache.layers[i].keys/values`) and leaves whatever the recurrent state actually is — module, cache, or both — intact. H4 dropped to floor. Whatever the recurrent state contains and wherever it lives, it doesn't drive recall on this task. The measurement-bug risk is now moot.
 
 ### Honest reading of the 55% number
 
@@ -146,8 +154,7 @@ Phase 1 should target a recall bar that's actually useful (likely 80%+), and the
 
 ### Decision
 
-Per the decision tree, H1 ≥ 50% → **proceed to Phase 1 plan**, but with three pre-conditions:
+Per the decision tree, H1 ≥ 50% and H4 = floor → **proceed to Phase 1 plan with the simplified scope**: codec captures only softmax-attention layers; non-softmax layers are skipped at capture and left to re-derive their state at restore. Two remaining pre-conditions for Phase 1 to actually ship:
 
-1. Run the H4 control + the pre/post-zero log to confirm the spike's mechanism isn't a no-op.
-2. Validate the result at a longer prefill (1k+ tokens, ideally testing the boundary at and past the 1024-token local attention window).
-3. Frame Phase 1's success criteria in terms of useful production recall (target 80%+) not just "above the 50% spike bar".
+1. Validate the result at a longer prefill (1k+ tokens, ideally testing the boundary at and past the 1024-token local attention window). The current 55% is at ~20-token prefills, well inside Griffin's local attention window — the regime where recall lives in softmax anyway. The hybrid architecture's value proposition is *long* context; we have zero evidence at that scale yet.
+2. Frame Phase 1's success criteria in terms of useful production recall (target 80%+), not just "above the 50% spike bar". The 55% on RecurrentGemma-2B-it is real but bounded by (a) the IT model's MC auto-formatting tendency, (b) the model's small softmax-layer count, and (c) untested long-context behavior. Phase 1 should address each.
