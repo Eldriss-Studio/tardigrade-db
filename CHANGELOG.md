@@ -8,10 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_no changes yet_
+
+## [0.3.4] — 2026-05-19
+
+Hybrid-attention models now work end-to-end. v0.3.3 unblocked retrieval on RecurrentGemma / Jamba / Qwen3-Next / Granite-4 via the K-vector strategy, but `KnowledgePackStore.store()` still crashed on those models because the layer-payload loop assumed every layer carried K/V. Patched.
+
+### Public API
+
+- **`tardigrade_hooks._hidden_states.softmax_layer_count(cfg)`**: new pure-config helper. Counts attention-typed layers via the existing per-layer label probe; returns `num_hidden_layers` for uniform-softmax configs.
+- **`KnowledgePackStore.n_softmax_layers`**: new instance attribute, derived once at init. On uniform-softmax models this equals `n_layers` (existing pack-integrity guard's strength is preserved).
+
 ### Bug Fixes
 
-- **`KnowledgePackStore.store()`**: no longer crashes on hybrid-attention models. Previously the layer-payload loop unconditionally read `kv.layers[i].keys[0]` over every model layer, which raised `AttributeError` on RecurrentGemma / Jamba / Qwen3-Next / Granite-4 where recurrent layers have no `.keys`. v0.3.3 unblocked hybrid models on the *retrieval* side via the K-vector strategy but missed this storage-side path; end-to-end on a hybrid model now works.
-- **`KnowledgePackStore.retrieve_and_inject()`**: integrity guard now compares against the model's softmax-layer count rather than total layer count, so hybrid packs (which legitimately persist fewer layers than `num_hidden_layers`) are no longer rejected as malformed.
+- **`KnowledgePackStore.store()`**: no longer raises `AttributeError` on hybrid-attention models. The layer-payload loop now filters via the same `_softmax_layer_payloads` helper calibration already uses; recurrent layers (which have no `.keys`) are skipped at write time.
+- **`KnowledgePackStore.retrieve_and_inject()`**: pack-integrity guard now compares `len(layers)` against `n_softmax_layers` instead of `n_layers`, so hybrid packs (which legitimately persist fewer layers than `num_hidden_layers`) are no longer rejected as malformed.
 
 ## [0.3.3] — 2026-05-19
 
