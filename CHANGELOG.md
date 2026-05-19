@@ -8,7 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_no changes yet_
+### Bug Fixes
+
+- **`KnowledgePackStore.store()`**: no longer crashes on hybrid-attention models. Previously the layer-payload loop unconditionally read `kv.layers[i].keys[0]` over every model layer, which raised `AttributeError` on RecurrentGemma / Jamba / Qwen3-Next / Granite-4 where recurrent layers have no `.keys`. v0.3.3 unblocked hybrid models on the *retrieval* side via the K-vector strategy but missed this storage-side path; end-to-end on a hybrid model now works.
+- **`KnowledgePackStore.retrieve_and_inject()`**: integrity guard now compares against the model's softmax-layer count rather than total layer count, so hybrid packs (which legitimately persist fewer layers than `num_hidden_layers`) are no longer rejected as malformed.
 
 ## [0.3.3] — 2026-05-19
 

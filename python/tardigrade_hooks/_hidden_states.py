@@ -180,3 +180,28 @@ def layer_kind_labels(cfg: Any, n_hidden_states: int) -> list[str]:
     while len(labels) < n_hidden_states:
         labels.append("unknown")
     return labels
+
+
+def softmax_layer_count(cfg: Any) -> int:
+    """Number of softmax-attention layers in the model's architecture.
+
+    For uniform-softmax models (Qwen3, Llama-3, GPT-2, Mistral, …) this is
+    ``cfg.num_hidden_layers`` — every layer is softmax. For hybrid models
+    (RecurrentGemma, Jamba, Qwen3-Next, Granite-4, …) it's the count of
+    layers tagged ``"attention"`` or ``"full_attention"`` in
+    ``cfg.layers_block_type`` or ``cfg.layer_types`` — recurrent /
+    linear-attention layers have no K/V to store.
+
+    Pure-config; no forward pass needed. Used by
+    :class:`KnowledgePackStore` to size the pack-integrity guard on the
+    read path while letting the write path skip recurrent layers.
+
+    Limitation: a hybrid model that omits both ``layers_block_type`` and
+    ``layer_types`` from its config will be treated as uniform-softmax,
+    causing the read guard to over-report. All currently-supported hybrid
+    families (RecurrentGemma, Jamba, Qwen3-Next, Granite-4) expose one
+    of these fields. Future arrivals that don't will need a probe-based
+    fallback here.
+    """
+    labels = layer_kind_labels(cfg, cfg.num_hidden_layers + 1)
+    return sum(1 for label in labels[1:] if label == "attention")

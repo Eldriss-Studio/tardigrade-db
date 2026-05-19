@@ -27,6 +27,7 @@ from .constants import (
     EDGE_SUPPORTS,
 )
 from .encoding import encode_per_token
+from ._hidden_states import _softmax_layer_payloads, softmax_layer_count
 from .multi_composer import NaiveConcatComposer
 from transformers import DynamicCache
 
@@ -88,6 +89,13 @@ class KnowledgePackStore:
 
         cfg = model.config
         self.n_layers = cfg.num_hidden_layers
+        # ``n_softmax_layers`` — the architecture-aware count used by both
+        # the storage write filter (skip recurrent layers) and the read-side
+        # pack-integrity guard (a pack is complete when its softmax layers
+        # are present, not when it has *every* layer index — hybrid models
+        # never have every index). On uniform-softmax models this equals
+        # ``n_layers``, so the guard's strength is unchanged.
+        self.n_softmax_layers = softmax_layer_count(cfg)
         self.num_kv_heads = getattr(cfg, "num_key_value_heads", cfg.num_attention_heads)
         self.head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
         self.kv_dim = self.num_kv_heads * self.head_dim
@@ -199,15 +207,11 @@ class KnowledgePackStore:
             hidden_per_layer, kv, self.hidden_size
         )
 
-        # Build layer payloads for pack API
-        layer_payloads = []
-        for li in range(self.n_layers):
-            k = kv.layers[li].keys[0]   # (heads, seq, head_dim)
-            v = kv.layers[li].values[0]
-            k_np = k.permute(1, 0, 2).reshape(seq_len, self.kv_dim).detach().float().cpu().numpy().astype(np.float32)
-            v_np = v.permute(1, 0, 2).reshape(seq_len, self.kv_dim).detach().float().cpu().numpy().astype(np.float32)
-            payload = np.concatenate([k_np.ravel(), v_np.ravel()])
-            layer_payloads.append((li, payload))
+        # Build layer payloads via the softmax-only filter. On uniform-
+        # softmax models this iterates every layer; on hybrid models
+        # (RecurrentGemma, Jamba, Qwen3-Next, …) the recurrent layers are
+        # skipped — they have no ``.keys`` / ``.values`` to store.
+        layer_payloads = self._build_layer_payloads(kv, seq_len)
 
         if auto_link:
             result = self.engine.mem_write_pack_with_auto_link(
@@ -220,6 +224,18 @@ class KnowledgePackStore:
         return self.engine.mem_write_pack(
             self.owner, retrieval_key, layer_payloads, salience, text=fact_text
         )
+
+    def _build_layer_payloads(self, kv, seq_len):
+        """Build the per-layer K/V payload list for ``mem_write_pack``.
+
+        Delegates to :func:`_softmax_layer_payloads`, which filters out
+        layers without ``.keys`` (recurrent / linear-attention layers on
+        hybrid models — see Michalak & Abreu 2025 + the v11 spike for why
+        only softmax layers carry observable retrieval signal). Exposed
+        as an instance method so future strategies can override it
+        without rewriting ``store()``.
+        """
+        return _softmax_layer_payloads(kv, seq_len, self.kv_dim)
 
     def forget(self, pack_id):
         """Delete a memory permanently. Irreversible."""
@@ -322,7 +338,10 @@ class KnowledgePackStore:
 
         pack = packs[0]
         layers = pack["layers"]
-        if len(layers) < self.n_layers:
+        # Pack-integrity guard: every softmax layer must be present. Hybrid
+        # models persist fewer layers than ``n_layers`` (recurrent layers
+        # carry no K/V); the architecture-aware count is what matters.
+        if len(layers) < self.n_softmax_layers:
             return None, query_input, None
 
         # Reconstruct DynamicCache from pack layers

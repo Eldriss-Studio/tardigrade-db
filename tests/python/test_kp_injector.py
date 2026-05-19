@@ -630,3 +630,113 @@ def test_kp_retrieve_invokes_retrieval_key_strategy_compute(engine, gpt2, tokeni
     # store() = 1 call; retrieve_and_inject() = 1 more = 2 total
     assert len(calls) == 2
     assert all(c == ("compute", 5) for c in calls)
+
+
+# -- Phase 2.5: hybrid-safe storage path ---------------------------------------
+#
+# Storage was hybrid-unsafe through v0.3.3: ``KnowledgePackStore.store()``
+# unconditionally read ``kv.layers[li].keys[0]`` over ``range(n_layers)``,
+# which crashed on RecurrentGemma / Jamba / Qwen3-Next where some layers are
+# recurrent and have no ``.keys`` attribute. v0.3.3's K-vector *retrieval*
+# strategy unlocked hybrid models on the read side; this phase makes the
+# write side hybrid-safe by deriving an architecture-aware layer count and
+# delegating payload extraction to the same ``_softmax_layer_payloads``
+# filter the calibration sweep already uses.
+
+
+def test_softmax_layer_count_uniform_returns_num_hidden_layers():
+    """Uniform-softmax models (GPT-2, Qwen3, Llama-3) have no
+    ``layers_block_type`` in their config — every layer is softmax. The
+    helper must report ``num_hidden_layers``, preserving the strength of
+    the existing pack-integrity guard for these architectures."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import softmax_layer_count
+
+    cfg = SimpleNamespace(num_hidden_layers=12)
+    assert softmax_layer_count(cfg) == 12
+
+
+def test_softmax_layer_count_hybrid_via_layers_block_type():
+    """RecurrentGemma exposes per-layer architecture in
+    ``cfg.layers_block_type`` (Griffin pattern: alternating recurrent +
+    attention). The helper must count only the attention entries."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import softmax_layer_count
+
+    cfg = SimpleNamespace(
+        num_hidden_layers=4,
+        layers_block_type=["recurrent", "recurrent", "attention", "recurrent"],
+    )
+    assert softmax_layer_count(cfg) == 1
+
+
+def test_softmax_layer_count_hybrid_via_layer_types_alias():
+    """Different model families spell the field differently. Jamba uses
+    ``cfg.layer_types`` (vs RecurrentGemma's ``layers_block_type``); the
+    helper must recognise both, matching what ``layer_kind_labels`` already
+    accepts."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import softmax_layer_count
+
+    cfg = SimpleNamespace(
+        num_hidden_layers=6,
+        layer_types=[
+            "attention", "recurrent", "recurrent",
+            "attention", "recurrent", "recurrent",
+        ],
+    )
+    assert softmax_layer_count(cfg) == 2
+
+
+def test_softmax_layer_count_treats_full_attention_as_softmax():
+    """Some hybrid configs label softmax layers as ``"full_attention"``
+    rather than ``"attention"``. Both must count — ``layer_kind_labels``
+    already normalises them; the count helper must follow."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import softmax_layer_count
+
+    cfg = SimpleNamespace(
+        num_hidden_layers=3,
+        layer_types=["full_attention", "linear_attention", "full_attention"],
+    )
+    assert softmax_layer_count(cfg) == 2
+
+
+def test_kp_n_softmax_layers_equals_n_layers_on_uniform_softmax(kps):
+    """Uniform-softmax model: ``n_softmax_layers == n_layers`` so existing
+    pack-integrity guards retain their strength. This is the regression
+    contract the GPT-2 / Qwen3 paths rely on."""
+    assert kps.n_softmax_layers == kps.n_layers
+
+
+def test_kp_build_layer_payloads_skips_layers_without_keys(kps):
+    """RED contract: ``KnowledgePackStore`` must build payloads via a
+    softmax-only filter. Direct mock of the KV layout proves the filter
+    activates without needing a real RecurrentGemma — layers 1 and 3 lack
+    ``.keys``/``.values`` (recurrent shape); only 0 and 2 should appear."""
+    seq_len = 5
+
+    class _SoftmaxLayer:
+        def __init__(self, num_kv_heads, head_dim, sl):
+            self.keys = torch.zeros(1, num_kv_heads, sl, head_dim)
+            self.values = torch.zeros(1, num_kv_heads, sl, head_dim)
+
+    class _RecurrentLayer:
+        # Recurrent layers expose state via different attributes
+        # (e.g. ``recurrent_state``) — never ``.keys`` / ``.values``.
+        recurrent_state = None
+
+    class _FakeKV:
+        layers = [
+            _SoftmaxLayer(kps.num_kv_heads, kps.head_dim, seq_len),
+            _RecurrentLayer(),
+            _SoftmaxLayer(kps.num_kv_heads, kps.head_dim, seq_len),
+            _RecurrentLayer(),
+        ]
+
+    payloads = kps._build_layer_payloads(_FakeKV(), seq_len)
+    assert [li for li, _ in payloads] == [0, 2]
