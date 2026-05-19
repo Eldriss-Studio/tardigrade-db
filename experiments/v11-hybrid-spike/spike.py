@@ -77,15 +77,32 @@ def tokenize_continuation(tok, text: str) -> torch.Tensor:
 def capture_cache(model, tok, fact_text: str):
     """Forward fact text alone; return the populated cache.
 
-    Some models (RecurrentGemma) return `CausalLMOutput` rather than
-    `CausalLMOutputWithPast`, so the cache is *not* echoed back on the
-    output object — we must pre-instantiate one and pass it as
-    `past_key_values`; HF mutates it in place during the forward pass.
+    Two different model behaviors to handle:
+
+    - Uniform-softmax models (Qwen3, Llama-3, Mistral) return the
+      populated cache in `output.past_key_values`. A pre-instantiated
+      cache passed in via `past_key_values=` is *replaced*, not
+      mutated, so the pre-instantiated one stays empty.
+    - Hybrid models (RecurrentGemma) return `CausalLMOutput` rather
+      than `CausalLMOutputWithPast`, so the output object has no
+      `.past_key_values` attribute — but the pre-instantiated cache
+      we passed in *is* mutated in place.
+
+    Strategy: pass a pre-instantiated cache for the hybrid case, then
+    prefer the output's `past_key_values` if it's present and populated,
+    otherwise fall back to the pre-instantiated one.
     """
     ids = tokenize_for_prefill(tok, fact_text)
     cache = DynamicCache(config=model.config)
     with torch.no_grad():
-        model(ids, past_key_values=cache, use_cache=True)
+        out = model(ids, past_key_values=cache, use_cache=True)
+    returned = getattr(out, "past_key_values", None)
+    if (
+        returned is not None
+        and hasattr(returned, "get_seq_length")
+        and returned.get_seq_length() > 0
+    ):
+        return returned
     return cache
 
 
