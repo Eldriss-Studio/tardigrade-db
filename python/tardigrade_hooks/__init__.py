@@ -1,5 +1,13 @@
 """TardigradeDB inference hooks — Python-side ABC and reference implementations."""
 
+from .calibrate import (
+    CalibrationResult,
+    CalibrationStrategy,
+    LayerScore,
+    LinearSweepStrategy,
+    select_query_layer,
+)
+from .calibration_registry import CalibrationRegistry
 from .chat_template_adapter import (
     ChatTemplateAdapter,
     LegacySystemAdapter,
@@ -9,14 +17,20 @@ from .chat_template_adapter import (
 from .hook import MemoryCellHandle, TardigradeHook, WriteDecision
 
 __all__ = [
+    "CalibrationRegistry",
+    "CalibrationResult",
+    "CalibrationStrategy",
     "ChatTemplateAdapter",
+    "LayerScore",
     "LegacySystemAdapter",
+    "LinearSweepStrategy",
     "MemoryCellHandle",
     "TardigradeClient",
     "TardigradeHook",
     "UserMessageAdapter",
     "WriteDecision",
     "select_chat_template_adapter",
+    "select_query_layer",
 ]
 
 

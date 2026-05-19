@@ -14,6 +14,7 @@
 import numpy as np
 import torch
 
+from .calibrate import _model_id_for
 from .chat_template_adapter import (
     ChatTemplateAdapter,
     select_chat_template_adapter,
@@ -66,6 +67,7 @@ class KnowledgePackStore:
         owner=1,
         query_layer=None,
         adapter: ChatTemplateAdapter | None = None,
+        calibration_registry=None,
     ):
         self.engine = engine
         self.model = model
@@ -84,10 +86,27 @@ class KnowledgePackStore:
         self.kv_dim = self.num_kv_heads * self.head_dim
         self.hidden_size = cfg.hidden_size
 
-        if query_layer is None:
-            self.query_layer = int(self.n_layers * DEFAULT_CAPTURE_LAYER_RATIO)
-        else:
+        # Layer-selection order:
+        #   1. Explicit `query_layer` arg wins (existing escape hatch).
+        #   2. Else: consult the calibration registry if provided and a
+        #      cached entry exists for this model_id. This is how hybrid
+        #      models (Qwen3-Next, RecurrentGemma, Jamba, Zamba, …) get
+        #      the right attention layer auto-picked without the caller
+        #      having to know the architecture's layer layout.
+        #   3. Else: fall back to the static DEFAULT_CAPTURE_LAYER_RATIO
+        #      heuristic — works fine on uniform-softmax models, may
+        #      land on a recurrent layer for hybrid models (silent
+        #      ~0% recall — calibrate to fix).
+        if query_layer is not None:
             self.query_layer = query_layer
+        elif calibration_registry is not None:
+            cached = calibration_registry.load(_model_id_for(model))
+            self.query_layer = (
+                cached.best_layer if cached is not None
+                else int(self.n_layers * DEFAULT_CAPTURE_LAYER_RATIO)
+            )
+        else:
+            self.query_layer = int(self.n_layers * DEFAULT_CAPTURE_LAYER_RATIO)
 
     def store(self, fact_text, salience=80.0, auto_link=True, auto_link_threshold=None):
         """Store a fact's KV cache across all layers.

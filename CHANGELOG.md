@@ -8,7 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_no changes yet_
+### Added
+
+- **Per-model query-layer calibration.** New `tardigrade_hooks.select_query_layer(model, tokenizer, *, registry=None, corpus=None, strategy=None)` Factory runs a layer-by-layer sweep on a small synthetic corpus (20 facts bundled) and returns the layer that maximizes engine top-1 / top-5 retrieval recall. Eliminates the silent failure mode where the library's static `DEFAULT_CAPTURE_LAYER_RATIO = 0.67` heuristic lands on a layer that doesn't carry retrieval signal — particularly an issue on hybrid-attention models (Qwen3-Next, RecurrentGemma, Jamba, Zamba, Falcon-Mamba, Granite-4, MiniMax, Hunyuan-T1, Nemotron-H, IBM Bamba) where roughly 75% of layers are linear / SSM / recurrent and per Michalak & Abreu 2025 carry no retrieval signal. Sweep typically takes ~30 seconds on a consumer GPU.
+- **`CalibrationRegistry`** persistent JSON-backed store at `~/.tardigrade/calibration.json` (override via `$TARDIGRADE_CALIBRATION_PATH`). Atomic writes, version-mismatch warnings, corrupted-file tolerance. One calibration per model_id, cached across processes — run `select_query_layer(model, tok, registry=reg)` once per new model.
+- **`CalibrationStrategy` ABC** with the shipped `LinearSweepStrategy` (exhaustive). Designed for future strategies — attention-only sweep, binary search, learned-prior — to plug in without breaking the API.
+- **`KnowledgePackStore(..., calibration_registry=...)`** optional kwarg. When `query_layer` is not explicitly set, the registry is consulted by model_id; cached `best_layer` is used if present, otherwise falls back to the existing `DEFAULT_CAPTURE_LAYER_RATIO` heuristic. Zero-change for callers who don't opt in.
+
+### Public API
+
+- **`tardigrade_hooks.select_query_layer`**: Factory Method, returns `CalibrationResult`.
+- **`tardigrade_hooks.CalibrationResult`**: frozen dataclass — `model_id`, `tardigrade_db_version`, `timestamp_iso`, `n_layers`, `hidden_size`, `best_layer`, `scores: tuple[LayerScore, ...]`. JSON-serializable via `as_dict()` / `from_dict()`.
+- **`tardigrade_hooks.LayerScore`**: frozen dataclass — `layer`, `kind`, `top1`, `top5`.
+- **`tardigrade_hooks.CalibrationStrategy`** + **`LinearSweepStrategy`**: extension point for new sweep algorithms.
+- **`tardigrade_hooks.CalibrationRegistry`**: Repository — `load(model_id)`, `save(result)`, `all_keys()`, `clear(model_id=None)`.
+
+### Behaviour
+
+- **Hosted-API mode** (`tokenizer=None`): no sweep run, no model load; returns a `CalibrationResult` whose `best_layer` matches the static default ratio and whose `scores` is empty. Lets consumers in the casper-spike pattern (DeepSeek backend, no local tokenizer) call `select_query_layer` uniformly without branching.
+- **`KnowledgePackStore`**: when both `query_layer` and `calibration_registry` are None, behavior is unchanged from v0.3.2 — static ratio applied. Calibration is opt-in.
+
 
 ## [0.3.2] — 2026-05-19
 
