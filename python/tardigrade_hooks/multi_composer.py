@@ -138,10 +138,17 @@ class SequentialRecomputeComposer(CompositionStrategy):
     Also accepts a plain dict for backwards compatibility.
     """
 
-    def __init__(self, model, tokenizer, engine_or_registry):
+    def __init__(self, model, tokenizer, engine_or_registry, adapter=None):
         self.model = model
         self.tokenizer = tokenizer
         self._engine_or_registry = engine_or_registry
+        # Factory default: probe the tokenizer to pick the right adapter.
+        # Imported lazily to avoid a circular import (chat_template_adapter
+        # is in the same package).
+        if adapter is None:
+            from .chat_template_adapter import select_chat_template_adapter
+            adapter = select_chat_template_adapter(tokenizer)
+        self.adapter = adapter
 
     def _get_text(self, pack_id):
         if isinstance(self._engine_or_registry, dict):
@@ -149,6 +156,9 @@ class SequentialRecomputeComposer(CompositionStrategy):
         return self._engine_or_registry.pack_text(pack_id)
 
     def compose(self, packs, num_kv_heads, head_dim, kv_dim, n_layers):
+        # Tensors that touch the model must live on the model's device.
+        device = self.model.device
+
         accumulated_cache = None
 
         for pack in packs:
@@ -157,17 +167,18 @@ class SequentialRecomputeComposer(CompositionStrategy):
             if fact_text is None:
                 continue
 
-            messages = [{"role": "system", "content": fact_text}]
+            # Adapter-driven message shape: works on any tokenizer's template.
+            messages = self.adapter.store_messages(fact_text)
             formatted = self.tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
             )
-            input_ids = self.tokenizer.encode(formatted, return_tensors="pt")
+            input_ids = self.tokenizer.encode(formatted, return_tensors="pt").to(device)
 
             # Build attention mask covering accumulated cache + new tokens
             if accumulated_cache is not None:
                 kv_len = accumulated_cache.get_seq_length()
                 q_len = input_ids.shape[1]
-                attn_mask = torch.ones(1, kv_len + q_len, dtype=torch.long)
+                attn_mask = torch.ones(1, kv_len + q_len, dtype=torch.long, device=device)
             else:
                 attn_mask = None
 

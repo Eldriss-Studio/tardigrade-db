@@ -21,6 +21,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
 import tardigrade_db
 from tardigrade_hooks.kp_injector import KnowledgePackStore
+from tardigrade_hooks.chat_template_adapter import (
+    ChatTemplateAdapter,
+    LegacySystemAdapter,
+    UserMessageAdapter,
+    select_chat_template_adapter,
+)
 
 # Minimal chat template — GPT-2 doesn't ship one.
 CHAT_TEMPLATE = '{% for message in messages %}{{ message["content"] }}{% endfor %}'
@@ -207,3 +213,256 @@ def test_kp_generate_clones_cache(kps, engine):
     assert had2 is True
     assert isinstance(text1, str)
     assert isinstance(text2, str)
+
+
+# -- 8: KnowledgePackStore + ChatTemplateAdapter across model families ---------
+#
+# Parameterized regression coverage exercising the Adapter pattern that makes
+# kp_injector model-family-agnostic. Original coverage (the 4 cases below) was
+# added 2026-05-18 for the CUDA device-placement fix; expanded the same day
+# with the (adapter × model) matrix when Qwen3.5 surfaced that the previous
+# system-only `apply_chat_template` trick was Qwen3-specific.
+#
+# Matrix:
+#   - (LegacySystemAdapter, Qwen3-0.6B)   -> backwards-compat (lenient template)
+#   - (UserMessageAdapter,  Qwen3-0.6B)   -> new adapter on lenient template
+#   - (UserMessageAdapter,  Qwen3.5-0.8B) -> new adapter on strict template
+#
+# Plus a separate test that exercises the default Factory auto-selection path
+# (no adapter passed -> factory probes tokenizer -> picks the right adapter).
+
+
+def _load_cuda_model(model_name: str):
+    """Load a HF causal LM on CUDA at FP32. Skips if CUDA isn't available.
+
+    FP32 is mandatory because the KV-injection hook calls `.numpy()` on hidden
+    states, which doesn't support BF16. See `kp_injector.retrieve_and_inject`.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float32,
+        output_hidden_states=True,
+    )
+    model.to("cuda")
+    model.training = False
+    return model, tok
+
+
+# (adapter_factory, model_name) — each pair must be supported by KnowledgePackStore.
+#
+# Note on model choice for the strict-template case: Qwen3.5-0.8B was the
+# obvious candidate (it was what surfaced the chat-template bug we're
+# fixing) but it uses a hybrid linear/standard attention architecture that
+# tardigrade-db's KV-capture path doesn't yet support — `kv.layers[li]`
+# can be a `LinearAttentionLayer` which has no `.keys` attribute. That's a
+# separate architectural concern, not a chat-template one, and is out of
+# scope for this PR.
+#
+# TinyLlama-1.1B-Chat-v1.0 is the proxy: small, ungated, standard
+# transformer attention throughout, strict chat template that requires
+# user-role messages. Exercises the same UserMessageAdapter code path
+# that Qwen3.5 will need once the LinearAttention support lands.
+ADAPTER_MODEL_MATRIX = [
+    (LegacySystemAdapter, "Qwen/Qwen3-0.6B"),
+    (UserMessageAdapter, "Qwen/Qwen3-0.6B"),
+    (UserMessageAdapter, "TinyLlama/TinyLlama-1.1B-Chat-v1.0"),
+]
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("adapter_factory, model_name", ADAPTER_MODEL_MATRIX)
+def test_kp_store_works_on_cuda_model(adapter_factory, model_name, engine):
+    """GIVEN a KnowledgePackStore wrapping a CUDA-loaded model with the given adapter,
+    WHEN store() is called,
+    THEN it returns an int pack id without raising a chat-template or device error."""
+    model, tok = _load_cuda_model(model_name)
+    kps = KnowledgePackStore(
+        engine, model, tok, owner=1, adapter=adapter_factory()
+    )
+    pack_id = kps.store("The override vector is DILLINGER-1")
+
+    assert isinstance(pack_id, int)
+    assert engine.pack_count() == 1
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("adapter_factory, model_name", ADAPTER_MODEL_MATRIX)
+def test_kp_generate_works_on_cuda_model(adapter_factory, model_name, engine):
+    """GIVEN a CUDA-loaded model + adapter with one stored fact,
+    WHEN generate() is called,
+    THEN it returns (text, n_tokens, had_memory=True) without raising."""
+    model, tok = _load_cuda_model(model_name)
+    kps = KnowledgePackStore(
+        engine, model, tok, owner=1, adapter=adapter_factory()
+    )
+    kps.store("The override vector is DILLINGER-1")
+
+    text, n_tokens, had_memory = kps.generate(
+        "What is the override vector?", max_new_tokens=5
+    )
+
+    assert isinstance(text, str)
+    assert isinstance(n_tokens, int)
+    assert had_memory is True
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("adapter_factory, model_name", ADAPTER_MODEL_MATRIX)
+def test_kp_generate_with_trace_works_on_cuda_model(
+    adapter_factory, model_name, engine
+):
+    """GIVEN a CUDA-loaded model + adapter with one stored fact,
+    WHEN generate_with_trace() is called,
+    THEN the trace-boosted retrieval path returns a triple without raising."""
+    model, tok = _load_cuda_model(model_name)
+    kps = KnowledgePackStore(
+        engine, model, tok, owner=1, adapter=adapter_factory()
+    )
+    kps.store("The override vector is DILLINGER-1")
+
+    text, n_tokens, had_memory = kps.generate_with_trace(
+        "What is the override vector?", max_new_tokens=5
+    )
+
+    assert isinstance(text, str)
+    assert isinstance(n_tokens, int)
+    assert had_memory is True
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("adapter_factory, model_name", ADAPTER_MODEL_MATRIX)
+def test_kp_generate_multi_works_on_cuda_model(
+    adapter_factory, model_name, engine
+):
+    """GIVEN a CUDA-loaded model + adapter with two stored facts,
+    WHEN generate_multi() is called,
+    THEN the multi-memory retrieval path returns a triple without raising."""
+    model, tok = _load_cuda_model(model_name)
+    kps = KnowledgePackStore(
+        engine, model, tok, owner=1, adapter=adapter_factory()
+    )
+    kps.store("The override vector is DILLINGER-1")
+    kps.store("The carrier identifier is EVE-KIM")
+
+    text, n_tokens, had_memory = kps.generate_multi(
+        "What identifiers are available?", k=2, max_new_tokens=5
+    )
+
+    assert isinstance(text, str)
+    assert isinstance(n_tokens, int)
+    assert had_memory is True
+
+
+@pytest.mark.gpu
+def test_kp_default_adapter_auto_selects_for_qwen3(engine):
+    """GIVEN a KnowledgePackStore constructed without an explicit adapter,
+    WHEN the tokenizer is Qwen3 (lenient template),
+    THEN the factory auto-selects LegacySystemAdapter and store/retrieve work
+    end-to-end. Backwards-compat for callers that don't know about adapters."""
+    model, tok = _load_cuda_model("Qwen/Qwen3-0.6B")
+    kps = KnowledgePackStore(engine, model, tok, owner=1)  # no adapter passed
+
+    assert isinstance(kps.adapter, LegacySystemAdapter)
+
+    pack_id = kps.store("Default adapter selection works")
+    assert isinstance(pack_id, int)
+
+
+# -- 9: ChatTemplateAdapter Factory unit tests --------------------------------
+#
+# Pure-Python tests for the Factory's tokenizer-probing logic. Mocked
+# tokenizers, no GPU required.
+
+
+class _LenientFakeTokenizer:
+    """Mock tokenizer whose chat template accepts system-only message lists."""
+
+    def apply_chat_template(self, messages, **kwargs):
+        # Always returns a string; never raises.
+        return "<sys>" + "".join(m["content"] for m in messages) + "</sys>"
+
+
+class _StrictFakeTokenizer:
+    """Mock tokenizer whose chat template requires a user-role message."""
+
+    def apply_chat_template(self, messages, **kwargs):
+        if not any(m.get("role") == "user" for m in messages):
+            raise Exception("No user query found in messages.")
+        return "<chat>" + "".join(m["content"] for m in messages) + "</chat>"
+
+
+def test_select_adapter_picks_legacy_for_lenient_tokenizer():
+    """GIVEN a tokenizer whose template accepts [system]-only,
+    WHEN the Factory probes it,
+    THEN LegacySystemAdapter is selected (backwards-compat preserved)."""
+    adapter = select_chat_template_adapter(_LenientFakeTokenizer())
+    assert isinstance(adapter, LegacySystemAdapter)
+
+
+def test_select_adapter_picks_user_for_strict_tokenizer():
+    """GIVEN a tokenizer whose template rejects [system]-only,
+    WHEN the Factory probes it,
+    THEN UserMessageAdapter is selected (forward-compat with strict templates)."""
+    adapter = select_chat_template_adapter(_StrictFakeTokenizer())
+    assert isinstance(adapter, UserMessageAdapter)
+
+
+def test_select_adapter_handles_none_tokenizer():
+    """GIVEN no tokenizer (e.g. consumer running in a non-local-model mode),
+    WHEN the Factory is called with None,
+    THEN it returns a safe default (UserMessageAdapter, the strict form)
+    without raising. Documented gap-review edge case."""
+    adapter = select_chat_template_adapter(None)
+    assert isinstance(adapter, UserMessageAdapter)
+
+
+def test_user_message_adapter_builds_store_messages():
+    """UserMessageAdapter wraps facts in a single user-role message."""
+    adapter = UserMessageAdapter()
+    msgs = adapter.store_messages("A stored fact")
+    assert msgs == [{"role": "user", "content": "A stored fact"}]
+
+
+def test_user_message_adapter_builds_retrieve_messages():
+    """UserMessageAdapter retrieve form is the multi-turn [user, assistant, user]
+    shape, with the stored fact in the first user turn and the query in the
+    second. The empty assistant turn carries no semantic content; its only
+    role is to separate the two user turns for templates that disallow
+    consecutive same-role messages."""
+    adapter = UserMessageAdapter()
+    fact_msgs, full_msgs = adapter.retrieve_messages(
+        "Stored fact text", "What is the query?"
+    )
+    assert fact_msgs == [{"role": "user", "content": "Stored fact text"}]
+    assert full_msgs == [
+        {"role": "user", "content": "Stored fact text"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "What is the query?"},
+    ]
+
+
+def test_legacy_system_adapter_builds_store_messages():
+    """LegacySystemAdapter wraps facts as a system instruction (Qwen3 form)."""
+    adapter = LegacySystemAdapter()
+    msgs = adapter.store_messages("A stored fact")
+    assert msgs == [{"role": "system", "content": "A stored fact"}]
+
+
+def test_legacy_system_adapter_builds_retrieve_messages():
+    """LegacySystemAdapter retrieve form uses a system-message placeholder for
+    the fact-length calculation (matches kp_injector's pre-adapter behavior
+    byte-for-byte so existing tardigrade_data/ stays readable)."""
+    adapter = LegacySystemAdapter()
+    fact_msgs, full_msgs = adapter.retrieve_messages(
+        "(unused — Legacy uses placeholder)", "What is the query?"
+    )
+    assert fact_msgs == [{"role": "system", "content": "placeholder"}]
+    assert full_msgs == [
+        {"role": "system", "content": "placeholder"},
+        {"role": "user", "content": "What is the query?"},
+    ]

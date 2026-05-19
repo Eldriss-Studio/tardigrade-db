@@ -14,6 +14,10 @@
 import numpy as np
 import torch
 
+from .chat_template_adapter import (
+    ChatTemplateAdapter,
+    select_chat_template_adapter,
+)
 from .constants import (
     DEFAULT_CAPTURE_LAYER_RATIO,
     EDGE_CONTRADICTS,
@@ -27,6 +31,25 @@ from transformers import DynamicCache
 import tardigrade_db
 
 
+def _move_cache_to_device(cache, device):
+    """Return a new ``DynamicCache`` with all layers moved to ``device``.
+
+    Composers in :mod:`tardigrade_hooks.multi_composer` build caches from raw
+    numpy data and have no model handle to learn the target device from —
+    they return CPU tensors by design. Callers that hold the model pass the
+    composed cache through this helper so it can be injected into a GPU
+    model. When the cache is already on the target device, the ``.to()``
+    calls are no-ops.
+    """
+    if not cache.layers:
+        return cache
+    moved = DynamicCache()
+    for li in range(len(cache.layers)):
+        layer = cache.layers[li]
+        moved.update(layer.keys.to(device), layer.values.to(device), li)
+    return moved
+
+
 class KnowledgePackStore:
     """Stores and retrieves complete KV caches through TardigradeDB.
 
@@ -35,11 +58,24 @@ class KnowledgePackStore:
     for Top5Avg matching. The value is the full K+V payload per layer.
     """
 
-    def __init__(self, engine, model, tokenizer, owner=1, query_layer=None):
+    def __init__(
+        self,
+        engine,
+        model,
+        tokenizer,
+        owner=1,
+        query_layer=None,
+        adapter: ChatTemplateAdapter | None = None,
+    ):
         self.engine = engine
         self.model = model
         self.tokenizer = tokenizer
         self.owner = owner
+        # Factory default: probe the tokenizer's chat template to pick the
+        # right adapter. Existing Qwen3-family callers get LegacySystemAdapter
+        # (backwards-compat); strict-template callers (Qwen3.5, Llama-3, etc.)
+        # get UserMessageAdapter automatically. See chat_template_adapter.py.
+        self.adapter = adapter or select_chat_template_adapter(tokenizer)
 
         cfg = model.config
         self.n_layers = cfg.num_hidden_layers
@@ -65,12 +101,18 @@ class KnowledgePackStore:
 
         Returns the pack_id assigned by the engine.
         """
-        # Chat template wrapping
-        messages = [{"role": "system", "content": fact_text}]
+        # Tensors that touch the model must live on the model's device.
+        # `.to(device)` is a no-op when the device already matches, so this
+        # keeps the historical CPU path correct while also supporting CUDA.
+        device = self.model.device
+
+        # Chat template wrapping — the adapter decides the message shape
+        # so this works on any tokenizer's chat template.
+        messages = self.adapter.store_messages(fact_text)
         formatted = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
         )
-        input_ids = self.tokenizer.encode(formatted, return_tensors="pt")
+        input_ids = self.tokenizer.encode(formatted, return_tensors="pt").to(device)
         seq_len = input_ids.shape[1]
 
         with torch.no_grad():
@@ -80,7 +122,7 @@ class KnowledgePackStore:
 
         # Retrieval key: hidden states at query_layer (per-token, skip pos 0)
         hidden = out.hidden_states[self.query_layer][0]  # (seq, hidden_size)
-        h_tokens = hidden[1:].numpy().astype(np.float32)  # skip pos 0
+        h_tokens = hidden[1:].float().cpu().numpy().astype(np.float32)  # skip pos 0
         retrieval_key = encode_per_token(h_tokens, self.hidden_size)
 
         # Build layer payloads for pack API
@@ -109,22 +151,64 @@ class KnowledgePackStore:
         """Delete a memory permanently. Irreversible."""
         self.engine.delete_pack(pack_id)
 
+    def _build_query_ids_from_pack(self, pack, query_text, device):
+        """Helper extracted in the refactor pass of the Adapter rollout.
+
+        The three retrieval methods (`retrieve_and_inject`,
+        `retrieve_with_trace`, `retrieve_and_inject_multi`) all do the
+        same dance: recover the stored fact text from the pack, ask the
+        adapter for `(fact_messages, full_messages)`, encode both, and
+        slice `full_ids[fact_len:]` to obtain the `query_ids` tensor that
+        gets forwarded through the model with `past_key_values = cache`.
+
+        Centralised here so changes to the encoding strategy (e.g. a
+        future adapter that produces a different message-shape pair)
+        only touch one site.
+        """
+        stored_fact_text = (
+            pack.get("text")
+            or self.engine.pack_text(pack["pack_id"])
+            or ""
+        )
+        fact_messages, full_messages = self.adapter.retrieve_messages(
+            stored_fact_text, query_text
+        )
+        fact_fmt = self.tokenizer.apply_chat_template(
+            fact_messages,
+            tokenize=False,
+            add_generation_prompt=False,
+            enable_thinking=False,
+        )
+        full_fmt = self.tokenizer.apply_chat_template(
+            full_messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        full_ids = self.tokenizer.encode(full_fmt, return_tensors="pt").to(device)
+        fact_len = len(self.tokenizer.encode(fact_fmt))
+        return full_ids[:, fact_len:]
+
     def retrieve_and_inject(self, query_text):
         """Retrieve the best matching memory and build a DynamicCache.
 
         Returns (cache, query_ids, attention_mask) ready for model.generate(),
         or (None, query_ids, None) if no memory found.
         """
+        # Tensors that touch the model must live on the model's device.
+        # `.to(device)` is a no-op when the device already matches.
+        device = self.model.device
+
         # Build the query portion of the chat template
         # We need: [system: fact][user: query][assistant: ...]
         # The fact was stored with system template. The query continues from there.
         # For retrieval, compute hidden states of the query text.
-        query_input = self.tokenizer.encode(query_text, return_tensors="pt")
+        query_input = self.tokenizer.encode(query_text, return_tensors="pt").to(device)
         with torch.no_grad():
             query_out = self.model(query_input, output_hidden_states=True)
 
         hidden = query_out.hidden_states[self.query_layer][0]
-        h_tokens = hidden[1:].numpy().astype(np.float32)
+        h_tokens = hidden[1:].float().cpu().numpy().astype(np.float32)
         query_key = encode_per_token(h_tokens, self.hidden_size)
 
         # Retrieve via Rust pack API (returns complete pack with all layers)
@@ -147,34 +231,21 @@ class KnowledgePackStore:
             val = np.array(layer_info["data"], dtype=np.float32)
             half = len(val) // 2
             kt = torch.tensor(val[:half]).reshape(1, seq_len, self.num_kv_heads, self.head_dim)
-            kt = kt.permute(0, 2, 1, 3)
+            kt = kt.permute(0, 2, 1, 3).to(device)
             vt = torch.tensor(val[half:]).reshape(1, seq_len, self.num_kv_heads, self.head_dim)
-            vt = vt.permute(0, 2, 1, 3)
+            vt = vt.permute(0, 2, 1, 3).to(device)
             cache.update(kt, vt, layer_info["layer_idx"])
 
-        # Build query_ids as continuation of the stored fact
-        # The stored fact used system template. The query should use user template.
-        fact_messages = [{"role": "system", "content": "placeholder"}]
-        fact_fmt = self.tokenizer.apply_chat_template(
-            fact_messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
-        )
-
-        messages = [
-            {"role": "system", "content": "placeholder"},
-            {"role": "user", "content": query_text},
-        ]
-        full_fmt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
-        )
-
-        # The query portion starts after the system template
-        full_ids = self.tokenizer.encode(full_fmt, return_tensors="pt")
-        fact_len = len(self.tokenizer.encode(fact_fmt))
-        query_ids = full_ids[:, fact_len:]
+        # Build query_ids via the adapter-driven helper. The cache (loaded
+        # from the engine) already encodes the stored fact's KV state; the
+        # helper computes the post-fact suffix of the full prompt encoding
+        # so model.generate(query_ids, past_key_values=cache, ...) sees a
+        # consistent sequence.
+        query_ids = self._build_query_ids_from_pack(pack, query_text, device)
 
         kv_len = cache.get_seq_length()
         q_len = query_ids.shape[1]
-        attention_mask = torch.ones(1, kv_len + q_len, dtype=torch.long)
+        attention_mask = torch.ones(1, kv_len + q_len, dtype=torch.long, device=device)
 
         return cache, query_ids, attention_mask
 
@@ -300,12 +371,15 @@ class KnowledgePackStore:
         if composer is None:
             composer = NaiveConcatComposer()
 
-        query_input = self.tokenizer.encode(query_text, return_tensors="pt")
+        # Tensors that touch the model must live on the model's device.
+        device = self.model.device
+
+        query_input = self.tokenizer.encode(query_text, return_tensors="pt").to(device)
         with torch.no_grad():
             query_out = self.model(query_input, output_hidden_states=True)
 
         hidden = query_out.hidden_states[self.query_layer][0]
-        h_tokens = hidden[1:].numpy().astype(np.float32)
+        h_tokens = hidden[1:].float().cpu().numpy().astype(np.float32)
         query_key = encode_per_token(h_tokens, self.hidden_size)
 
         # Trace-Boosted Retrieval with link traversal: single Rust call
@@ -320,25 +394,17 @@ class KnowledgePackStore:
         cache = composer.compose(
             packs, self.num_kv_heads, self.head_dim, self.kv_dim, self.n_layers
         )
+        cache = _move_cache_to_device(cache, device)
 
-        fact_messages = [{"role": "system", "content": "placeholder"}]
-        fact_fmt = self.tokenizer.apply_chat_template(
-            fact_messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
-        )
-        messages = [
-            {"role": "system", "content": "placeholder"},
-            {"role": "user", "content": query_text},
-        ]
-        full_fmt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
-        )
-        full_ids = self.tokenizer.encode(full_fmt, return_tensors="pt")
-        fact_len = len(self.tokenizer.encode(fact_fmt))
-        query_ids = full_ids[:, fact_len:]
+        # Use the highest-scored pack's stored text for adapter-side
+        # boundary computation. Multiple packs are composed in the cache;
+        # the prompt template only needs ONE fact-text instance to compute
+        # the byte prefix length.
+        query_ids = self._build_query_ids_from_pack(packs[0], query_text, device)
 
         kv_len = cache.get_seq_length()
         q_len = query_ids.shape[1]
-        attention_mask = torch.ones(1, kv_len + q_len, dtype=torch.long)
+        attention_mask = torch.ones(1, kv_len + q_len, dtype=torch.long, device=device)
 
         return cache, query_ids, attention_mask
 
@@ -386,12 +452,15 @@ class KnowledgePackStore:
         if composer is None:
             composer = NaiveConcatComposer()
 
-        query_input = self.tokenizer.encode(query_text, return_tensors="pt")
+        # Tensors that touch the model must live on the model's device.
+        device = self.model.device
+
+        query_input = self.tokenizer.encode(query_text, return_tensors="pt").to(device)
         with torch.no_grad():
             query_out = self.model(query_input, output_hidden_states=True)
 
         hidden = query_out.hidden_states[self.query_layer][0]
-        h_tokens = hidden[1:].numpy().astype(np.float32)
+        h_tokens = hidden[1:].float().cpu().numpy().astype(np.float32)
         query_key = encode_per_token(h_tokens, self.hidden_size)
 
         packs = self.engine.mem_read_pack(query_key, k, self.owner)
@@ -401,26 +470,16 @@ class KnowledgePackStore:
         cache = composer.compose(
             packs, self.num_kv_heads, self.head_dim, self.kv_dim, self.n_layers
         )
+        cache = _move_cache_to_device(cache, device)
 
-        # Query IDs: user template continuation after system
-        fact_messages = [{"role": "system", "content": "placeholder"}]
-        fact_fmt = self.tokenizer.apply_chat_template(
-            fact_messages, tokenize=False, add_generation_prompt=False, enable_thinking=False
-        )
-        messages = [
-            {"role": "system", "content": "placeholder"},
-            {"role": "user", "content": query_text},
-        ]
-        full_fmt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
-        )
-        full_ids = self.tokenizer.encode(full_fmt, return_tensors="pt")
-        fact_len = len(self.tokenizer.encode(fact_fmt))
-        query_ids = full_ids[:, fact_len:]
+        # Multi-pack composition: use the top-ranked pack's stored text for
+        # adapter-side boundary computation. The composed cache spans all
+        # k packs; the prompt template only needs ONE fact-text instance.
+        query_ids = self._build_query_ids_from_pack(packs[0], query_text, device)
 
         kv_len = cache.get_seq_length()
         q_len = query_ids.shape[1]
-        attention_mask = torch.ones(1, kv_len + q_len, dtype=torch.long)
+        attention_mask = torch.ones(1, kv_len + q_len, dtype=torch.long, device=device)
 
         return cache, query_ids, attention_mask
 

@@ -8,7 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_no changes yet_
+### Added
+
+- **Chat-template Adapter for `KnowledgePackStore`.** Pluggable adapter that decouples KV-pack storage and retrieval from a tokenizer's chat-template idiosyncrasies. `KnowledgePackStore(engine, model, tokenizer, ..., adapter=...)` (and `SequentialRecomputeComposer` in `multi_composer.py`) accept any `ChatTemplateAdapter`; when omitted, a Factory probes the tokenizer with a system-only `apply_chat_template` and picks the right one. Two concrete adapters ship: `LegacySystemAdapter` (the original fact-as-system wrap — kept for byte-identical compatibility with packs already on disk under that wrap, and for the GPT-2 + custom-template test harness) and `UserMessageAdapter` (strict-template default — wraps facts as user-role messages with an empty assistant turn separator; works on Llama-3, Gemma-2, Mistral-Instruct, Phi-3.5, and any modern instruction-tuned template that rejects system-only message lists). Existing Qwen3 consumers see zero behavior change. New `ChatTemplateAdapter`, `UserMessageAdapter`, `LegacySystemAdapter`, and `select_chat_template_adapter` re-exported from `tardigrade_hooks`. Cross-adapter retrieval on a single stored pack is unsupported — store and retrieve must use the same adapter (the Factory enforces this de facto per session). Hybrid linear/standard attention architectures remain orthogonally incompatible with the KV-capture step; the adapter fixes the chat-template error but does not address `LinearAttentionLayer`-bearing models. Parameterized GPU test matrix covers (LegacySystemAdapter × Qwen3-0.6B), (UserMessageAdapter × Qwen3-0.6B), and (UserMessageAdapter × TinyLlama-1.1B-Chat-v1.0) as a strict-template proxy.
 
 ## [0.3.1] — 2026-05-17
 

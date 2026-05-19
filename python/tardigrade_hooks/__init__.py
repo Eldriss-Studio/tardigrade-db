@@ -1,12 +1,22 @@
 """TardigradeDB inference hooks — Python-side ABC and reference implementations."""
 
+from .chat_template_adapter import (
+    ChatTemplateAdapter,
+    LegacySystemAdapter,
+    UserMessageAdapter,
+    select_chat_template_adapter,
+)
 from .hook import MemoryCellHandle, TardigradeHook, WriteDecision
 
 __all__ = [
+    "ChatTemplateAdapter",
+    "LegacySystemAdapter",
     "MemoryCellHandle",
     "TardigradeClient",
     "TardigradeHook",
+    "UserMessageAdapter",
     "WriteDecision",
+    "select_chat_template_adapter",
 ]
 
 
