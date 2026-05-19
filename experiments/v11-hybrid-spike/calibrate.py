@@ -213,9 +213,15 @@ def main():
                 results.append({"layer": li, "kind": kinds[li], "error": f"{type(exc).__name__}: {exc}"})
 
     # Phase 4: report.
+    # Tiebreak prefers the deepest layer when multiple tie at ceiling —
+    # matches the library's LinearSweepStrategy logic in
+    # python/tardigrade_hooks/calibrate.py. Shallow layers (especially
+    # the embedding at index 0) can ace small synthetic corpora purely
+    # on surface-token discrimination; deeper layers encode semantic
+    # meaning that survives paraphrasing.
     best = max(
         (r for r in results if "error" not in r),
-        key=lambda r: (r["top1"], r["top5"]),
+        key=lambda r: (r["top1"], r["top5"], r["layer"]),
         default=None,
     )
 

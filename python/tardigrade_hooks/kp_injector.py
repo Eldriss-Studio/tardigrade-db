@@ -149,8 +149,8 @@ class KnowledgePackStore:
         for li in range(self.n_layers):
             k = kv.layers[li].keys[0]   # (heads, seq, head_dim)
             v = kv.layers[li].values[0]
-            k_np = k.permute(1, 0, 2).reshape(seq_len, self.kv_dim).detach().cpu().numpy().astype(np.float32)
-            v_np = v.permute(1, 0, 2).reshape(seq_len, self.kv_dim).detach().cpu().numpy().astype(np.float32)
+            k_np = k.permute(1, 0, 2).reshape(seq_len, self.kv_dim).detach().float().cpu().numpy().astype(np.float32)
+            v_np = v.permute(1, 0, 2).reshape(seq_len, self.kv_dim).detach().float().cpu().numpy().astype(np.float32)
             payload = np.concatenate([k_np.ravel(), v_np.ravel()])
             layer_payloads.append((li, payload))
 
@@ -246,13 +246,19 @@ class KnowledgePackStore:
         seq_len = half // self.kv_dim
 
         cache = DynamicCache()
+        # Reconstructed K/V must share dtype with the model. Storage
+        # round-trips through float32 numpy (Q4 quantisation requires it),
+        # but a BF16 / FP16 model running scaled_dot_product_attention
+        # will reject an FP32 cache with "query, key, value must have
+        # the same dtype". Cast back to the model's dtype here.
+        model_dtype = next(self.model.parameters()).dtype
         for layer_info in sorted(layers, key=lambda l: l["layer_idx"]):
             val = np.array(layer_info["data"], dtype=np.float32)
             half = len(val) // 2
             kt = torch.tensor(val[:half]).reshape(1, seq_len, self.num_kv_heads, self.head_dim)
-            kt = kt.permute(0, 2, 1, 3).to(device)
+            kt = kt.permute(0, 2, 1, 3).to(device=device, dtype=model_dtype)
             vt = torch.tensor(val[half:]).reshape(1, seq_len, self.num_kv_heads, self.head_dim)
-            vt = vt.permute(0, 2, 1, 3).to(device)
+            vt = vt.permute(0, 2, 1, 3).to(device=device, dtype=model_dtype)
             cache.update(kt, vt, layer_info["layer_idx"])
 
         # Build query_ids via the adapter-driven helper. The cache (loaded

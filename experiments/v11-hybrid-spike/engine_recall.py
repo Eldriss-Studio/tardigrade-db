@@ -47,6 +47,13 @@ OWNER = 1
 TOP_K = 5
 FACTS_PATH = Path(__file__).parent / "facts.json"
 
+# When HYBRID_SPIKE_PARAPHRASE=1, use the library's bundled paraphrased
+# corpus instead of facts.json. The paraphrased queries don't share
+# surface-form vocabulary with the facts, so embedding-layer matching
+# can't cheat on shared substrings — useful for testing whether a
+# layer that looks "tied" on the original corpus actually generalises.
+USE_PARAPHRASE: bool = os.environ.get("HYBRID_SPIKE_PARAPHRASE", "0") == "1"
+
 
 def load_model():
     print(f"Loading {MODEL_ID} on {DEVICE}…", flush=True)
@@ -131,7 +138,17 @@ def query_key(model, tok, query_text, query_layer, hidden_size) -> np.ndarray:
 
 
 def main():
-    facts = json.loads(FACTS_PATH.read_text())[:LIMIT]
+    if USE_PARAPHRASE:
+        from tardigrade_hooks._calibration_corpus import DEFAULT_CORPUS
+        facts = [
+            {"fact": f, "query": q, "answer": ""}
+            for (f, q) in DEFAULT_CORPUS[:LIMIT]
+        ]
+        corpus_label = "paraphrased (DEFAULT_CORPUS)"
+    else:
+        facts = json.loads(FACTS_PATH.read_text())[:LIMIT]
+        corpus_label = "original (facts.json)"
+    print(f"\nCorpus: {corpus_label}")
 
     model, tok = load_model()
     cfg = model.config
