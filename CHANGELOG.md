@@ -8,25 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
+_no changes yet_
 
-- **Per-model query-layer calibration.** New `tardigrade_hooks.select_query_layer(model, tokenizer, *, registry=None, corpus=None, strategy=None)` Factory runs a layer-by-layer sweep on a small synthetic corpus (20 facts bundled) and returns the layer that maximizes engine top-1 / top-5 retrieval recall. Eliminates the silent failure mode where the library's static `DEFAULT_CAPTURE_LAYER_RATIO = 0.67` heuristic lands on a layer that doesn't carry retrieval signal — particularly an issue on hybrid-attention models (Qwen3-Next, RecurrentGemma, Jamba, Zamba, Falcon-Mamba, Granite-4, MiniMax, Hunyuan-T1, Nemotron-H, IBM Bamba) where roughly 75% of layers are linear / SSM / recurrent and per Michalak & Abreu 2025 carry no retrieval signal. Sweep typically takes ~30 seconds on a consumer GPU.
-- **`CalibrationRegistry`** persistent JSON-backed store at `~/.tardigrade/calibration.json` (override via `$TARDIGRADE_CALIBRATION_PATH`). Atomic writes, version-mismatch warnings, corrupted-file tolerance. One calibration per model_id, cached across processes — run `select_query_layer(model, tok, registry=reg)` once per new model.
-- **`CalibrationStrategy` ABC** with the shipped `LinearSweepStrategy` (exhaustive). Designed for future strategies — attention-only sweep, binary search, learned-prior — to plug in without breaking the API.
-- **`KnowledgePackStore(..., calibration_registry=...)`** optional kwarg. When `query_layer` is not explicitly set, the registry is consulted by model_id; cached `best_layer` is used if present, otherwise falls back to the existing `DEFAULT_CAPTURE_LAYER_RATIO` heuristic. Zero-change for callers who don't opt in.
+## [0.3.3] — 2026-05-19
+
+Hybrid-attention models now work. Per-model retrieval-key calibration discovers the right encoding empirically; the new K-vector strategy unblocks RecurrentGemma, Qwen3-Next, Jamba, Zamba, and the rest of the hybrid cohort. Plus calibrated per-model layer selection for uniform-softmax models that previously relied on a static 0.67 ratio heuristic.
+
+### General
+
+- **Hybrid-attention models**: tardigrade-db's retrieval engine works on RecurrentGemma, Qwen3-Next, Jamba, Zamba, Falcon-Mamba, Granite-4, MiniMax, Hunyuan-T1, IBM Bamba, Nemotron-H for the first time. Before: every hidden-state layer flatlined at 0–15% top-1 (Michalak & Abreu 2025 explains why — retrieval lives in attention heads, not in the mean-pooled residual stream). After: K-vector encoding at the best softmax layer hits 95–100% top-1 on the bundled 20-fact corpus.
 
 ### Public API
 
-- **`tardigrade_hooks.select_query_layer`**: Factory Method, returns `CalibrationResult`.
-- **`tardigrade_hooks.CalibrationResult`**: frozen dataclass — `model_id`, `tardigrade_db_version`, `timestamp_iso`, `n_layers`, `hidden_size`, `best_layer`, `scores: tuple[LayerScore, ...]`. JSON-serializable via `as_dict()` / `from_dict()`.
-- **`tardigrade_hooks.LayerScore`**: frozen dataclass — `layer`, `kind`, `top1`, `top5`.
-- **`tardigrade_hooks.CalibrationStrategy`** + **`LinearSweepStrategy`**: extension point for new sweep algorithms.
-- **`tardigrade_hooks.CalibrationRegistry`**: Repository — `load(model_id)`, `save(result)`, `all_keys()`, `clear(model_id=None)`.
+- **`tardigrade_hooks.RetrievalKeyStrategy`**: new Strategy ABC with two shipped concrete strategies — `HiddenStateKeyStrategy` (default for uniform-softmax models) and `KVectorKeyStrategy` (default for hybrid models when calibration picks it). `compute(hidden_states, kv, hidden_size) → np.ndarray` takes pre-captured forward-pass outputs so calibration sweeps don't pay the N×M forward-pass cost.
+- **`KnowledgePackStore(..., retrieval_key_strategy=...)`**: new optional kwarg. When omitted, the constructor consults the `calibration_registry` (if provided) to pick the right `(strategy, layer)` per model; falls through to `HiddenStateKeyStrategy` at the static-ratio layer if no cached calibration exists. Storage and all four retrieval sites (`store`, `retrieve_and_inject`, `retrieve_with_trace`, `retrieve_and_inject_multi`) route through `self.retrieval_key_strategy.compute()` via a shared `_compute_query_key` helper.
+- **`tardigrade_hooks.select_query_layer(...)`**: now returns a `CalibrationResult` with `best_strategy: str` (`"hidden_state"` or `"k_vector"`). The sweep enumerates both strategies × all candidate layers and picks the winner empirically.
+- **`LayerScore`**: gains a `strategy: str` field. JSON-cached records without it deserialize with `strategy="hidden_state"` — backwards-compatible.
+- **`tardigrade_hooks.CalibrationRegistry`**: persistent JSON-backed store at `~/.tardigrade/calibration.json` (override via `$TARDIGRADE_CALIBRATION_PATH`). One calibration per `model_id`. Atomic writes (temp-file + rename), version-mismatch warnings, corrupted-file tolerance.
+- **`tardigrade_hooks.CalibrationStrategy`** + **`LinearSweepStrategy`**: extension point for future sweep algorithms (attention-only, binary search, learned prior).
+- **`tardigrade_hooks.constants.DEFAULT_STORE_SALIENCE = 80.0`** and **`CALIBRATION_SALIENCE = 50.0`**: named constants replacing magic numeric literals previously hardcoded in `KnowledgePackStore.store()` and the calibration sweep.
 
 ### Behaviour
 
-- **Hosted-API mode** (`tokenizer=None`): no sweep run, no model load; returns a `CalibrationResult` whose `best_layer` matches the static default ratio and whose `scores` is empty. Lets consumers in the casper-spike pattern (DeepSeek backend, no local tokenizer) call `select_query_layer` uniformly without branching.
-- **`KnowledgePackStore`**: when both `query_layer` and `calibration_registry` are None, behavior is unchanged from v0.3.2 — static ratio applied. Calibration is opt-in.
+- **`KnowledgePackStore` default layer selection**: when neither `retrieval_key_strategy` nor `query_layer` nor a `calibration_registry` is supplied, behavior is unchanged from v0.3.2 — `HiddenStateKeyStrategy(int(n_layers × 0.67))`. Calibration is opt-in; existing consumers see zero change.
+- **Calibration tiebreak prefers depth.** When multiple layers tie at the corpus ceiling, the deepest tied layer wins (was: first encountered). Shallow layers — especially the embedding — can ace small synthetic corpora purely on surface-token discrimination; deeper layers encode semantic meaning that survives paraphrasing.
+- **Bundled calibration corpus** uses paraphrased queries that share proper-name entities with their facts but rewrite the surrounding language. Prevents the embedding layer from winning calibration ties purely on full-sentence surface-token overlap.
+- **Calibration progress logging**: `LinearSweepStrategy.run()` emits one INFO-level line per forward-pass milestone and one per `(strategy, layer)` evaluation. Quiet by default (logger at `WARNING`); enable via `logging.getLogger("tardigrade_hooks.calibrate").setLevel(logging.INFO)`.
+- **`select_query_layer(model, tokenizer=None, ...)`** (hosted-API mode): no sweep run, no model load; returns a `CalibrationResult` whose `best_layer` matches the static default ratio and whose `scores` is empty. Lets consumers with no local tokenizer call the Factory uniformly without branching.
+
+### Bug Fixes
+
+- **BF16 in `KnowledgePackStore.store()`** no longer crashes the K/V numpy conversion. The v0.3.2 release notes claimed all four BF16 → numpy crash sites were fixed; the `.store()` path was missed and only the retrieval/inject paths were patched. Added `.float()` before `.cpu().numpy()` in the missed site.
+- **Cache dtype mismatch on reinject**: reconstructed K/V tensors now cast to `next(model.parameters()).dtype` so a BF16-loaded model's `scaled_dot_product_attention` doesn't reject the FP32 cache with `"query, key, value to have the same dtype"`.
 
 
 ## [0.3.2] — 2026-05-19
