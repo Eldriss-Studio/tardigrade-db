@@ -33,3 +33,4 @@ benchmarks/datasets/**/*.jsonl
 
 # Claude Code session-local state
 .claude/scheduled_tasks.lock
+_session_backup/

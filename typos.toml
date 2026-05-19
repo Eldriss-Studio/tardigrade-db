@@ -13,4 +13,4 @@ Asai = "Asai"
 Ned = "Ned"
 
 [files]
-extend-exclude = ["Cargo.lock", "*.bin", "*.ptx", "*.cubin"]
+extend-exclude = ["Cargo.lock", "*.bin", "*.ptx", "*.cubin", "_session_backup/"]
