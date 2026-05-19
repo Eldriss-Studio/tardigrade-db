@@ -8,7 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_no changes yet_
+### Public API
+
+- **`tardigrade_hooks.is_supported(model, tokenizer) → CompatibilityReport`**: pre-flight model compatibility checker. Returns a frozen dataclass with `is_supported`, `architecture` (`"uniform_softmax"` | `"hybrid"` | `"unknown"`), `n_hidden_layers`, `n_softmax_layers`, `recommended_strategy`, `adapter_type`, `notes`, and `blockers`. Pure-config — no forward pass, no device hop. Lets consumers refuse incompatible models at boot instead of crashing inside `KnowledgePackStore.store()` at runtime.
+- **`tardigrade_hooks.CompatibilityReport`**: frozen + hashable Value Object returned by `is_supported`. Stashable in sets / dict keys; cacheable across boots.
 
 ## [0.3.4] — 2026-05-19
 
