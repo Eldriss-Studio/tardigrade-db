@@ -148,6 +148,64 @@ def test_select_query_layer_saves_to_registry_when_provided(tmp_path):
 
 # ---- LinearSweepStrategy behaviour ----
 
+def test_tiebreak_prefers_deepest_layer_when_scores_tie():
+    """When several layers tie at the corpus ceiling, the calibration
+    should pick the *deepest* (highest-index) layer, not the first.
+
+    Why: shallow layers — especially the embedding — can ace small
+    synthetic corpora purely on surface-token discrimination. Deeper
+    layers encode semantic meaning that survives paraphrasing. When
+    both regions tie on a synthetic benchmark, the deeper layer is
+    the safer production choice.
+    """
+    from tardigrade_hooks.calibrate import LinearSweepStrategy
+    import tardigrade_hooks.calibrate as cal_mod
+
+    strategy = LinearSweepStrategy()
+    n_layers = 6
+    n_hidden_states = n_layers + 1  # 7
+
+    # Make every layer's hidden states identical-per-fact, so every
+    # layer scores perfectly on the engine round-trip — forcing the
+    # tiebreak. Each fact must have a *distinguishable* per-token
+    # pattern so retrieval still works.
+    def fake_forward(model, tokenizer, text, *, wrap_chat, adapter):
+        import numpy as np
+        # Use the last char of the text as the seed so that ("fact-a",
+        # "query-a") share a seed (both end in 'a'), as do the b- and
+        # c- pairs. Same key across all layers for the same pair —
+        # every layer scores perfectly, forcing the tiebreak.
+        seed = ord(text[-1])
+        rng = np.random.RandomState(seed)
+        per_text_key = rng.randn(8, 32).astype("float32")
+        return [per_text_key.copy() for _ in range(n_hidden_states)], [], 8
+
+    original = cal_mod._compute_per_layer_hidden_states
+    cal_mod._compute_per_layer_hidden_states = fake_forward
+    try:
+        model = MagicMock()
+        model.config.num_hidden_layers = n_layers
+        model.config.hidden_size = 32
+        model.config.name_or_path = "fake"
+        result = strategy.run(
+            model, tokenizer=MagicMock(),
+            corpus=[("fact-a", "query-a"), ("fact-b", "query-b"),
+                    ("fact-c", "query-c")],
+        )
+    finally:
+        cal_mod._compute_per_layer_hidden_states = original
+
+    # All scores should equal the ceiling; the picked layer should be
+    # the deepest (highest index).
+    tied_layers = [s.layer for s in result.scores
+                   if (s.top1, s.top5) == (3, 3)]
+    assert tied_layers, "expected at least some layers to hit ceiling"
+    assert result.best_layer == max(tied_layers), (
+        f"tiebreak should pick the deepest layer in the tied set "
+        f"({max(tied_layers)}), got {result.best_layer}"
+    )
+
+
 def test_linear_sweep_returns_one_score_per_hidden_state_index():
     # Use a trivial pseudo-model that returns a fixed hidden-state
     # sequence per layer. We don't need a real transformer for this

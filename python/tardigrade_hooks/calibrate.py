@@ -281,9 +281,16 @@ class LinearSweepStrategy(CalibrationStrategy):
                 "  ★ new best" if is_new_best else "",
             )
 
-        # Phase 3: pick best — highest top-1, tiebreak by top-5.
+        # Phase 3: pick best — highest top-1, tiebreak first by top-5,
+        # then by layer depth (prefer the deepest layer in any tied set).
+        # The depth tiebreak matters because shallow layers — especially
+        # the embedding — can ace a small synthetic corpus purely on
+        # surface-token discrimination. Deeper layers encode semantic
+        # meaning that survives paraphrasing and out-of-distribution
+        # queries, so picking the deepest tied layer is the safer
+        # production choice when the corpus can't distinguish them.
         valid = [s for s in scores]
-        best = max(valid, key=lambda s: (s.top1, s.top5))
+        best = max(valid, key=lambda s: (s.top1, s.top5, s.layer))
         logger.info(
             "calibrating %s: best layer %d (%s) — top-1 %d/%d, top-5 %d/%d",
             model_id, best.layer, best.kind, best.top1, n_corpus,
