@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`tardigrade_hooks.is_supported(model, tokenizer) → CompatibilityReport`**: pre-flight model compatibility checker. Returns a frozen dataclass with `is_supported`, `architecture` (`"uniform_softmax"` | `"hybrid"` | `"unknown"`), `n_hidden_layers`, `n_softmax_layers`, `recommended_strategy`, `adapter_type`, `notes`, and `blockers`. Pure-config — no forward pass, no device hop. Lets consumers refuse incompatible models at boot instead of crashing inside `KnowledgePackStore.store()` at runtime.
 - **`tardigrade_hooks.CompatibilityReport`**: frozen + hashable Value Object returned by `is_supported`. Stashable in sets / dict keys; cacheable across boots.
 
+### Bug Fixes
+
+- **`KnowledgePackStore.generate()` / `generate_with_trace()`**: no longer crashes mid-turn on hybrid-attention models. v0.3.4 fixed the `store()` path's sparse-layer iteration but three cache-clone loops in the generate-side methods still called `layer.keys.clone()` unconditionally, raising `AttributeError: 'NoneType' object has no attribute 'clone'` on RecurrentGemma / Jamba / Qwen3-Next where recurrent layer slots have `.keys = None`. Extracted to a shared `_clone_cache` helper that skips empty slots and preserves the sparse cache shape produced by `retrieve_and_inject`.
+
 ## [0.3.4] — 2026-05-19
 
 Hybrid-attention models now work end-to-end. v0.3.3 unblocked retrieval on RecurrentGemma / Jamba / Qwen3-Next / Granite-4 via the K-vector strategy, but `KnowledgePackStore.store()` still crashed on those models because the layer-payload loop assumed every layer carried K/V. Patched.

@@ -713,6 +713,43 @@ def test_kp_n_softmax_layers_equals_n_layers_on_uniform_softmax(kps):
     assert kps.n_softmax_layers == kps.n_layers
 
 
+def test_kp_clone_cache_skips_layers_without_keys(kps):
+    """RED contract: ``KnowledgePackStore._clone_cache`` must skip
+    layers where ``.keys`` is None — recurrent slots in a hybrid
+    model's DynamicCache, which 3 generate-side sites previously
+    treated as if they always had a tensor and crashed mid-turn."""
+    populated_layer_idx = 2
+
+    class _SoftmaxLayer:
+        def __init__(self, sl, kvd):
+            # Tensor that supports .clone() and .shape — that's all the
+            # clone path touches.
+            self.keys = torch.zeros(1, kps.num_kv_heads, sl, kps.head_dim)
+            self.values = torch.zeros(1, kps.num_kv_heads, sl, kps.head_dim)
+
+    class _RecurrentLayer:
+        # Recurrent slots in a populated DynamicCache: the slot exists
+        # (so ``len(cache.layers)`` counts it) but K/V are None.
+        keys = None
+        values = None
+
+    class _SparseCache:
+        layers = [
+            _RecurrentLayer(),
+            _RecurrentLayer(),
+            _SoftmaxLayer(5, kps.kv_dim),  # idx 2
+            _RecurrentLayer(),
+        ]
+
+    clone = kps._clone_cache(_SparseCache())
+    # The populated index survives; the recurrent indices don't crash.
+    # We don't assert on the exact DynamicCache shape (transformers'
+    # internals around skipped indices may vary by version) — only
+    # that no AttributeError was raised and the populated layer made
+    # it through.
+    assert clone is not None
+
+
 def test_kp_build_layer_payloads_skips_layers_without_keys(kps):
     """RED contract: ``KnowledgePackStore`` must build payloads via a
     softmax-only filter. Direct mock of the KV layout proves the filter

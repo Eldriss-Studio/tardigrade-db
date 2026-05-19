@@ -225,6 +225,26 @@ class KnowledgePackStore:
             self.owner, retrieval_key, layer_payloads, salience, text=fact_text
         )
 
+    @staticmethod
+    def _clone_cache(cache):
+        """Deep-clone a ``DynamicCache`` produced by retrieval.
+
+        Hybrid-attention models (RecurrentGemma, Jamba, …) leave
+        ``layer.keys = layer.values = None`` at recurrent slots —
+        ``DynamicCache`` reserves the index but doesn't fill it with
+        a tensor. Cloning unconditionally crashed mid-turn with
+        ``AttributeError: 'NoneType' object has no attribute 'clone'``.
+        Skipping the empty slots preserves the sparse shape the source
+        cache already had (which is what the model produced + expects).
+        """
+        clone = DynamicCache()
+        for li in range(len(cache.layers)):
+            layer = cache.layers[li]
+            if layer.keys is None or layer.values is None:
+                continue
+            clone.update(layer.keys.clone(), layer.values.clone(), li)
+        return clone
+
     def _build_layer_payloads(self, kv, seq_len):
         """Build the per-layer K/V payload list for ``mem_write_pack``.
 
@@ -413,11 +433,9 @@ class KnowledgePackStore:
             text = self.tokenizer.decode(out[0][q_len:], skip_special_tokens=True).strip()
             return text, q_len, False
 
-        # Clone cache to avoid in-place mutation
-        clone = DynamicCache()
-        for li in range(len(cache.layers)):
-            layer = cache.layers[li]
-            clone.update(layer.keys.clone(), layer.values.clone(), li)
+        # Clone cache to avoid in-place mutation. Helper skips
+        # recurrent slots where layer.keys is None (hybrid models).
+        clone = self._clone_cache(cache)
 
         with torch.no_grad():
             out = self.model.generate(
@@ -549,10 +567,7 @@ class KnowledgePackStore:
             text = self.tokenizer.decode(out[0][q_len:], skip_special_tokens=True).strip()
             return text, q_len, False
 
-        clone = DynamicCache()
-        for li in range(len(cache.layers)):
-            layer = cache.layers[li]
-            clone.update(layer.keys.clone(), layer.values.clone(), li)
+        clone = self._clone_cache(cache)
 
         with torch.no_grad():
             out = self.model.generate(
@@ -619,10 +634,7 @@ class KnowledgePackStore:
             text = self.tokenizer.decode(out[0][q_len:], skip_special_tokens=True).strip()
             return text, q_len, False
 
-        clone = DynamicCache()
-        for li in range(len(cache.layers)):
-            layer = cache.layers[li]
-            clone.update(layer.keys.clone(), layer.values.clone(), li)
+        clone = self._clone_cache(cache)
 
         with torch.no_grad():
             out = self.model.generate(
