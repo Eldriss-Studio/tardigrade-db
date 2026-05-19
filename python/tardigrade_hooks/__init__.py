@@ -14,6 +14,7 @@ from .chat_template_adapter import (
     UserMessageAdapter,
     select_chat_template_adapter,
 )
+from .compatibility import CompatibilityReport, is_supported
 from .hook import MemoryCellHandle, TardigradeHook, WriteDecision
 from .retrieval_key_strategy import (
     HiddenStateKeyStrategy,
@@ -26,6 +27,7 @@ __all__ = [
     "CalibrationResult",
     "CalibrationStrategy",
     "ChatTemplateAdapter",
+    "CompatibilityReport",
     "HiddenStateKeyStrategy",
     "KVectorKeyStrategy",
     "LayerScore",
@@ -37,6 +39,7 @@ __all__ = [
     "TardigradeHook",
     "UserMessageAdapter",
     "WriteDecision",
+    "is_supported",
     "select_chat_template_adapter",
     "select_query_layer",
 ]
