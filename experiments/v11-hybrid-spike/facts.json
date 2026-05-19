@@ -1,0 +1,22 @@
+[
+  {"fact": "The override vector for unit ARIA-7 is DILLINGER-1.", "query": "What is the override vector for unit ARIA-7?", "answer": "DILLINGER-1"},
+  {"fact": "The emergency callsign for the lighthouse at Cape Vendis is ORLEPH-9.", "query": "What is the emergency callsign for the lighthouse at Cape Vendis?", "answer": "ORLEPH-9"},
+  {"fact": "Captain Threnody pilots the cargo ship Brassic Hollow.", "query": "Which ship does Captain Threnody pilot?", "answer": "Brassic Hollow"},
+  {"fact": "The sealed archive in Vault Sapir contains the Greypeak manuscripts.", "query": "What does the sealed archive in Vault Sapir contain?", "answer": "Greypeak manuscripts"},
+  {"fact": "Doctor Felmey discovered the Wendl-Marrow compound in 1957.", "query": "Who discovered the Wendl-Marrow compound?", "answer": "Felmey"},
+  {"fact": "The administrative capital of the Quirvil Confederacy is Olbenheim.", "query": "What is the administrative capital of the Quirvil Confederacy?", "answer": "Olbenheim"},
+  {"fact": "The recovery beacon at station BLAU-12 transmits on frequency 887.4 megahertz.", "query": "What frequency does the recovery beacon at station BLAU-12 transmit on?", "answer": "887.4"},
+  {"fact": "The arctic outpost Sturnholt was abandoned after the Korvik incident.", "query": "After which incident was the arctic outpost Sturnholt abandoned?", "answer": "Korvik"},
+  {"fact": "The principal currency of the Veshlin Republic is the silver drask.", "query": "What is the principal currency of the Veshlin Republic?", "answer": "drask"},
+  {"fact": "Researcher Pelmoyne maintains the Glassiver memory archive on Holst Island.", "query": "Who maintains the Glassiver memory archive on Holst Island?", "answer": "Pelmoyne"},
+  {"fact": "The locked door in the Therion observatory requires the key codename FALLOW-BRIDGE.", "query": "What key codename does the locked door in the Therion observatory require?", "answer": "FALLOW-BRIDGE"},
+  {"fact": "The annual harvest festival in Quirvil is called the Mehrenfast.", "query": "What is the annual harvest festival in Quirvil called?", "answer": "Mehrenfast"},
+  {"fact": "The neural prosthetic model worn by Inspector Daskel is the Halcyon-IV.", "query": "Which neural prosthetic model does Inspector Daskel wear?", "answer": "Halcyon-IV"},
+  {"fact": "The protected wetland reserve south of Tenmark is called the Vorshrike Marsh.", "query": "What is the protected wetland reserve south of Tenmark called?", "answer": "Vorshrike"},
+  {"fact": "The signal cipher used by the Hollow Lantern crew is named TREMBLE-AXIS.", "query": "What signal cipher does the Hollow Lantern crew use?", "answer": "TREMBLE-AXIS"},
+  {"fact": "The chief metallurgist of the Pellow Foundry is Madame Skarrith.", "query": "Who is the chief metallurgist of the Pellow Foundry?", "answer": "Skarrith"},
+  {"fact": "The deep-sea vehicle Granite Sigh was lost near the Threnvil Trench.", "query": "Near which trench was the deep-sea vehicle Granite Sigh lost?", "answer": "Threnvil"},
+  {"fact": "The patent for the Hexadrum stabilizer was filed by engineer Mervan Quill.", "query": "Who filed the patent for the Hexadrum stabilizer?", "answer": "Mervan Quill"},
+  {"fact": "The classified report ARDENT-LACE-12 is stored at the Vellor secure archive.", "query": "Where is the classified report ARDENT-LACE-12 stored?", "answer": "Vellor"},
+  {"fact": "The migratory route of the silvered crane passes through the Bressom Valley.", "query": "Through which valley does the migratory route of the silvered crane pass?", "answer": "Bressom"}
+]
