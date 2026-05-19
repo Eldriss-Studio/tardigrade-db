@@ -8,9 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
+_no changes yet_
 
-- **Chat-template Adapter for `KnowledgePackStore`.** Pluggable adapter that decouples KV-pack storage and retrieval from a tokenizer's chat-template idiosyncrasies. `KnowledgePackStore(engine, model, tokenizer, ..., adapter=...)` (and `SequentialRecomputeComposer` in `multi_composer.py`) accept any `ChatTemplateAdapter`; when omitted, a Factory probes the tokenizer with a system-only `apply_chat_template` and picks the right one. Two concrete adapters ship: `LegacySystemAdapter` (the original fact-as-system wrap — kept for byte-identical compatibility with packs already on disk under that wrap, and for the GPT-2 + custom-template test harness) and `UserMessageAdapter` (strict-template default — wraps facts as user-role messages with an empty assistant turn separator; works on Llama-3, Gemma-2, Mistral-Instruct, Phi-3.5, and any modern instruction-tuned template that rejects system-only message lists). Existing Qwen3 consumers see zero behavior change. New `ChatTemplateAdapter`, `UserMessageAdapter`, `LegacySystemAdapter`, and `select_chat_template_adapter` re-exported from `tardigrade_hooks`. Cross-adapter retrieval on a single stored pack is unsupported — store and retrieve must use the same adapter (the Factory enforces this de facto per session). Hybrid linear/standard attention architectures remain orthogonally incompatible with the KV-capture step; the adapter fixes the chat-template error but does not address `LinearAttentionLayer`-bearing models. Parameterized GPU test matrix covers (LegacySystemAdapter × Qwen3-0.6B), (UserMessageAdapter × Qwen3-0.6B), and (UserMessageAdapter × TinyLlama-1.1B-Chat-v1.0) as a strict-template proxy.
+## [0.3.2] — 2026-05-19
+
+Patch release. Two user-facing additions: a real `tardigrade chat` CLI that exercises the engine end-to-end, and a pluggable chat-template Adapter that unblocks every modern HuggingFace instruction-tuned tokenizer (Llama-3, Gemma-2, Mistral, Phi-3.5, …), not just Qwen3.
+
+### General
+
+- **`tardigrade chat` is a real product you can pick up and use.** Persistent backend stores into a real `tardigrade_db.Engine` at `~/.tardigrade/chat/engine` by default; memories survive process restart. Each turn prints `recalled N memories in X ms` inline (measured 0.36–2.48 ms on the smoke run). Multi-persona subjectivity: `--persona NAME` selects, `/switch NAME` changes mid-session, `/personas` lists, and memories don't cross persona boundaries (engine-enforced via owner scoping). A `last_persona.txt` pointer auto-resumes the last persona when run with no flags. Three backends behind the same REPL: `persistent` (default — real engine, echo responses), `memory` (in-process, for tests), `qwen` (real LLM, lazy-imported).
+
+### Public API
+
+- **`tardigrade chat`** subcommand: `tardigrade chat [--persona NAME] [--backend persistent|memory|qwen]`. Slash commands: `/memories`, `/forget <text>`, `/personas`, `/switch <name>`, `/stats`, `/exit`, `/help`.
+- **`KnowledgePackStore(..., adapter=ChatTemplateAdapter | None)`**: new optional kwarg. When omitted, a Factory probes the tokenizer with a system-only `apply_chat_template` and picks the right adapter. Existing Qwen3 callers see no behaviour change.
+- **`SequentialRecomputeComposer(..., adapter=...)`**: same kwarg, same Factory default.
+- **`tardigrade_hooks.ChatTemplateAdapter`**, **`UserMessageAdapter`**, **`LegacySystemAdapter`**, **`select_chat_template_adapter`**: new exports for consumers who want to pin an adapter explicitly across sessions.
+- **`tardigrade_chat`** package (`MemoryChatSession`, `ChatBackend` ABC, `InMemoryBackend`, `PersistentBackend`, `Repl`): public surface for embedding the chat REPL outside the CLI.
+
+### Behaviour
+
+- **Strict-template tokenizers** (Llama-3, Gemma-2, Mistral-Instruct, Phi-3.5, …) previously raised `jinja2.TemplateError: No user query found in messages` on store/retrieve. The default `UserMessageAdapter` wraps facts as user-role messages with an empty assistant separator, accepted by every modern instruction-tuned template.
+- **Cross-adapter retrieval on a single pack**: unsupported. KV state on disk encodes the wrap used at store time — store and retrieve must use the same adapter, which the Factory enforces de facto per session. Migrating an existing `tardigrade_data/` to a different adapter requires rebuilding the affected packs.
+
+### Bug Fixes
+
+- BF16 hidden states no longer crash `.cpu().numpy()` — `kp_injector` now casts to FP32 before the NumPy conversion, fixing a `TypeError: Got unsupported ScalarType BFloat16` on models that return BF16 even when loaded as FP32.
+
+### Known Limitations
+
+- Hybrid linear/standard attention architectures (e.g. Qwen3.5's `LinearAttentionLayer`) remain incompatible with the KV-capture step — the adapter fixes the chat-template error but `kv.layers[i].keys` still raises `AttributeError` on a linear-attention layer. Separate library concern.
 
 ## [0.3.1] — 2026-05-17
 
