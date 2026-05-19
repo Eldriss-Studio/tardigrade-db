@@ -44,6 +44,20 @@ DEFAULT_VIEW_FRAMINGS: tuple[str, ...] = (
 CONSOLIDATION_MIN_TIER: int = 1  # Validated tier
 CONSOLIDATION_BATCH_SIZE: int = 16
 
+# -- Salience defaults -------------------------------------------------------
+#: Default salience for `KnowledgePackStore.store()` and the
+#: `store_linked` / `store_supporting` / `store_contradicting` variants.
+#: A mid-high value: stored facts start out somewhat important and decay
+#: via the recency policy if unread.
+DEFAULT_STORE_SALIENCE: float = 80.0
+
+#: Salience used by the calibration sweep when writing throwaway packs
+#: into a tempdir engine. Lower than `DEFAULT_STORE_SALIENCE` to mark
+#: these as transient — they never escape the tempdir so the value is
+#: mostly cosmetic, but the named constant prevents the magic-number
+#: smell in the calibration code.
+CALIBRATION_SALIENCE: float = 50.0
+
 # -- File ingest salience ----------------------------------------------------
 DEFAULT_FILE_INGEST_SALIENCE: float = 70.0
 

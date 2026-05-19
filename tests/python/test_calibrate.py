@@ -169,16 +169,17 @@ def test_tiebreak_prefers_deepest_layer_when_scores_tie():
     # layer scores perfectly on the engine round-trip — forcing the
     # tiebreak. Each fact must have a *distinguishable* per-token
     # pattern so retrieval still works.
-    def fake_forward(model, tokenizer, text, *, wrap_chat, adapter):
+    def fake_forward(model, tokenizer, text, *, wrap_chat, adapter, return_cache=False):
         import numpy as np
-        # Use the last char of the text as the seed so that ("fact-a",
-        # "query-a") share a seed (both end in 'a'), as do the b- and
-        # c- pairs. Same key across all layers for the same pair —
-        # every layer scores perfectly, forcing the tiebreak.
         seed = ord(text[-1])
         rng = np.random.RandomState(seed)
         per_text_key = rng.randn(8, 32).astype("float32")
-        return [per_text_key.copy() for _ in range(n_hidden_states)], [], 8
+        hs = [per_text_key.copy() for _ in range(n_hidden_states)]
+        class _FakeCache:
+            layers = []  # no softmax layers → K-vector candidates skipped
+        if return_cache:
+            return hs, [], 8, _FakeCache()
+        return hs, [], 8
 
     original = cal_mod._compute_per_layer_hidden_states
     cal_mod._compute_per_layer_hidden_states = fake_forward
@@ -221,13 +222,18 @@ def test_linear_sweep_returns_one_score_per_hidden_state_index():
     n_layers = 4
     n_hidden_states = n_layers + 1  # embeddings + per-layer outputs
 
-    def fake_forward(model, tokenizer, text, *, wrap_chat, adapter):
+    def fake_forward(model, tokenizer, text, *, wrap_chat, adapter, return_cache=False):
         # Return a list of n_hidden_states arrays, each of shape (3, 4)
         # — three tokens, hidden_size=4. Distinct content per index so
         # retrieval can discriminate.
         import numpy as np
         rng = np.random.RandomState(hash(text) & 0xFFFFFFFF)
-        return [rng.randn(3, 4).astype("float32") for _ in range(n_hidden_states)], [], 3
+        hs = [rng.randn(3, 4).astype("float32") for _ in range(n_hidden_states)]
+        class _FakeCache:
+            layers = []
+        if return_cache:
+            return hs, [], 3, _FakeCache()
+        return hs, [], 3
 
     import tardigrade_hooks.calibrate as cal_mod
     original = cal_mod._compute_per_layer_hidden_states

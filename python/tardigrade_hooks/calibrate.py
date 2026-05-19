@@ -91,7 +91,7 @@ from ._hidden_states import (
     _compute_per_layer_hidden_states,
     layer_kind_labels,
 )
-from .constants import DEFAULT_CAPTURE_LAYER_RATIO
+from .constants import CALIBRATION_SALIENCE, DEFAULT_CAPTURE_LAYER_RATIO
 from .encoding import encode_per_token
 
 _CALIBRATION_OWNER: int = 1  # Owner id used for in-tempdir calibration engines.
@@ -100,13 +100,21 @@ _DEFAULT_TOP_K: int = 5
 
 @dataclass(frozen=True)
 class LayerScore:
-    """Retrieval recall for a single candidate layer.
+    """Retrieval recall for a single ``(strategy, layer)`` candidate.
 
     Attributes:
-        layer: Index into ``output.hidden_states`` — 0 is embeddings,
-            1..n_layers are per-layer outputs.
+        layer: Index into ``output.hidden_states`` or ``cache.layers`` —
+            interpretation depends on ``strategy``. For
+            ``"hidden_state"``, 0 is embeddings and 1..n are per-layer
+            outputs of ``output.hidden_states``. For ``"k_vector"``, it
+            is the softmax cache layer index in ``cache.layers``.
         kind: One of ``"embedding"``, ``"attention"``, ``"recurrent"``,
             or a raw config string (truncated) for unknown layer types.
+        strategy: Retrieval-key strategy identifier — ``"hidden_state"``
+            for :class:`tardigrade_hooks.HiddenStateKeyStrategy`, or
+            ``"k_vector"`` for :class:`tardigrade_hooks.KVectorKeyStrategy`.
+            Older calibration records lack this field; deserialisation
+            defaults to ``"hidden_state"`` for backwards compatibility.
         top1: Number of queries for which the expected pack was the
             engine's top-1 result.
         top5: Number of queries for which the expected pack was within
@@ -117,15 +125,18 @@ class LayerScore:
     kind: str
     top1: int
     top5: int
+    strategy: str = "hidden_state"
 
     def as_dict(self) -> dict:
         return {"layer": self.layer, "kind": self.kind,
+                "strategy": self.strategy,
                 "top1": self.top1, "top5": self.top5}
 
     @classmethod
     def from_dict(cls, d: dict) -> "LayerScore":
         return cls(layer=int(d["layer"]), kind=str(d["kind"]),
-                   top1=int(d["top1"]), top5=int(d["top5"]))
+                   top1=int(d["top1"]), top5=int(d["top5"]),
+                   strategy=str(d.get("strategy", "hidden_state")))
 
 
 @dataclass(frozen=True)
@@ -144,6 +155,7 @@ class CalibrationResult:
     hidden_size: int
     best_layer: int
     scores: tuple[LayerScore, ...]
+    best_strategy: str = "hidden_state"
 
     def as_dict(self) -> dict:
         return {
@@ -153,6 +165,7 @@ class CalibrationResult:
             "n_layers": self.n_layers,
             "hidden_size": self.hidden_size,
             "best_layer": self.best_layer,
+            "best_strategy": self.best_strategy,
             "scores": [s.as_dict() for s in self.scores],
         }
 
@@ -165,6 +178,7 @@ class CalibrationResult:
             n_layers=int(d["n_layers"]),
             hidden_size=int(d["hidden_size"]),
             best_layer=int(d["best_layer"]),
+            best_strategy=str(d.get("best_strategy", "hidden_state")),
             scores=tuple(LayerScore.from_dict(s) for s in d["scores"]),
         )
 
@@ -214,9 +228,15 @@ class LinearSweepStrategy(CalibrationStrategy):
         if not corpus:
             raise ValueError("CalibrationStrategy.run requires a non-empty corpus")
 
-        # Lazy import to avoid forcing the adapter on consumers that
-        # never call calibration.
+        # Lazy imports to avoid forcing the adapter / strategy modules
+        # on consumers that never call calibration.
         from .chat_template_adapter import select_chat_template_adapter
+        from ._hidden_states import _is_softmax_cache_layer
+        from .retrieval_key_strategy import (
+            HiddenStateKeyStrategy,
+            KVectorKeyStrategy,
+            RetrievalKeyStrategy,
+        )
 
         adapter = select_chat_template_adapter(tokenizer)
         cfg = model.config
@@ -230,71 +250,112 @@ class LinearSweepStrategy(CalibrationStrategy):
             model_id, n_corpus, n_corpus,
         )
 
-        # Phase 1: cache per-layer hidden states for every fact (with
-        # chat-template wrap) and every query (without wrap — mirrors
-        # the library's retrieval path).
+        # Phase 1: cache per-layer hidden states + KV cache for every
+        # fact (with chat-template wrap) and every query (without wrap
+        # — mirrors the library's retrieval path).
         fact_hidden: list[list[np.ndarray]] = []
-        fact_payloads: list[list] = []
+        fact_caches: list[Any] = []
         for i, (fact_text, _) in enumerate(corpus, 1):
-            hs, payloads, _ = _compute_per_layer_hidden_states(
-                model, tokenizer, fact_text, wrap_chat=True, adapter=adapter
+            hs, _payloads, _seq_len, kv = _compute_per_layer_hidden_states(
+                model, tokenizer, fact_text, wrap_chat=True, adapter=adapter,
+                return_cache=True,
             )
             fact_hidden.append(hs)
-            fact_payloads.append(payloads)
+            fact_caches.append(kv)
             if i % 5 == 0 or i == n_corpus:
                 logger.info("  facts forwarded: %d/%d", i, n_corpus)
 
         query_hidden: list[list[np.ndarray]] = []
+        query_caches: list[Any] = []
         for i, (_, query_text) in enumerate(corpus, 1):
-            hs, _, _ = _compute_per_layer_hidden_states(
-                model, tokenizer, query_text, wrap_chat=False, adapter=adapter
+            hs, _payloads, _seq_len, kv = _compute_per_layer_hidden_states(
+                model, tokenizer, query_text, wrap_chat=False, adapter=adapter,
+                return_cache=True,
             )
             query_hidden.append(hs)
+            query_caches.append(kv)
             if i % 5 == 0 or i == n_corpus:
                 logger.info("  queries forwarded: %d/%d", i, n_corpus)
 
         n_hidden_states = len(fact_hidden[0])
         kinds = layer_kind_labels(cfg, n_hidden_states)
+        # Identify softmax-attention cache layer indices for K-vector
+        # strategy candidates. cache.layers is indexed 0..n_layers-1
+        # (no embedding entry — different convention from hidden_states).
+        probe_cache = fact_caches[0]
+        softmax_layer_indices = [
+            i for i, layer in enumerate(probe_cache.layers)
+            if _is_softmax_cache_layer(layer)
+        ]
+
+        # Build the candidate list: one HiddenStateKeyStrategy per
+        # hidden_states index + one KVectorKeyStrategy per softmax
+        # cache-layer index. The two strategies use different layer-
+        # indexing conventions but `LayerScore.layer` records the
+        # strategy-native index so the (strategy, layer) tuple is
+        # unambiguous.
+        candidates: list[tuple[str, int, str, RetrievalKeyStrategy]] = []
+        for li in range(n_hidden_states):
+            if layer_filter is not None and not layer_filter(li, kinds[li]):
+                continue
+            candidates.append(("hidden_state", li, kinds[li], HiddenStateKeyStrategy(li)))
+        # For K-vector, map cache-layer index back to kinds[] which is
+        # indexed over hidden_states (cache_layer_i corresponds to
+        # hidden_states[i+1] — the output of that layer). Use the
+        # hidden_states kind for clarity in the report.
+        for li in softmax_layer_indices:
+            kind_idx = li + 1  # hidden_states[li+1] is this layer's output
+            kind = kinds[kind_idx] if kind_idx < len(kinds) else "attention"
+            if layer_filter is not None and not layer_filter(li, kind):
+                continue
+            candidates.append(("k_vector", li, kind, KVectorKeyStrategy(li)))
+
         logger.info(
-            "calibrating %s: layer sweep (%d candidate layers)",
-            model_id, n_hidden_states,
+            "calibrating %s: sweep (%d candidates: %d hidden-state + %d k-vector)",
+            model_id, len(candidates),
+            sum(1 for c in candidates if c[0] == "hidden_state"),
+            sum(1 for c in candidates if c[0] == "k_vector"),
         )
 
-        # Phase 2: sweep every layer index, run engine round-trip per layer.
+        # Phase 2: for each (strategy, layer) candidate, engine round-trip.
         scores: list[LayerScore] = []
         running_best: tuple[int, int] = (-1, -1)
-        for li in range(n_hidden_states):
-            kind = kinds[li]
-            if layer_filter is not None and not layer_filter(li, kind):
-                scores.append(LayerScore(layer=li, kind=kind, top1=0, top5=0))
-                logger.debug("  layer %d (%s): skipped by filter", li, kind)
-                continue
-            top1, top5 = self._score_one_layer(
-                li, fact_hidden, query_hidden, hidden_size
-            )
-            scores.append(LayerScore(layer=li, kind=kind, top1=top1, top5=top5))
+        for strategy_name, li, kind, strategy in candidates:
+            try:
+                top1, top5 = self._score_strategy(
+                    strategy, fact_hidden, fact_caches,
+                    query_hidden, query_caches, hidden_size,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "  %s@%d (%s) failed: %r; recording as 0/%d",
+                    strategy_name, li, kind, exc, n_corpus,
+                )
+                top1, top5 = 0, 0
+            scores.append(LayerScore(
+                layer=li, kind=kind, strategy=strategy_name,
+                top1=top1, top5=top5,
+            ))
             is_new_best = (top1, top5) > running_best
             running_best = max(running_best, (top1, top5))
             logger.info(
-                "  layer %2d (%-9s) top-1 %2d/%d  top-5 %2d/%d%s",
-                li, kind, top1, n_corpus, top5, n_corpus,
+                "  %-12s@%2d (%-9s) top-1 %2d/%d  top-5 %2d/%d%s",
+                strategy_name, li, kind, top1, n_corpus, top5, n_corpus,
                 "  ★ new best" if is_new_best else "",
             )
 
         # Phase 3: pick best — highest top-1, tiebreak first by top-5,
-        # then by layer depth (prefer the deepest layer in any tied set).
-        # The depth tiebreak matters because shallow layers — especially
-        # the embedding — can ace a small synthetic corpus purely on
-        # surface-token discrimination. Deeper layers encode semantic
-        # meaning that survives paraphrasing and out-of-distribution
-        # queries, so picking the deepest tied layer is the safer
-        # production choice when the corpus can't distinguish them.
-        valid = [s for s in scores]
-        best = max(valid, key=lambda s: (s.top1, s.top5, s.layer))
+        # then by layer depth (prefer the deepest layer in any tied
+        # set). The depth tiebreak matters because shallow layers
+        # — especially the embedding under hidden_state strategy —
+        # can ace a small synthetic corpus purely on surface-token
+        # discrimination. Deeper layers encode semantic meaning that
+        # survives paraphrasing.
+        best = max(scores, key=lambda s: (s.top1, s.top5, s.layer))
         logger.info(
-            "calibrating %s: best layer %d (%s) — top-1 %d/%d, top-5 %d/%d",
-            model_id, best.layer, best.kind, best.top1, n_corpus,
-            best.top5, n_corpus,
+            "calibrating %s: best %s@%d (%s) — top-1 %d/%d, top-5 %d/%d",
+            model_id, best.strategy, best.layer, best.kind,
+            best.top1, n_corpus, best.top5, n_corpus,
         )
 
         return CalibrationResult(
@@ -304,31 +365,35 @@ class LinearSweepStrategy(CalibrationStrategy):
             n_layers=n_layers,
             hidden_size=hidden_size,
             best_layer=best.layer,
+            best_strategy=best.strategy,
             scores=tuple(scores),
         )
 
     @staticmethod
-    def _score_one_layer(
-        layer_idx: int,
+    def _score_strategy(
+        strategy: Any,
         fact_hidden: list[list[np.ndarray]],
+        fact_caches: list[Any],
         query_hidden: list[list[np.ndarray]],
+        query_caches: list[Any],
         hidden_size: int,
     ) -> tuple[int, int]:
-        """Store all facts in a fresh engine using this layer's hidden state
-        as the retrieval key; query all queries; count top-1 / top-5 hits."""
+        """Engine round-trip with a single :class:`RetrievalKeyStrategy`.
+
+        Stores all facts in a fresh engine using ``strategy.compute()``
+        for the retrieval key; queries all queries via the same
+        strategy; counts top-1 / top-5 hits.
+        """
         n = len(fact_hidden)
         with tempfile.TemporaryDirectory() as tmpdir:
             engine = tardigrade_db.Engine(tmpdir)
             pack_ids: dict[int, int] = {}
             for i in range(n):
-                h = fact_hidden[i][layer_idx]
-                if h.shape[0] < 2:
-                    return 0, 0  # degenerate — can't drop pos 0
-                ret_key = encode_per_token(h[1:], hidden_size)
-                # Empty layer_payloads — calibration tests retrieval only,
-                # not injection. Pack carries retrieval_key + text only.
+                ret_key = strategy.compute(
+                    fact_hidden[i], fact_caches[i], hidden_size
+                )
                 pid = engine.mem_write_pack(
-                    _CALIBRATION_OWNER, ret_key, [], 50.0,
+                    _CALIBRATION_OWNER, ret_key, [], CALIBRATION_SALIENCE,
                     text=f"calibration-fact-{i}",
                 )
                 pack_ids[i] = pid
@@ -336,10 +401,9 @@ class LinearSweepStrategy(CalibrationStrategy):
             top1 = 0
             top5 = 0
             for i in range(n):
-                h = query_hidden[i][layer_idx]
-                if h.shape[0] < 2:
-                    continue
-                qkey = encode_per_token(h[1:], hidden_size)
+                qkey = strategy.compute(
+                    query_hidden[i], query_caches[i], hidden_size
+                )
                 packs = engine.mem_read_pack(qkey, _DEFAULT_TOP_K, _CALIBRATION_OWNER)
                 ids = [p["pack_id"] for p in packs]
                 if ids[:1] == [pack_ids[i]]:

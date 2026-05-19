@@ -33,6 +33,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from tardigrade_db import Engine
+from tardigrade_hooks.constants import DEFAULT_STORE_SALIENCE
 from tardigrade_hooks.kp_injector import KnowledgePackStore
 
 MODEL_ID = os.environ.get("HYBRID_SPIKE_MODEL", "Qwen/Qwen3-1.7B")
@@ -70,7 +71,7 @@ def main():
         print(f"Storing {len(facts)} facts via kps.store()…")
         fact_to_pack: dict[int, int] = {}
         for i, item in enumerate(facts):
-            pack_id = kps.store(item["fact"], salience=80.0, auto_link=False)
+            pack_id = kps.store(item["fact"], salience=DEFAULT_STORE_SALIENCE, auto_link=False)
             fact_to_pack[i] = pack_id
             if (i + 1) % 5 == 0:
                 print(f"  stored {i+1}/{len(facts)}", flush=True)

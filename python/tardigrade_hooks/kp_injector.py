@@ -21,6 +21,7 @@ from .chat_template_adapter import (
 )
 from .constants import (
     DEFAULT_CAPTURE_LAYER_RATIO,
+    DEFAULT_STORE_SALIENCE,
     EDGE_CONTRADICTS,
     EDGE_FOLLOWS,
     EDGE_SUPPORTS,
@@ -68,6 +69,7 @@ class KnowledgePackStore:
         query_layer=None,
         adapter: ChatTemplateAdapter | None = None,
         calibration_registry=None,
+        retrieval_key_strategy=None,
     ):
         self.engine = engine
         self.model = model
@@ -86,29 +88,52 @@ class KnowledgePackStore:
         self.kv_dim = self.num_kv_heads * self.head_dim
         self.hidden_size = cfg.hidden_size
 
-        # Layer-selection order:
-        #   1. Explicit `query_layer` arg wins (existing escape hatch).
-        #   2. Else: consult the calibration registry if provided and a
-        #      cached entry exists for this model_id. This is how hybrid
-        #      models (Qwen3-Next, RecurrentGemma, Jamba, Zamba, …) get
-        #      the right attention layer auto-picked without the caller
-        #      having to know the architecture's layer layout.
-        #   3. Else: fall back to the static DEFAULT_CAPTURE_LAYER_RATIO
-        #      heuristic — works fine on uniform-softmax models, may
-        #      land on a recurrent layer for hybrid models (silent
-        #      ~0% recall — calibrate to fix).
-        if query_layer is not None:
-            self.query_layer = query_layer
+        # Strategy + layer selection order:
+        #   1. Explicit `retrieval_key_strategy` wins outright.
+        #   2. Else: explicit `query_layer` → HiddenStateKeyStrategy(query_layer).
+        #   3. Else: consult `calibration_registry` if provided. Cached
+        #      result drives BOTH the strategy choice (best_strategy:
+        #      "hidden_state" → HiddenStateKeyStrategy, "k_vector" →
+        #      KVectorKeyStrategy) AND the layer choice (best_layer).
+        #      Unknown strategy name → fall back to HiddenStateKeyStrategy.
+        #   4. Else: HiddenStateKeyStrategy at the static-ratio layer.
+        #      This is the pre-Phase-2 default; works on uniform-softmax
+        #      models, fails silently on hybrid (calibrate to fix).
+        from .retrieval_key_strategy import (
+            HiddenStateKeyStrategy,
+            KVectorKeyStrategy,
+        )
+        default_layer = int(self.n_layers * DEFAULT_CAPTURE_LAYER_RATIO)
+        if retrieval_key_strategy is not None:
+            self.retrieval_key_strategy = retrieval_key_strategy
+        elif query_layer is not None:
+            self.retrieval_key_strategy = HiddenStateKeyStrategy(query_layer)
         elif calibration_registry is not None:
             cached = calibration_registry.load(_model_id_for(model))
-            self.query_layer = (
-                cached.best_layer if cached is not None
-                else int(self.n_layers * DEFAULT_CAPTURE_LAYER_RATIO)
-            )
+            if cached is None:
+                self.retrieval_key_strategy = HiddenStateKeyStrategy(default_layer)
+            elif cached.best_strategy == "k_vector":
+                self.retrieval_key_strategy = KVectorKeyStrategy(cached.best_layer)
+            else:
+                # "hidden_state" or any unknown name → HiddenStateKeyStrategy
+                # at the cached layer. Graceful degradation for forward-
+                # compat with strategies we don't yet recognise.
+                self.retrieval_key_strategy = HiddenStateKeyStrategy(cached.best_layer)
         else:
-            self.query_layer = int(self.n_layers * DEFAULT_CAPTURE_LAYER_RATIO)
+            self.retrieval_key_strategy = HiddenStateKeyStrategy(default_layer)
 
-    def store(self, fact_text, salience=80.0, auto_link=True, auto_link_threshold=None):
+        # `self.query_layer` is preserved for backwards compat with code
+        # that reads it directly (a number of older call sites). It
+        # mirrors the strategy's layer index regardless of whether the
+        # strategy is hidden-state or k-vector.
+        self.query_layer = self.retrieval_key_strategy.layer_index if hasattr(
+            self.retrieval_key_strategy, "layer_index"
+        ) else getattr(
+            self.retrieval_key_strategy, "query_layer",
+            getattr(self.retrieval_key_strategy, "softmax_layer_idx", default_layer),
+        )
+
+    def store(self, fact_text, salience=DEFAULT_STORE_SALIENCE, auto_link=True, auto_link_threshold=None):
         """Store a fact's KV cache across all layers.
 
         Wraps the fact in the model's chat template before computing KV.
@@ -134,15 +159,40 @@ class KnowledgePackStore:
         input_ids = self.tokenizer.encode(formatted, return_tensors="pt").to(device)
         seq_len = input_ids.shape[1]
 
+        # Pre-instantiate cache so the K vectors are accessible whether
+        # the model returns `output.past_key_values` (uniform-softmax
+        # Qwen3/Llama-3/Mistral path) or only mutates the passed-in
+        # cache in place (RecurrentGemma's CausalLMOutput path which
+        # omits the .past_key_values attribute entirely).
+        cache_in = DynamicCache(config=self.model.config)
         with torch.no_grad():
-            out = self.model(input_ids, use_cache=True, output_hidden_states=True)
+            out = self.model(
+                input_ids,
+                past_key_values=cache_in,
+                use_cache=True,
+                output_hidden_states=True,
+            )
+        returned = getattr(out, "past_key_values", None)
+        if (
+            returned is not None
+            and hasattr(returned, "get_seq_length")
+            and returned.get_seq_length() > 0
+        ):
+            kv = returned
+        else:
+            kv = cache_in
 
-        kv = out.past_key_values
-
-        # Retrieval key: hidden states at query_layer (per-token, skip pos 0)
-        hidden = out.hidden_states[self.query_layer][0]  # (seq, hidden_size)
-        h_tokens = hidden[1:].float().cpu().numpy().astype(np.float32)  # skip pos 0
-        retrieval_key = encode_per_token(h_tokens, self.hidden_size)
+        # Retrieval key via the configured strategy. Hidden-state strategy
+        # reads `out.hidden_states[query_layer]`; K-vector strategy reads
+        # K from `kv.layers[softmax_layer_idx]`. Same engine, different
+        # encoding — picked by architecture or by calibration.
+        hidden_per_layer = [
+            h[0].float().cpu().numpy().astype(np.float32)
+            for h in out.hidden_states
+        ]
+        retrieval_key = self.retrieval_key_strategy.compute(
+            hidden_per_layer, kv, self.hidden_size
+        )
 
         # Build layer payloads for pack API
         layer_payloads = []
@@ -169,6 +219,43 @@ class KnowledgePackStore:
     def forget(self, pack_id):
         """Delete a memory permanently. Irreversible."""
         self.engine.delete_pack(pack_id)
+
+    def _compute_query_key(self, query_text):
+        """Strategy-aware query-key extraction.
+
+        Returns ``(query_key, query_input_ids)``. The forward pass uses
+        a pre-instantiated DynamicCache so hybrid models (where
+        ``output.past_key_values`` is absent) still expose their K
+        tensors via the in-place-mutated cache. The configured strategy
+        decides whether to read from hidden states or from K vectors.
+        """
+        device = self.model.device
+        query_input = self.tokenizer.encode(query_text, return_tensors="pt").to(device)
+        cache_in = DynamicCache(config=self.model.config)
+        with torch.no_grad():
+            query_out = self.model(
+                query_input,
+                past_key_values=cache_in,
+                use_cache=True,
+                output_hidden_states=True,
+            )
+        returned = getattr(query_out, "past_key_values", None)
+        if (
+            returned is not None
+            and hasattr(returned, "get_seq_length")
+            and returned.get_seq_length() > 0
+        ):
+            qkv = returned
+        else:
+            qkv = cache_in
+        hidden_per_layer = [
+            h[0].float().cpu().numpy().astype(np.float32)
+            for h in query_out.hidden_states
+        ]
+        query_key = self.retrieval_key_strategy.compute(
+            hidden_per_layer, qkv, self.hidden_size
+        )
+        return query_key, query_input
 
     def _build_query_ids_from_pack(self, pack, query_text, device):
         """Helper extracted in the refactor pass of the Adapter rollout.
@@ -218,17 +305,10 @@ class KnowledgePackStore:
         # `.to(device)` is a no-op when the device already matches.
         device = self.model.device
 
-        # Build the query portion of the chat template
-        # We need: [system: fact][user: query][assistant: ...]
-        # The fact was stored with system template. The query continues from there.
-        # For retrieval, compute hidden states of the query text.
-        query_input = self.tokenizer.encode(query_text, return_tensors="pt").to(device)
-        with torch.no_grad():
-            query_out = self.model(query_input, output_hidden_states=True)
-
-        hidden = query_out.hidden_states[self.query_layer][0]
-        h_tokens = hidden[1:].float().cpu().numpy().astype(np.float32)
-        query_key = encode_per_token(h_tokens, self.hidden_size)
+        # Compute the query's retrieval key via the configured strategy.
+        # (HiddenStateKeyStrategy reads hidden_states[query_layer];
+        # KVectorKeyStrategy reads K from cache.layers[softmax_layer_idx].)
+        query_key, query_input = self._compute_query_key(query_text)
 
         # Retrieve via Rust pack API (returns complete pack with all layers)
         packs = self.engine.mem_read_pack(query_key, 1, self.owner)
@@ -332,7 +412,7 @@ class KnowledgePackStore:
     EDGE_CONTRADICTS: int = EDGE_CONTRADICTS
     EDGE_SUPPORTS: int = EDGE_SUPPORTS
 
-    def store_and_link(self, fact_text, related_pack_id, salience=80.0):
+    def store_and_link(self, fact_text, related_pack_id, salience=DEFAULT_STORE_SALIENCE):
         """Store a fact and link it to an existing memory (Follows edge).
 
         Returns the new pack_id.
@@ -341,7 +421,7 @@ class KnowledgePackStore:
         self.engine.add_pack_link(pack_id, related_pack_id)
         return pack_id
 
-    def store_supporting(self, fact_text, related_pack_id, salience=80.0):
+    def store_supporting(self, fact_text, related_pack_id, salience=DEFAULT_STORE_SALIENCE):
         """Store a fact that supports an existing memory (Supports edge).
 
         Use when the new fact reinforces or elaborates on an existing one.
@@ -352,7 +432,7 @@ class KnowledgePackStore:
         self.engine.add_pack_edge(pack_id, related_pack_id, self.EDGE_SUPPORTS)
         return pack_id
 
-    def store_contradicting(self, fact_text, related_pack_id, salience=80.0):
+    def store_contradicting(self, fact_text, related_pack_id, salience=DEFAULT_STORE_SALIENCE):
         """Store a fact that contradicts an existing memory (Contradicts edge).
 
         Use when the new fact invalidates or corrects an existing one.
@@ -363,7 +443,7 @@ class KnowledgePackStore:
         self.engine.add_pack_edge(pack_id, related_pack_id, self.EDGE_CONTRADICTS)
         return pack_id
 
-    def store_linked(self, facts, salience=80.0):
+    def store_linked(self, facts, salience=DEFAULT_STORE_SALIENCE):
         """Store related facts and link them for multi-hop retrieval.
 
         Creates bidirectional links between all packs so that retrieving
@@ -399,13 +479,8 @@ class KnowledgePackStore:
         # Tensors that touch the model must live on the model's device.
         device = self.model.device
 
-        query_input = self.tokenizer.encode(query_text, return_tensors="pt").to(device)
-        with torch.no_grad():
-            query_out = self.model(query_input, output_hidden_states=True)
-
-        hidden = query_out.hidden_states[self.query_layer][0]
-        h_tokens = hidden[1:].float().cpu().numpy().astype(np.float32)
-        query_key = encode_per_token(h_tokens, self.hidden_size)
+        # Strategy-aware query-key extraction (see _compute_query_key).
+        query_key, query_input = self._compute_query_key(query_text)
 
         # Trace-Boosted Retrieval with link traversal: single Rust call
         # handles expanded retrieval, score boosting, re-ranking, and
@@ -480,13 +555,8 @@ class KnowledgePackStore:
         # Tensors that touch the model must live on the model's device.
         device = self.model.device
 
-        query_input = self.tokenizer.encode(query_text, return_tensors="pt").to(device)
-        with torch.no_grad():
-            query_out = self.model(query_input, output_hidden_states=True)
-
-        hidden = query_out.hidden_states[self.query_layer][0]
-        h_tokens = hidden[1:].float().cpu().numpy().astype(np.float32)
-        query_key = encode_per_token(h_tokens, self.hidden_size)
+        # Strategy-aware query-key extraction (see _compute_query_key).
+        query_key, query_input = self._compute_query_key(query_text)
 
         packs = self.engine.mem_read_pack(query_key, k, self.owner)
         if not packs:

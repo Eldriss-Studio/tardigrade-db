@@ -79,12 +79,25 @@ def _compute_per_layer_hidden_states(
     *,
     wrap_chat: bool,
     adapter: Any,
-) -> tuple[list[np.ndarray], list[tuple[int, np.ndarray]], int]:
+    return_cache: bool = False,
+) -> tuple:
     """Forward ``text`` through ``model`` once; return per-layer hidden
     states (CPU float32 numpy), softmax-layer K/V payloads, and seq_len.
 
     Hidden-state list length is ``model.config.num_hidden_layers + 1`` —
     index 0 is the embedding output, indices 1..n are the per-layer outputs.
+
+    If ``return_cache=True``, the populated ``DynamicCache`` is appended to
+    the returned tuple. Strategies that read K vectors directly (e.g.
+    :class:`tardigrade_hooks.retrieval_key_strategy.KVectorKeyStrategy`)
+    need raw cache access — per-layer hidden states alone aren't enough.
+
+    Return shape:
+
+    - ``return_cache=False`` (default, backwards-compat):
+      ``(hidden_per_layer, payloads, seq_len)``
+    - ``return_cache=True``:
+      ``(hidden_per_layer, payloads, seq_len, kv)``
 
     If ``wrap_chat`` is True, ``text`` is wrapped via ``adapter.store_messages``
     + ``tokenizer.apply_chat_template`` before encoding. Otherwise ``text``
@@ -128,6 +141,8 @@ def _compute_per_layer_hidden_states(
     hidden_per_layer = [
         h[0].float().cpu().numpy().astype(np.float32) for h in out.hidden_states
     ]
+    if return_cache:
+        return hidden_per_layer, payloads, seq_len, kv
     return hidden_per_layer, payloads, seq_len
 
 

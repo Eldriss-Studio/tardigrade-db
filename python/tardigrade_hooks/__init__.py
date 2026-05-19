@@ -15,16 +15,24 @@ from .chat_template_adapter import (
     select_chat_template_adapter,
 )
 from .hook import MemoryCellHandle, TardigradeHook, WriteDecision
+from .retrieval_key_strategy import (
+    HiddenStateKeyStrategy,
+    KVectorKeyStrategy,
+    RetrievalKeyStrategy,
+)
 
 __all__ = [
     "CalibrationRegistry",
     "CalibrationResult",
     "CalibrationStrategy",
     "ChatTemplateAdapter",
+    "HiddenStateKeyStrategy",
+    "KVectorKeyStrategy",
     "LayerScore",
     "LegacySystemAdapter",
     "LinearSweepStrategy",
     "MemoryCellHandle",
+    "RetrievalKeyStrategy",
     "TardigradeClient",
     "TardigradeHook",
     "UserMessageAdapter",

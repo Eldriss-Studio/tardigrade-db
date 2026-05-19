@@ -27,6 +27,11 @@ from tardigrade_hooks.chat_template_adapter import (
     UserMessageAdapter,
     select_chat_template_adapter,
 )
+from tardigrade_hooks.retrieval_key_strategy import (
+    HiddenStateKeyStrategy,
+    KVectorKeyStrategy,
+    RetrievalKeyStrategy,
+)
 
 # Minimal chat template — GPT-2 doesn't ship one.
 CHAT_TEMPLATE = '{% for message in messages %}{{ message["content"] }}{% endfor %}'
@@ -466,3 +471,162 @@ def test_legacy_system_adapter_builds_retrieve_messages():
         {"role": "system", "content": "placeholder"},
         {"role": "user", "content": "What is the query?"},
     ]
+
+
+# -- Phase 2: KnowledgePackStore integration with RetrievalKeyStrategy ------
+
+def test_kp_default_constructor_builds_hidden_state_strategy(engine, gpt2, tokenizer):
+    """When no strategy/registry/query_layer is provided, the default
+    retrieval-key strategy is HiddenStateKeyStrategy at the library-
+    default layer."""
+    kps = KnowledgePackStore(engine, gpt2, tokenizer, owner=1)
+    assert isinstance(kps.retrieval_key_strategy, HiddenStateKeyStrategy)
+    assert kps.retrieval_key_strategy.query_layer == kps.query_layer
+
+
+def test_kp_accepts_explicit_retrieval_key_strategy_kwarg(engine, gpt2, tokenizer):
+    """Explicit retrieval_key_strategy= overrides every other source."""
+    custom = KVectorKeyStrategy(softmax_layer_idx=3)
+    kps = KnowledgePackStore(
+        engine, gpt2, tokenizer, owner=1,
+        retrieval_key_strategy=custom,
+    )
+    assert kps.retrieval_key_strategy is custom
+
+
+def test_kp_explicit_query_layer_constructs_hidden_state_strategy(engine, gpt2, tokenizer):
+    """Explicit query_layer=N constructs HiddenStateKeyStrategy(N)
+    when no explicit strategy is provided."""
+    kps = KnowledgePackStore(engine, gpt2, tokenizer, owner=1, query_layer=5)
+    assert isinstance(kps.retrieval_key_strategy, HiddenStateKeyStrategy)
+    assert kps.retrieval_key_strategy.query_layer == 5
+
+
+def test_kp_calibration_registry_kvector_best_strategy_constructs_kvector(
+    engine, gpt2, tokenizer, tmp_path,
+):
+    """When the registry has best_strategy='k_vector', KnowledgePackStore
+    constructs a KVectorKeyStrategy at the cached best_layer."""
+    from tardigrade_hooks.calibrate import CalibrationResult, LayerScore
+    from tardigrade_hooks.calibration_registry import CalibrationRegistry
+
+    reg = CalibrationRegistry(tmp_path / "calib.json")
+    cached = CalibrationResult(
+        model_id=getattr(gpt2.config, "name_or_path", "") or "gpt2",
+        tardigrade_db_version="0.3.2",
+        timestamp_iso="2026-05-19T00:00:00",
+        n_layers=12,
+        hidden_size=768,
+        best_layer=7,
+        best_strategy="k_vector",
+        scores=(LayerScore(layer=7, kind="attention", strategy="k_vector", top1=20, top5=20),),
+    )
+    reg.save(cached)
+
+    kps = KnowledgePackStore(
+        engine, gpt2, tokenizer, owner=1, calibration_registry=reg,
+    )
+    assert isinstance(kps.retrieval_key_strategy, KVectorKeyStrategy)
+    assert kps.retrieval_key_strategy.softmax_layer_idx == 7
+
+
+def test_kp_calibration_registry_hidden_state_best_strategy_constructs_hidden_state(
+    engine, gpt2, tokenizer, tmp_path,
+):
+    from tardigrade_hooks.calibrate import CalibrationResult, LayerScore
+    from tardigrade_hooks.calibration_registry import CalibrationRegistry
+
+    reg = CalibrationRegistry(tmp_path / "calib.json")
+    cached = CalibrationResult(
+        model_id=getattr(gpt2.config, "name_or_path", "") or "gpt2",
+        tardigrade_db_version="0.3.2",
+        timestamp_iso="2026-05-19T00:00:00",
+        n_layers=12,
+        hidden_size=768,
+        best_layer=4,
+        best_strategy="hidden_state",
+        scores=(LayerScore(layer=4, kind="attention", strategy="hidden_state", top1=20, top5=20),),
+    )
+    reg.save(cached)
+
+    kps = KnowledgePackStore(
+        engine, gpt2, tokenizer, owner=1, calibration_registry=reg,
+    )
+    assert isinstance(kps.retrieval_key_strategy, HiddenStateKeyStrategy)
+    assert kps.retrieval_key_strategy.query_layer == 4
+
+
+def test_kp_unknown_best_strategy_in_registry_falls_back_to_hidden_state(
+    engine, gpt2, tokenizer, tmp_path,
+):
+    """If the registry has a best_strategy name the library doesn't
+    recognise, fall back to HiddenStateKeyStrategy at the cached layer
+    (graceful degradation — don't crash the consumer)."""
+    from tardigrade_hooks.calibrate import CalibrationResult, LayerScore
+    from tardigrade_hooks.calibration_registry import CalibrationRegistry
+
+    reg = CalibrationRegistry(tmp_path / "calib.json")
+    cached = CalibrationResult(
+        model_id=getattr(gpt2.config, "name_or_path", "") or "gpt2",
+        tardigrade_db_version="0.3.2",
+        timestamp_iso="2026-05-19T00:00:00",
+        n_layers=12,
+        hidden_size=768,
+        best_layer=4,
+        best_strategy="some_future_strategy_not_yet_known",
+        scores=(),
+    )
+    reg.save(cached)
+
+    kps = KnowledgePackStore(
+        engine, gpt2, tokenizer, owner=1, calibration_registry=reg,
+    )
+    assert isinstance(kps.retrieval_key_strategy, HiddenStateKeyStrategy)
+    assert kps.retrieval_key_strategy.query_layer == 4
+
+
+def test_kp_store_invokes_retrieval_key_strategy_compute(engine, gpt2, tokenizer):
+    """store() must route retrieval-key computation through the
+    Strategy, not via inline hidden-state extraction. Verifies by
+    counting calls to compute() on a recording subclass."""
+    from tardigrade_hooks.retrieval_key_strategy import HiddenStateKeyStrategy
+
+    calls: list = []
+
+    class _RecordingHiddenState(HiddenStateKeyStrategy):
+        def compute(self, hidden_states, kv, hidden_size):
+            calls.append(("compute", self.query_layer))
+            return super().compute(hidden_states, kv, hidden_size)
+
+    kps = KnowledgePackStore(
+        engine, gpt2, tokenizer, owner=1,
+        retrieval_key_strategy=_RecordingHiddenState(query_layer=5),
+    )
+    kps.store("test fact for strategy routing", auto_link=False)
+    assert len(calls) == 1
+    assert calls[0] == ("compute", 5)
+
+
+def test_kp_retrieve_invokes_retrieval_key_strategy_compute(engine, gpt2, tokenizer):
+    """retrieve_and_inject() must also route through the Strategy. The
+    strategy used for the query key MUST match the one used at store
+    time — otherwise the fact's pack and the query's key live in
+    different encoding spaces and retrieval is undefined."""
+    from tardigrade_hooks.retrieval_key_strategy import HiddenStateKeyStrategy
+
+    calls: list = []
+
+    class _RecordingHiddenState(HiddenStateKeyStrategy):
+        def compute(self, hidden_states, kv, hidden_size):
+            calls.append(("compute", self.query_layer))
+            return super().compute(hidden_states, kv, hidden_size)
+
+    kps = KnowledgePackStore(
+        engine, gpt2, tokenizer, owner=1,
+        retrieval_key_strategy=_RecordingHiddenState(query_layer=5),
+    )
+    kps.store("test fact", auto_link=False)  # one compute() for store
+    cache, query_ids, attn = kps.retrieve_and_inject("test query")
+    # store() = 1 call; retrieve_and_inject() = 1 more = 2 total
+    assert len(calls) == 2
+    assert all(c == ("compute", 5) for c in calls)

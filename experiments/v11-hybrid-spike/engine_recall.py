@@ -36,6 +36,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
 import tardigrade_db
 from tardigrade_hooks.chat_template_adapter import select_chat_template_adapter
+from tardigrade_hooks.constants import CALIBRATION_SALIENCE
 from tardigrade_hooks.encoding import encode_per_token
 
 MODEL_ID = os.environ.get("HYBRID_SPIKE_MODEL", "google/recurrentgemma-2b-it")
@@ -122,7 +123,7 @@ def store_fact(engine, model, tok, adapter, fact_text, query_layer, hidden_size,
         layer_payloads.append((li, payload))
 
     return engine.mem_write_pack(
-        OWNER, retrieval_key, layer_payloads, 50.0, text=fact_text
+        OWNER, retrieval_key, layer_payloads, CALIBRATION_SALIENCE, text=fact_text
     )
 
 

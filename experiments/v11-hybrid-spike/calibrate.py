@@ -36,6 +36,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
 import tardigrade_db
 from tardigrade_hooks.chat_template_adapter import select_chat_template_adapter
+from tardigrade_hooks.constants import CALIBRATION_SALIENCE
 from tardigrade_hooks.encoding import encode_per_token
 
 MODEL_ID = os.environ.get("HYBRID_SPIKE_MODEL", "google/recurrentgemma-2b-it")
@@ -189,7 +190,8 @@ def main():
                         raise ValueError(f"layer {li} hidden too short: {h.shape}")
                     ret_key = encode_per_token(h[1:], hidden_size)
                     pack_id = engine.mem_write_pack(
-                        OWNER, ret_key, fact_payloads[i], 50.0, text=item["fact"]
+                        OWNER, ret_key, fact_payloads[i], CALIBRATION_SALIENCE,
+                        text=item["fact"],
                     )
                     fact_to_pack[i] = pack_id
                 top1 = 0
