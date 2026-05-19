@@ -30,7 +30,12 @@ from .encoding import encode_per_token
 from .multi_composer import NaiveConcatComposer
 from transformers import DynamicCache
 
-import tardigrade_db
+# Note: `import tardigrade_db` is intentionally NOT at module level. CI
+# lint jobs (e.g. bench-smoke-gate) import `tardigrade_hooks.constants`
+# without first running `maturin develop`, so eager-importing the
+# native extension here breaks unrelated lint paths. The native
+# extension is reached via the `engine` instance the caller passes in;
+# no module-level reference is needed.
 
 
 def _move_cache_to_device(cache, device):

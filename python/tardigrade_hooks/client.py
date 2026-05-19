@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 
-import tardigrade_db
+# Note: `tardigrade_db` is imported lazily inside `__init__` where the
+# native Engine is constructed. Importing at module load would break
+# CI lint paths that touch the `tardigrade_hooks` package without
+# first building the native module.
 
 from .chunker import TextChunker
 from .consolidator import MemoryConsolidator
@@ -61,6 +64,7 @@ class TardigradeClient:
             self._db_path = None
             self._engine = engine
         else:
+            import tardigrade_db  # local: see module-level comment
             self._db_path = str(db_path)
             self._engine = tardigrade_db.Engine(
                 self._db_path, vamana_threshold=vamana_threshold,

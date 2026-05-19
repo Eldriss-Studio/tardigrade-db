@@ -41,7 +41,9 @@ import warnings
 from pathlib import Path
 from typing import Optional
 
-import tardigrade_db
+# `tardigrade_db` is imported lazily inside `_current_version` so this
+# module doesn't fail at import time on CI machines that don't build
+# the native extension. See the matching note in calibrate.py.
 
 from .calibrate import CalibrationResult
 
@@ -67,8 +69,15 @@ def _current_version() -> str:
     """Return the currently-installed tardigrade_db version string.
 
     Wrapped in a function (rather than module-level constant) so tests
-    can monkeypatch the version they expect to see.
+    can monkeypatch the version they expect to see. Import is local so
+    `tardigrade_db` doesn't need to be built for callers that never
+    invoke this function — relevant for CI lint jobs that don't run
+    maturin develop before importing tardigrade_hooks.
     """
+    try:
+        import tardigrade_db  # local: see module-level comment
+    except ImportError:
+        return "unknown"
     return getattr(tardigrade_db, "__version__", "unknown")
 
 

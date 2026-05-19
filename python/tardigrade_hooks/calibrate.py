@@ -77,7 +77,13 @@ from typing import Any, Callable
 
 import numpy as np
 
-import tardigrade_db
+# Note: `tardigrade_db` (the compiled Rust extension) is intentionally
+# *not* imported at module level. CI lint jobs intentionally don't
+# build the native extension, so eager-importing it here would break
+# `from tardigrade_hooks.calibrate import …` for every consumer that
+# doesn't actually run calibration. The two call sites that genuinely
+# need it (`_score_strategy` for `Engine`, `_current_library_version`
+# for `__version__`) import it locally inside the function body.
 
 #: Logger for calibration progress. Calibration runs can take 30 s to a
 #: few minutes, mostly silent. Enable visibility by configuring this
@@ -384,6 +390,8 @@ class LinearSweepStrategy(CalibrationStrategy):
         for the retrieval key; queries all queries via the same
         strategy; counts top-1 / top-5 hits.
         """
+        import tardigrade_db  # local: see module-level comment
+
         n = len(fact_hidden)
         with tempfile.TemporaryDirectory() as tmpdir:
             engine = tardigrade_db.Engine(tmpdir)
@@ -493,4 +501,8 @@ def _model_id_for(model: Any) -> str:
 
 def _current_library_version() -> str:
     """Return tardigrade_db's currently-installed library version."""
+    try:
+        import tardigrade_db  # local: see module-level comment
+    except ImportError:
+        return "unknown"
     return getattr(tardigrade_db, "__version__", "unknown")

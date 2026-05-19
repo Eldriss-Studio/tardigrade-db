@@ -18,7 +18,17 @@ pre-commit:
       # require the native extension. The script simulates the
       # extension's absence and verifies the import chain. Catches
       # regressions like commit `0282db2` did, before push.
-      run: PYTHONPATH=python python3 scripts/lint_lazy_imports.py
+      # Use the .venv's python explicitly so the lint runs with numpy
+      # and the project's other dev deps available. Falling back to
+      # system `python3` (without the venv) makes every import path
+      # fail on missing numpy and the lint silently skips — exactly
+      # the failure mode that let the v0.3.3 CI break slip through.
+      run: |
+        if [ -x .venv/bin/python ]; then
+          PYTHONPATH=python .venv/bin/python scripts/lint_lazy_imports.py
+        else
+          PYTHONPATH=python python3 scripts/lint_lazy_imports.py
+        fi
       skip:
         - merge
         - rebase
