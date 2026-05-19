@@ -24,13 +24,19 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import torch
-from transformers import DynamicCache
+
+# Lazy: `torch` and `transformers` are imported at function-call time
+# rather than module load. CI lint jobs (e.g. bench-smoke-gate) install
+# numpy but not torch / transformers; eager-importing them here would
+# break unrelated lint paths that touch the `tardigrade_hooks` package.
+# Same rationale as the `tardigrade_db` lazy-import in calibrate.py.
 
 
 def _is_softmax_cache_layer(layer) -> bool:
     """Softmax-attention cache layers expose ``.keys`` as a tensor;
     linear/recurrent layers do not."""
+    import torch  # local: see module-level comment
+
     k = getattr(layer, "keys", None)
     return isinstance(k, torch.Tensor)
 
@@ -113,6 +119,10 @@ def _compute_per_layer_hidden_states(
     else:
         input_ids = tokenizer.encode(text, return_tensors="pt").to(device)
     seq_len = int(input_ids.shape[1])
+
+    # Local imports — see module-level comment.
+    import torch
+    from transformers import DynamicCache
 
     cache_in = DynamicCache(config=model.config)
     with torch.no_grad():

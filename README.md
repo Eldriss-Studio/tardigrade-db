@@ -52,6 +52,11 @@ These features are fully tested and documented but were added after the initial 
 
 | Feature | Entry point | Description |
 |---------|------------|-------------|
+| **Hybrid-attention support (v0.3.3)** | `tardigrade_hooks.KVectorKeyStrategy`, `select_query_layer` | K-vector retrieval encoding + per-model `(strategy, layer)` calibration. Unblocks RecurrentGemma, Qwen3-Next, Jamba, Zamba, Falcon-Mamba, Granite-4, MiniMax, Hunyuan-T1, IBM Bamba, Nemotron-H — architectures where mean-pooled hidden states flatline at every layer. |
+| **Calibration registry (v0.3.3)** | `tardigrade_hooks.CalibrationRegistry` | JSON-backed per-model cache at `~/.tardigrade/calibration.json` (override via `$TARDIGRADE_CALIBRATION_PATH`). Atomic writes, version-mismatch warnings, corrupted-file tolerance. Run `select_query_layer(model, tok, registry=reg)` once per new model. |
+| **Pluggable retrieval-key Strategy (v0.3.3)** | `tardigrade_hooks.RetrievalKeyStrategy`, `HiddenStateKeyStrategy`, `KVectorKeyStrategy` | Strategy ABC + two concretes. Lets the library encode retrieval keys from either `hidden_states[L]` (default for uniform-softmax models) or `cache.layers[L].keys` (designed for hybrid models). |
+| **Chat-template adapter (v0.3.2)** | `tardigrade_hooks.ChatTemplateAdapter`, `select_chat_template_adapter` | Pluggable wrap for the engine's `apply_chat_template` quirk. Existing Qwen3 callers see zero change; strict-template tokenizers (Llama-3, Gemma-2, Mistral, Phi-3.5, …) work out of the box. |
+| **`tardigrade chat` CLI (v0.3.2)** | `tardigrade_chat` (CLI: `tardigrade chat`) | Real product you can try: persistent backend stores into a real engine; multi-persona subjectivity via owner scoping; sub-ms recall reported inline. Three backends (persistent / memory / qwen). |
 | **TardigradeClient** | `tardigrade_hooks.client` | High-level facade: `store / query / ingest_file / consolidate` in one object |
 | **TextChunker + FileIngestor** | `tardigrade_hooks.chunker`, `file_ingestor` | Token-bounded chunking (512T, 64T overlap) + sequential Supports edges |
 | **ReflectiveLatentSearch (RLS)** | `tardigrade_hooks.rls` | RETRIEVE→EVALUATE→REFORMULATE→FUSE loop; 5 strategy options |
@@ -60,6 +65,41 @@ These features are fully tested and documented but were added after the initial 
 | **Shared constants** | `tardigrade_hooks.constants` | Single source of truth for all tunable values |
 
 See [docs/guide/python-api.md](docs/guide/python-api.md) for the full API reference.
+
+## Supported Model Architectures
+
+TardigradeDB works with two architectural families. Picking the right retrieval-key encoding matters — the wrong choice silently produces near-random retrieval.
+
+| Family | Examples | Default strategy | What to know |
+|---|---|---|---|
+| **Uniform softmax attention** | Qwen3, Llama-3, Mistral, Gemma-2, Phi-3.5, TinyLlama, GPT-2 | `HiddenStateKeyStrategy(query_layer)` (the pre-v0.3.3 default) | Works out of the box. The static `int(num_hidden_layers × 0.67)` heuristic picks a reasonable layer. Optional: run calibration to pick empirically. |
+| **Hybrid attention** (linear/SSM/recurrent layers mixed with softmax) | Qwen3-Next, RecurrentGemma, Jamba, Zamba, Falcon-Mamba, Granite-4, MiniMax, Hunyuan-T1, IBM Bamba, Nemotron-H | `KVectorKeyStrategy(softmax_layer_idx)` — picked automatically by calibration | Mean-pooled hidden states flatline at every layer on these (per Michalak & Abreu 2025, retrieval lives in attention heads). K-vector encoding at a calibrated softmax layer hits 95–100% top-1. **Calibration is required** — there is no good default layer. |
+
+### Calibrating a new model (one-time, ~30 s on a consumer GPU)
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from tardigrade_hooks import select_query_layer, CalibrationRegistry
+
+tok = AutoTokenizer.from_pretrained("google/recurrentgemma-2b-it")
+model = AutoModelForCausalLM.from_pretrained(
+    "google/recurrentgemma-2b-it",
+    torch_dtype=torch.bfloat16,
+).to("cuda")
+
+# One-time sweep — picks (strategy, layer) empirically, caches at ~/.tardigrade/calibration.json
+reg = CalibrationRegistry()
+result = select_query_layer(model, tok, registry=reg)
+print(f"Best: {result.best_strategy}@{result.best_layer}")
+# Future loads pick up the cached result automatically.
+```
+
+Enable per-layer progress logging on the sweep:
+
+```python
+import logging
+logging.getLogger("tardigrade_hooks.calibrate").setLevel(logging.INFO)
+```
 
 ## Why TardigradeDB?
 
@@ -238,10 +278,20 @@ See [observed benchmark results](https://eldriss-studio.github.io/tardigrade-db/
 
 ```python
 from tardigrade_db import Engine
-from tardigrade_hooks.kp_injector import KnowledgePackStore
+from tardigrade_hooks import CalibrationRegistry, KnowledgePackStore
 
 engine = Engine("/data/agent-memory")
-kps = KnowledgePackStore(engine, model, tokenizer, owner=agent_id)
+
+# Calibration registry — first-run sweep picks the right retrieval-key
+# strategy + layer per model; subsequent runs reuse the cached choice.
+# Required for hybrid-attention models (Qwen3-Next, RecurrentGemma, …);
+# optional but recommended for uniform-softmax models.
+reg = CalibrationRegistry()
+kps = KnowledgePackStore(
+    engine, model, tokenizer,
+    owner=agent_id,
+    calibration_registry=reg,   # consults reg if cached, else uses default heuristic
+)
 
 # Single-memory (8/10, zero prompt tokens)
 pack_id = kps.store("User prefers morning meetings")
@@ -256,6 +306,25 @@ text, tokens, had = kps.generate_with_trace("Tell me about the bookstore")
 
 # Batch-link related facts
 kps.store_linked(["Fact A about Tomoko", "Fact B about Tomoko"])
+```
+
+Override the strategy explicitly when needed:
+
+```python
+from tardigrade_hooks import HiddenStateKeyStrategy, KVectorKeyStrategy
+
+# Force a specific hidden-state layer (uniform-softmax models):
+kps = KnowledgePackStore(
+    engine, model, tokenizer, owner=agent_id,
+    retrieval_key_strategy=HiddenStateKeyStrategy(query_layer=17),
+)
+
+# Force K-vector encoding at a specific softmax attention layer
+# (hybrid models — consult `model.config.layers_block_type` for valid indices):
+kps = KnowledgePackStore(
+    engine, model, tokenizer, owner=agent_id,
+    retrieval_key_strategy=KVectorKeyStrategy(softmax_layer_idx=11),
+)
 ```
 
 ### Why Python Exists in This Project
@@ -379,7 +448,7 @@ To build locally: `just doc` (output in `target/doc/`).
 
 ### CI
 
-Five jobs run on every push and PR:
+Six jobs run on every push and PR:
 
 | Job | What it checks |
 |-----|---------------|
@@ -388,6 +457,7 @@ Five jobs run on every push and PR:
 | **Coverage** | `cargo-llvm-cov` with Codecov upload |
 | **MSRV** | Verifies build on Rust 1.95 |
 | **Documentation** | Rustdoc build with `-D warnings`, deployed to GitHub Pages on main |
+| **Bench V1 Smoke Gate** | Runs the comparable-benchmark smoke matrix (Tardigrade + Letta) and enforces a non-OK-ratio quality gate. Imports `tardigrade_hooks` without building the PyO3 wheel — any module reachable at import time must avoid touching the native extension. The `scripts/lint_lazy_imports.py` pre-commit hook catches this regression class locally. |
 
 ## Quick Start
 
@@ -451,7 +521,7 @@ Two semantically related prompts find each other through **latent-space attentio
 
 ## Testing
 
-### Rust (304 tests)
+### Rust
 
 ```bash
 cargo nextest run --workspace --exclude tdb-python    # all unit/acceptance tests
@@ -461,7 +531,7 @@ cargo fmt --all -- --check                            # format check
 just test-crate tdb-storage                           # single crate
 ```
 
-### Python (359 tests)
+### Python
 
 ```bash
 source .venv/bin/activate
@@ -518,19 +588,19 @@ PYTHONPATH=python python -m tdb_bench compare \
 
 ### Test coverage by layer
 
-| Layer | Crate | Tests | Coverage |
-|-------|-------|-------|----------|
-| Core types | `tdb-core` | 4 | Builder, SynapticBank, KVPack types, tier defaults, retrieval boost |
-| Storage | `tdb-storage` | 38 | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore, DeletionLog, segment compaction |
-| Retrieval | `tdb-retrieval` | 59 | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig, corpus-mean tracking, refinement strategies (None/MeanCentered/LatentPrf) |
-| Organization | `tdb-index` | 24 | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
-| Governance | `tdb-governance` | 25 | Importance scoring, tier hysteresis, recency decay, sweep |
-| Engine | `tdb-engine` | 147 | Write/read, pack API, text storage, delete, state rebuild, Vamana activation, refresh + WAL checkpoint, active governance, semantic edges, multi-agent isolation (3×5), status API, `mem_read_tokens`, refinement modes, `add_view_keys`/`view_count` |
-| Python | pytest | 359 | PyO3 bindings, hook ABC, HF KV hook, KV pack, MCP tools, vLLM connector/prefix client, synthetic-fact injection, retrieval key strategies (17), semantic edges (4), SynapticBank (6), multi-agent (5), connector hardening, thread safety, `mem_read_tokens` parity (3), refinement API (11), cross-encoder reranker (5), shared constants (13), view generator (18), consolidator v2 (14), consolidation sweep v2 (5), chunker (13), file ingestor (12), client facade v2 (10) |
+| Layer | Crate | Coverage |
+|-------|-------|----------|
+| Core types | `tdb-core` | Builder, SynapticBank, KVPack types, tier defaults, retrieval boost |
+| Storage | `tdb-storage` | Q4 round-trip, segment rollover, persistence, SynapticStore, TextStore, DeletionLog, segment compaction |
+| Retrieval | `tdb-retrieval` | Per-token Top5Avg, SLB eviction, pipeline, SIMD dot product, owner filter, PerTokenConfig, corpus-mean tracking, refinement strategies (None/MeanCentered/LatentPrf) |
+| Organization | `tdb-index` | Vamana recall + incremental, trace chains, WAL recovery, concurrency |
+| Governance | `tdb-governance` | Importance scoring, tier hysteresis, recency decay, sweep |
+| Engine | `tdb-engine` | Write/read, pack API, text storage, delete, state rebuild, Vamana activation, refresh + WAL checkpoint, active governance, semantic edges, multi-agent isolation, status API, `mem_read_tokens`, refinement modes, `add_view_keys`/`view_count` |
+| Python | pytest | PyO3 bindings, hook ABC, HF KV hook, KV pack, MCP tools, vLLM connector/prefix client, synthetic-fact injection, retrieval key strategies (calibration + Strategy pattern), semantic edges, SynapticBank, multi-agent isolation, connector hardening, thread safety, `mem_read_tokens` parity, refinement API, cross-encoder reranker, shared constants, view generator, consolidator v2, consolidation sweep v2, chunker, file ingestor, client facade v2, chat-template adapter, retrieval-key strategy + per-model calibration |
 
 ## Research Milestones Implemented
 
-**All prototype phases + P1-P4 architectural unification complete.** Current evidence: 663 tests passing (304 Rust + 359 Python including vLLM round-trip on Qwen3-0.6B) and end-to-end demos/experiments verified.
+**All prototype phases + P1-P4 architectural unification complete.** Evidence: the test suite (Rust unit + acceptance + doctests, plus Python pytest including vLLM round-trip on Qwen3-0.6B) passes on every push, and end-to-end demos/experiments are verified.
 
 ### Storage Layer — Custom from scratch, not a wrapper
 
@@ -600,7 +670,7 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] Durable text persistence — Rust-side `TextStore` (append-only, fsynced) replaces fragile JSON sidecar, with lazy migration of legacy data
 - [x] Delete API — `delete_pack` / `tardigrade_forget` with crash-safe `DeletionLog`
 - [x] **vLLM KV Connector v1 integration** — `tardigrade_vllm.connector.TardigradeConnector` captures KV during vLLM generation (per-request slot extraction, one pack per request via fingerprint dedup), persists as packs, and supports cross-process state sync via `Engine.refresh()`. Validated on Qwen3-0.6B with vLLM 0.19 (27 tests: 22 CPU + 5 GPU + 1 cross-session). **Architectural finding: the v1 connector API is prefix-cache only (token-identical prefix matching) — it cannot carry cross-prompt KV injection.** The "memory" pitch is served by the HuggingFace `KnowledgePackStore` path instead. See [experiments/README.md](docs/experiments/README.md).
-- [x] 663 tests (304 Rust + 359 Python including vLLM connector + integration suites)
+- [x] **Test suite coverage** — Rust unit + acceptance + doctests across all crates, Python pytest with vLLM connector + integration suites. CI gates fmt, clippy --pedantic, typos, cargo-deny, nextest on Ubuntu + macOS, MSRV (1.95), rustdoc with `-D warnings`, and the Bench V1 Smoke Gate.
 - [x] **P1 Architectural Unification** — Active governance (tier boost: Core 1.25×, Validated 1.1×; `evict_draft_packs`), WAL checkpointing, text store consolidation (JSON sidecar removed), dead code cleanup, status API, configurable engine from Python, pluggable retrieval key strategies
 - [x] **TextChunker + FileIngestor** — Token-bounded chunking (512T, 64T overlap, 32T min) with sequential Supports edges between consecutive chunks.
 - [x] **TardigradeClient facade** — `store / query / ingest_file / ingest_text / consolidate / consolidate_all` in one object. Engine created internally at `db_path`.
@@ -608,6 +678,10 @@ PYTHONPATH=python python -m tdb_bench compare \
 - [x] **ReflectiveLatentSearch (RLS)** — RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE loop; 5 strategies: `KeywordExpansion`, `MultiPhrasing`, `EmbeddingExpansion`, `GenerativeReformulation`, `LLMAgentReformulation`; RRF fusion.
 - [x] **CrossEncoderReranker** — Stage-2 re-ranking via `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params); ~30% latency overhead (~86ms vs ~67ms p95).
 - [x] **Shared constants** — `tardigrade_hooks.constants` eliminates all magic values across file ingestion, multi-view, governance, and RLS.
+- [x] **Chat-template adapter (v0.3.2)** — `ChatTemplateAdapter` ABC + `LegacySystemAdapter` (preserves Qwen3 byte-compat) + `UserMessageAdapter` (strict-template default). `select_chat_template_adapter(tokenizer)` Factory probes the tokenizer; existing Qwen3 consumers see zero change, Llama-3 / Gemma-2 / Mistral / Phi-3.5 / Qwen3.5 work out of the box.
+- [x] **`tardigrade chat` CLI (v0.3.2)** — Persistent backend stores into a real engine; sub-ms recall reported inline (~0.4–2.5 ms); multi-persona subjectivity via owner scoping (`--persona NAME`, `/switch NAME`, `/personas`); cross-session continuity via `last_persona.txt`. Three backends: `persistent` (default), `memory` (tests), `qwen` (real LLM, lazy-imported).
+- [x] **Per-model retrieval-key calibration (v0.3.3)** — `select_query_layer(model, tok, registry=reg)` Factory runs a `(strategy, layer)` sweep on a small bundled paraphrased corpus, picks the empirical winner, caches in `CalibrationRegistry` (atomic JSON). `LinearSweepStrategy` enumerates `HiddenStateKeyStrategy × all hidden_states indices + KVectorKeyStrategy × all softmax cache-layer indices`. Tiebreak: top-1 → top-5 → deepest layer.
+- [x] **K-vector retrieval encoding (v0.3.3)** — `KVectorKeyStrategy(softmax_layer_idx)` reads K projections from a specific softmax attention layer instead of mean-pooled hidden states. Empirically on RecurrentGemma-2B-it: hidden-state maxes out at 3/20 top-1; K-vector at layer 11 hits 20/20. Unblocks the full hybrid-attention cohort (Qwen3-Next, Jamba, Zamba, Falcon-Mamba, Granite-4, MiniMax, Hunyuan-T1, IBM Bamba, Nemotron-H).
 - [x] ~~**Full benchmark runs** — LongMemEval 90.9%, LoCoMo 68.2%~~ **[RETRACTED 2026-05-14]** — those measured the lexical fallback adapter on corrupted data. Honest native-engine number on clean LoCoMo: ~36% R@1 at 50-item scale; full-corpus re-run pending. See [`docs/experiments/2026-05-14-bench-audit.md`](docs/experiments/2026-05-14-bench-audit.md).
 
 ### Next up

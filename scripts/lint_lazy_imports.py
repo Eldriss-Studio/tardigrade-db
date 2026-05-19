@@ -35,18 +35,38 @@ _LINT_TIME_IMPORTS: tuple[str, ...] = (
 _SENTINEL = "TDB_LAZY_IMPORT_GATE_NATIVE_BLOCKED"
 
 
-class _HideNative:
-    """``sys.meta_path`` shim that pretends the PyO3 extension is missing.
+#: Modules whose presence at lint-time would break the bench-smoke-gate
+#: CI job (which doesn't install them). Any module reachable from the
+#: lint-time imports must not eagerly require these — defer to
+#: function-scope or PEP 562 lazy attribute resolution.
+_BLOCKED_MODULES: tuple[str, ...] = (
+    "tardigrade_db._native",  # the compiled Rust extension
+    "torch",                  # CI installs numpy only, not torch
+    "transformers",           # likewise
+)
+
+
+class _HideBlocked:
+    """``sys.meta_path`` shim that pretends a set of heavy dev deps are missing.
 
     Raises a ``ModuleNotFoundError`` whose message embeds
     :data:`_SENTINEL` so failures upstream can be attributed to the
     synthetic block (vs. an unrelated missing dev dependency like
     numpy that simply isn't installed).
+
+    Why each blocked module:
+
+    - ``tardigrade_db._native``: PyO3 extension is not built in the
+      bench-smoke-gate CI job (by design — fast feedback).
+    - ``torch`` / ``transformers``: not installed in the CI job; only
+      numpy is. Any module-level `import torch` in the import chain
+      reachable from `tdb_bench` or `tardigrade_hooks.constants`
+      breaks CI silently.
     """
 
     @staticmethod
     def find_spec(name, _path=None, _target=None):
-        if name == "tardigrade_db._native":
+        if name in _BLOCKED_MODULES:
             raise ModuleNotFoundError(
                 f"simulated absence of '{name}' [{_SENTINEL}]",
             )
@@ -54,7 +74,7 @@ class _HideNative:
 
 
 def main() -> int:
-    sys.meta_path.insert(0, _HideNative())
+    sys.meta_path.insert(0, _HideBlocked())
 
     failures: list[tuple[str, str]] = []
     skipped: list[tuple[str, str]] = []
