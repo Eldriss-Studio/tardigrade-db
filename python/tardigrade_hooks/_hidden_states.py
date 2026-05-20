@@ -142,7 +142,7 @@ def _compute_per_layer_hidden_states(
     else:
         kv = cache_in
 
-    cfg = model.config
+    cfg = _text_config(model.config)
     num_kv_heads = getattr(cfg, "num_key_value_heads", cfg.num_attention_heads)
     head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
     kv_dim = num_kv_heads * head_dim
@@ -186,6 +186,42 @@ _RECURRENT_BLOCK_TYPES: frozenset[str] = frozenset({
 })
 
 
+def _text_config(cfg: Any) -> Any:
+    """Drill into the text-tower config for multimodal models.
+
+    HuggingFace multimodal configs (``Gemma3Config``, ``LlavaConfig``,
+    ``Qwen2VLConfig``, ``Phi4MMConfig``, …) hold the language attributes
+    inside ``cfg.text_config`` rather than at the root. The multimodal
+    Composite shape is detectable: such configs genuinely lack
+    ``num_hidden_layers`` at the top level. This helper drills only
+    when that signature is present, leaving text-only configs (and
+    test mocks that set ``num_hidden_layers`` on the top object)
+    untouched.
+
+    Tardigrade-db routes every config-attribute read through this helper
+    at intake so consumers can use any text-decoder, including ones
+    bundled with a vision encoder.
+
+    Falls back to the original ``cfg`` when:
+    - the top-level already exposes ``num_hidden_layers`` (text-only,
+      common case — and the case existing test fixtures using
+      ``MagicMock`` / ``SimpleNamespace`` rely on),
+    - ``get_text_config`` is absent (very old HF configs predating
+      the accessor), or
+    - the accessor returns falsy.
+    """
+    # Skip drilling when the top-level already has what we need. This
+    # short-circuit makes the helper a strict no-op for text-only and
+    # for the conventional MagicMock/SimpleNamespace test shapes.
+    if hasattr(cfg, "num_hidden_layers"):
+        return cfg
+    accessor = getattr(cfg, "get_text_config", None)
+    if accessor is None:
+        return cfg
+    resolved = accessor()
+    return resolved if resolved is not None else cfg
+
+
 def layer_kind_labels(cfg: Any, n_hidden_states: int) -> list[str]:
     """Return a label per ``hidden_states`` index.
 
@@ -197,7 +233,11 @@ def layer_kind_labels(cfg: Any, n_hidden_states: int) -> list[str]:
     all normalise to ``"attention"`` — they're interchangeable for tardigrade's
     retrieval path. Recurrent / linear-attention variants (Griffin recurrent,
     Mamba, DeltaNet) normalise to ``"recurrent"``.
+
+    Drills into ``cfg.text_config`` on multimodal models so the block-type
+    vocabulary lookup finds the language tower's per-layer typing.
     """
+    cfg = _text_config(cfg)
     block_types = getattr(cfg, "layers_block_type", None) or getattr(
         cfg, "layer_types", None
     )
@@ -237,6 +277,11 @@ def softmax_layer_count(cfg: Any) -> int:
     families (RecurrentGemma, Jamba, Qwen3-Next, Granite-4) expose one
     of these fields. Future arrivals that don't will need a probe-based
     fallback here.
+
+    Multimodal-aware: drills into ``cfg.text_config`` so models bundled
+    with a vision encoder (Gemma 3, Llama 3.2 Vision, Qwen-VL) are
+    counted from the language tower.
     """
+    cfg = _text_config(cfg)
     labels = layer_kind_labels(cfg, cfg.num_hidden_layers + 1)
     return sum(1 for label in labels[1:] if label == "attention")

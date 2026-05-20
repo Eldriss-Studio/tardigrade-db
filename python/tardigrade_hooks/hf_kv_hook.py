@@ -39,6 +39,10 @@ class HuggingFaceKVHook(TardigradeHook):
         self.use_hidden_states = use_hidden_states
 
         if model_config is not None:
+            # Drill into text_config for multimodal models. No-op for
+            # text-only. See ``_text_config``.
+            from ._hidden_states import _text_config
+            model_config = _text_config(model_config)
             self.hidden_size = model_config.hidden_size
             self.num_kv_heads = getattr(model_config, "num_key_value_heads", None)
             if self.num_kv_heads is None:

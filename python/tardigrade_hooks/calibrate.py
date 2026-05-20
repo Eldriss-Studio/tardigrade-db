@@ -244,8 +244,12 @@ class LinearSweepStrategy(CalibrationStrategy):
             RetrievalKeyStrategy,
         )
 
+        from ._hidden_states import _text_config
+
         adapter = select_chat_template_adapter(tokenizer)
-        cfg = model.config
+        # Drill into text_config for multimodal models (Gemma 3, Llama 3.2
+        # Vision, …). Top-level config returned for text-only.
+        cfg = _text_config(model.config)
         n_layers = int(cfg.num_hidden_layers)
         hidden_size = int(cfg.hidden_size)
 
@@ -463,13 +467,17 @@ def select_query_layer(
             return cached
 
     if tokenizer is None:
-        n_layers = int(model.config.num_hidden_layers)
+        # Multimodal-aware cfg resolution. ``_text_config`` is a no-op
+        # for text-only models.
+        from ._hidden_states import _text_config
+        cfg = _text_config(model.config)
+        n_layers = int(cfg.num_hidden_layers)
         return CalibrationResult(
             model_id=model_id,
             tardigrade_db_version=_current_library_version(),
             timestamp_iso=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
             n_layers=n_layers,
-            hidden_size=int(model.config.hidden_size),
+            hidden_size=int(cfg.hidden_size),
             best_layer=int(n_layers * DEFAULT_CAPTURE_LAYER_RATIO),
             scores=(),
         )

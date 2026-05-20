@@ -78,8 +78,11 @@ class MultiLayerQuery:
         with torch.no_grad():
             out = model(**inputs, output_hidden_states=True)
 
-        n_layers = model.config.num_hidden_layers
-        hidden_size = model.config.hidden_size
+        # Drill into text_config for multimodal models. No-op for text-only.
+        from ._hidden_states import _text_config
+        cfg = _text_config(model.config)
+        n_layers = cfg.num_hidden_layers
+        hidden_size = cfg.hidden_size
 
         ranked_lists = []
         for ratio in self._layer_ratios:

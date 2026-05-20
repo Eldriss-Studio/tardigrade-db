@@ -883,3 +883,167 @@ def test_kp_build_layer_payloads_skips_layers_without_keys(kps):
 
     payloads = kps._build_layer_payloads(_FakeKV(), seq_len)
     assert [li for li, _ in payloads] == [0, 2]
+
+
+# -- v0.4.1: multimodal-config support ----------------------------------------
+#
+# HuggingFace multimodal configs (Gemma3Config, LlavaConfig, Qwen2VLConfig, …)
+# hold the language attributes inside ``cfg.text_config`` rather than at the
+# root. ``cfg.get_text_config()`` is the canonical accessor — present on both
+# multimodal and text-only configs. For text-only it returns ``self`` (no-op);
+# for multimodal it returns the text-tower sub-config. Tardigrade-db routes
+# every config-attribute read through it at intake.
+
+
+def _mock_multimodal_model(n_text_layers=34, text_hidden=2560,
+                           n_heads=16, n_kv_heads=8, head_dim=160,
+                           block_types=None):
+    """Mocked Gemma3-shape model: top-level config exposes get_text_config()
+    returning the text-tower SimpleNamespace with the real attrs."""
+    from types import SimpleNamespace
+    text_cfg = SimpleNamespace(
+        num_hidden_layers=n_text_layers,
+        hidden_size=text_hidden,
+        num_attention_heads=n_heads,
+        num_key_value_heads=n_kv_heads,
+        head_dim=head_dim,
+    )
+    if block_types is not None:
+        text_cfg.layers_block_type = block_types
+    vision_cfg = SimpleNamespace(num_hidden_layers=27, hidden_size=1152)
+    top_cfg = SimpleNamespace(
+        text_config=text_cfg,
+        vision_config=vision_cfg,
+        name_or_path="mock/multimodal-test-model",
+        get_text_config=lambda: text_cfg,
+    )
+    return SimpleNamespace(config=top_cfg)
+
+
+def test_is_supported_drills_into_text_config_on_multimodal_model():
+    """GIVEN a model whose config follows the multimodal Composite shape
+    (top-level lacks num_hidden_layers; nested text_config carries it),
+    WHEN is_supported runs,
+    THEN it returns a supported verdict whose counts reflect the
+    text tower, not the empty top-level."""
+    from tardigrade_hooks import is_supported
+
+    model = _mock_multimodal_model(n_text_layers=34, text_hidden=2560)
+
+    # _WorkingTokenizer is defined in test_compatibility.py — duplicate the
+    # minimal shape inline here to avoid cross-module test imports.
+    class _Tok:
+        chat_template = (
+            '{% for message in messages %}{{ message["content"] }}{% endfor %}'
+        )
+        def apply_chat_template(self, messages, **kwargs):
+            return "".join(m["content"] for m in messages)
+
+    report = is_supported(model, _Tok())
+
+    assert report.is_supported is True
+    assert report.n_hidden_layers == 34
+    assert report.n_softmax_layers == 34
+    assert report.architecture == "uniform_softmax"
+    assert report.blockers == ()
+
+
+def test_kp_constructs_from_multimodal_model_with_text_tower_dimensions(engine, tokenizer):
+    """GIVEN a mocked multimodal model + real engine + tokenizer,
+    WHEN KnowledgePackStore is constructed,
+    THEN __init__ does not raise; n_layers / hidden_size / num_kv_heads /
+    kv_dim all reflect the text-tower values."""
+    model = _mock_multimodal_model(
+        n_text_layers=34, text_hidden=2560,
+        n_heads=16, n_kv_heads=8, head_dim=160,
+    )
+
+    kps = KnowledgePackStore(engine, model, tokenizer, owner=1)
+
+    assert kps.n_layers == 34
+    assert kps.n_softmax_layers == 34
+    assert kps.hidden_size == 2560
+    assert kps.num_kv_heads == 8
+    assert kps.head_dim == 160
+    assert kps.kv_dim == 8 * 160
+
+
+def test_kp_text_only_models_unaffected_by_text_config_resolution(kps):
+    """REGRESSION: GIVEN the existing GPT-2 fixture (real HF config that
+    exposes get_text_config returning self),
+    WHEN KnowledgePackStore reads its dimensions,
+    THEN n_layers / hidden_size match the pre-fix values
+    (GPT-2 = 12 layers, 768 hidden)."""
+    assert kps.n_layers == 12
+    assert kps.n_softmax_layers == 12
+    assert kps.hidden_size == 768
+
+
+def test_select_query_layer_tokenizer_none_reads_text_config_on_multimodal():
+    """GIVEN a multimodal model + tokenizer=None (hosted-API fallback path),
+    WHEN select_query_layer runs,
+    THEN it derives n_layers and hidden_size from text_config (34 layers,
+    2560 hidden), not from the empty top-level config. Exercises the
+    real production code path at calibrate.py — no spy, no monkeypatch,
+    no forward pass (the tokenizer=None branch returns a heuristic
+    CalibrationResult without sweeping)."""
+    from tardigrade_hooks import select_query_layer
+
+    model = _mock_multimodal_model(n_text_layers=34, text_hidden=2560)
+
+    # tokenizer=None triggers the hosted-API fallback that reads
+    # num_hidden_layers / hidden_size directly off model.config.
+    result = select_query_layer(model, tokenizer=None, registry=None)
+
+    assert result.n_layers == 34
+    assert result.hidden_size == 2560
+
+
+def test_is_supported_still_rejects_genuinely_empty_configs():
+    """REGRESSION: GIVEN a model whose config has NO num_hidden_layers,
+    NO text_config, AND NO get_text_config method (a genuinely broken
+    or unrecognised config shape),
+    WHEN is_supported runs,
+    THEN it still returns is_supported=False with a blocker referencing
+    num_hidden_layers. Guards against the multimodal-resolution helper
+    accidentally masking legitimate failures."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks import is_supported
+
+    class _Tok:
+        chat_template = '{% for m in messages %}{{ m["content"] }}{% endfor %}'
+        def apply_chat_template(self, messages, **kwargs):
+            return "".join(m["content"] for m in messages)
+
+    model = SimpleNamespace(config=SimpleNamespace())
+
+    report = is_supported(model, _Tok())
+
+    assert report.is_supported is False
+    assert any("num_hidden_layers" in b for b in report.blockers)
+
+
+def test_softmax_layer_count_drills_into_text_config_for_block_types():
+    """GIVEN a multimodal-shaped config whose text_config carries
+    layers_block_type (Gemma 3 / Llama 3.2 Vision style),
+    WHEN softmax_layer_count runs against the top-level cfg,
+    THEN it counts attention-typed layers from the text tower, not
+    from the empty top-level."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import softmax_layer_count
+
+    text_cfg = SimpleNamespace(
+        num_hidden_layers=4,
+        layers_block_type=[
+            "sliding_attention", "full_attention",
+            "sliding_attention", "full_attention",
+        ],
+    )
+    top_cfg = SimpleNamespace(
+        text_config=text_cfg,
+        get_text_config=lambda: text_cfg,
+    )
+
+    assert softmax_layer_count(top_cfg) == 4

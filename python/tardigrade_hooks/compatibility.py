@@ -32,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .chat_template_adapter import select_chat_template_adapter
-from ._hidden_states import softmax_layer_count
+from ._hidden_states import _text_config, softmax_layer_count
 
 
 @dataclass(frozen=True)
@@ -107,7 +107,10 @@ def is_supported(model, tokenizer) -> CompatibilityReport:
     notes: list[str] = []
     blockers: list[str] = []
 
-    cfg = getattr(model, "config", None)
+    # Drill into text_config for multimodal models. Top-level returned
+    # untouched for text-only configs (no-op). See ``_text_config``.
+    top_cfg = getattr(model, "config", None)
+    cfg = _text_config(top_cfg) if top_cfg is not None else None
     n_hidden_layers: int = (
         getattr(cfg, "num_hidden_layers", 0) if cfg is not None else 0
     )

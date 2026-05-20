@@ -8,7 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_no changes yet_
+### Bug Fixes
+
+- **Multimodal HuggingFace models** (Gemma 3, Llama 3.2 Vision, Qwen-VL, Phi-4-MM) now work end-to-end with `is_supported`, `KnowledgePackStore`, `select_query_layer`, and the rest of `tardigrade_hooks`. Pre-fix, multimodal configs hold language attributes inside `cfg.text_config` rather than at the root, and `is_supported` rejected them with `num_hidden_layers is missing`. Tardigrade-db now routes config-attribute reads through HF's canonical `cfg.get_text_config()` accessor at every intake site (7 sites across `_hidden_states`, `compatibility`, `kp_injector`, `calibrate`, `hf_kv_hook`, `multi_layer_query`). Text-only models are unaffected (conditional drill — only fires when the top-level cfg genuinely lacks `num_hidden_layers`).
 
 ## [0.4.0] — 2026-05-19
 

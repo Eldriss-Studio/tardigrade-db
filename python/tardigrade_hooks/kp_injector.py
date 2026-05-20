@@ -27,7 +27,7 @@ from .constants import (
     EDGE_SUPPORTS,
 )
 from .encoding import encode_per_token
-from ._hidden_states import _softmax_layer_payloads, softmax_layer_count
+from ._hidden_states import _softmax_layer_payloads, _text_config, softmax_layer_count
 from .multi_composer import NaiveConcatComposer
 from transformers import DynamicCache
 
@@ -87,7 +87,10 @@ class KnowledgePackStore:
         # get UserMessageAdapter automatically. See chat_template_adapter.py.
         self.adapter = adapter or select_chat_template_adapter(tokenizer)
 
-        cfg = model.config
+        # Drill into text_config for multimodal models (Gemma 3, Llama 3.2
+        # Vision, Qwen-VL). For text-only models this is a no-op (returns
+        # the same cfg). See ``_text_config`` for the contract.
+        cfg = _text_config(model.config)
         self.n_layers = cfg.num_hidden_layers
         # ``n_softmax_layers`` — the architecture-aware count used by both
         # the storage write filter (skip recurrent layers) and the read-side
