@@ -39,22 +39,32 @@ from transformers import DynamicCache
 # no module-level reference is needed.
 
 
-def _move_cache_to_device(cache, device):
-    """Return a new ``DynamicCache`` with all layers moved to ``device``.
+def _move_cache_to_device(cache, device, dtype=None):
+    """Return a new ``DynamicCache`` with all layers moved to ``device``
+    (and optionally cast to ``dtype``).
 
     Composers in :mod:`tardigrade_hooks.multi_composer` build caches from raw
-    numpy data and have no model handle to learn the target device from —
-    they return CPU tensors by design. Callers that hold the model pass the
-    composed cache through this helper so it can be injected into a GPU
-    model. When the cache is already on the target device, the ``.to()``
-    calls are no-ops.
+    numpy data and have no model handle to learn the target device or
+    target dtype from — they return CPU fp32 tensors by design. Callers
+    that hold the model pass the composed cache through this helper so it
+    can be injected into a GPU model.
+
+    The ``dtype`` argument is required for bf16/fp16 models (including
+    4-bit quantized models with ``bnb_4bit_compute_dtype=torch.bfloat16``);
+    without it, attention raises ``RuntimeError: Expected query, key, and
+    value to have the same dtype``. When the cache is already on the
+    target device + dtype, the ``.to()`` calls are no-ops.
     """
     if not cache.layers:
         return cache
     moved = DynamicCache()
     for li in range(len(cache.layers)):
         layer = cache.layers[li]
-        moved.update(layer.keys.to(device), layer.values.to(device), li)
+        if layer.keys is None or layer.values is None:
+            continue  # sparse cache (hybrid model) — preserve gaps
+        kt = layer.keys.to(device=device, dtype=dtype) if dtype is not None else layer.keys.to(device)
+        vt = layer.values.to(device=device, dtype=dtype) if dtype is not None else layer.values.to(device)
+        moved.update(kt, vt, li)
     return moved
 
 
@@ -539,7 +549,11 @@ class KnowledgePackStore:
         cache = composer.compose(
             packs, self.num_kv_heads, self.head_dim, self.kv_dim, self.n_layers
         )
-        cache = _move_cache_to_device(cache, device)
+        # Match model dtype so multi-pack works on bf16 / fp16 / 4-bit
+        # models. Composers produce fp32 CPU tensors; without this cast
+        # attention raises a dtype-mismatch RuntimeError.
+        model_dtype = next(self.model.parameters()).dtype
+        cache = _move_cache_to_device(cache, device, dtype=model_dtype)
 
         # Use the highest-scored pack's stored text for adapter-side
         # boundary computation. Multiple packs are composed in the cache;
@@ -607,7 +621,11 @@ class KnowledgePackStore:
         cache = composer.compose(
             packs, self.num_kv_heads, self.head_dim, self.kv_dim, self.n_layers
         )
-        cache = _move_cache_to_device(cache, device)
+        # Match model dtype so multi-pack works on bf16 / fp16 / 4-bit
+        # models. Composers produce fp32 CPU tensors; without this cast
+        # attention raises a dtype-mismatch RuntimeError.
+        model_dtype = next(self.model.parameters()).dtype
+        cache = _move_cache_to_device(cache, device, dtype=model_dtype)
 
         # Multi-pack composition: use the top-ranked pack's stored text for
         # adapter-side boundary computation. The composed cache spans all

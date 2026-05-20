@@ -885,6 +885,39 @@ def test_kp_build_layer_payloads_skips_layers_without_keys(kps):
     assert [li for li, _ in payloads] == [0, 2]
 
 
+def test_move_cache_to_device_casts_to_target_dtype():
+    """RED contract: ``_move_cache_to_device`` must accept a target dtype
+    so callers can match the model's compute dtype. Multi-pack composers
+    build fp32 tensors from numpy data; on a bf16/fp16 model (4-bit
+    quantized included), feeding those into attention raises
+    ``RuntimeError: Expected query, key, and value to have the same
+    dtype``. This was the failure mode when wiring multi-pack retrieval
+    into casper-spike on gemma-3-4b 4-bit.
+    """
+    from tardigrade_hooks.kp_injector import _move_cache_to_device
+    from transformers import DynamicCache
+
+    # Build a cache with explicitly fp32 tensors, then move + cast to bf16.
+    src = DynamicCache()
+    src.update(
+        torch.zeros(1, 4, 5, 16, dtype=torch.float32),
+        torch.zeros(1, 4, 5, 16, dtype=torch.float32),
+        0,
+    )
+    src.update(
+        torch.zeros(1, 4, 5, 16, dtype=torch.float32),
+        torch.zeros(1, 4, 5, 16, dtype=torch.float32),
+        1,
+    )
+
+    moved = _move_cache_to_device(src, device="cpu", dtype=torch.bfloat16)
+
+    assert moved.layers[0].keys.dtype == torch.bfloat16
+    assert moved.layers[0].values.dtype == torch.bfloat16
+    assert moved.layers[1].keys.dtype == torch.bfloat16
+    assert moved.layers[1].values.dtype == torch.bfloat16
+
+
 # -- v0.4.1: multimodal-config support ----------------------------------------
 #
 # HuggingFace multimodal configs (Gemma3Config, LlavaConfig, Qwen2VLConfig, …)
