@@ -137,12 +137,14 @@ def create_app(engine, kv_fn: KvCaptureFn | None = None) -> FastAPI:
     def query(req: QueryRequest) -> QueryResponse:
         key, _ = app.state.kv_fn(req.query_text)
         rows = engine.mem_read_pack(key, req.k, req.owner)
+        # `mem_read_pack` always populates the `text` field — it's the
+        # pack's stored text or None. No secondary `pack_text` fetch.
         return QueryResponse(
             results=[
                 QueryResult(
                     pack_id=int(r["pack_id"]),
                     score=float(r["score"]),
-                    text=r.get("text") or engine.pack_text(r["pack_id"]),
+                    text=r["text"],
                 )
                 for r in rows
             ],
