@@ -218,7 +218,21 @@
 <a href=#183 id=183 data-nosnippet>183</a>        </span>)
 <a href=#184 id=184 data-nosnippet>184</a>    )]
 <a href=#185 id=185 data-nosnippet>185</a>    </span>FlushFailed { failed_offset: u64, detail: String },
-<a href=#186 id=186 data-nosnippet>186</a>}
-<a href=#187 id=187 data-nosnippet>187</a>
-<a href=#188 id=188 data-nosnippet>188</a><span class="kw">pub type </span><span class="prelude-ty">Result</span>&lt;T&gt; = std::result::Result&lt;T, TardigradeError&gt;;
+<a href=#186 id=186 data-nosnippet>186</a>
+<a href=#187 id=187 data-nosnippet>187</a>    <span class="doccomment">/// Returned by the token-matrix write API when the caller passes a
+<a href=#188 id=188 data-nosnippet>188</a>    /// matrix with zero rows, zero columns, or a flat buffer whose
+<a href=#189 id=189 data-nosnippet>189</a>    /// length disagrees with `n_tokens * dim`.
+<a href=#190 id=190 data-nosnippet>190</a>    </span><span class="attr">#[error(
+<a href=#191 id=191 data-nosnippet>191</a>        <span class="string">"empty or malformed token matrix: n_tokens={n_tokens}, dim={dim}, buffer_len={buffer_len}"
+<a href=#192 id=192 data-nosnippet>192</a>    </span>)]
+<a href=#193 id=193 data-nosnippet>193</a>    #[diagnostic(
+<a href=#194 id=194 data-nosnippet>194</a>        code(tdb::write::empty_token_matrix),
+<a href=#195 id=195 data-nosnippet>195</a>        help(
+<a href=#196 id=196 data-nosnippet>196</a>            <span class="string">"mem_write_pack_tokens requires a (n_tokens, dim) matrix with n_tokens &gt;= 1 and dim &gt;= 1; verify the caller's token capture is not returning an empty tensor"
+<a href=#197 id=197 data-nosnippet>197</a>        </span>)
+<a href=#198 id=198 data-nosnippet>198</a>    )]
+<a href=#199 id=199 data-nosnippet>199</a>    </span>EmptyTokenMatrix { n_tokens: usize, dim: usize, buffer_len: usize },
+<a href=#200 id=200 data-nosnippet>200</a>}
+<a href=#201 id=201 data-nosnippet>201</a>
+<a href=#202 id=202 data-nosnippet>202</a><span class="kw">pub type </span><span class="prelude-ty">Result</span>&lt;T&gt; = std::result::Result&lt;T, TardigradeError&gt;;
 </code></pre></div></section></main></body></html>
