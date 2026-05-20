@@ -1,0 +1,11 @@
+{
+  "phase": 1,
+  "topic": "list_packs metadata vs full",
+  "n_packs": 10000,
+  "n_runs": 5,
+  "legacy_seconds_median": 0.07392972100024053,
+  "metadata_seconds_median": 0.057020919000933645,
+  "speedup": 1.296536820092816,
+  "pass_criterion_speedup": 8.0,
+  "passed": false
+}

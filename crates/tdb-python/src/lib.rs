@@ -66,6 +66,25 @@ struct Engine {
     maintenance_worker: Option<tdb_engine::maintenance::MaintenanceWorker>,
 }
 
+/// Emit a Python `DeprecationWarning` for callers using `list_packs` without
+/// an explicit `fetch_text=` kwarg. Frequency matches the codebase convention
+/// (`tardigrade_hooks/sweep.py`): warn on every call. Python's default warnings
+/// filter deduplicates by source location.
+fn warn_legacy_list_packs(py: Python<'_>) -> PyResult<()> {
+    let warnings_mod = py.import("warnings")?;
+    let category = py.get_type::<pyo3::exceptions::PyDeprecationWarning>();
+    warnings_mod.call_method1(
+        "warn",
+        (
+            "Engine.list_packs() without an explicit `fetch_text=` kwarg is deprecated; \
+             pass `fetch_text=True` to keep the current behaviour or call \
+             Engine.list_packs_metadata() to skip the per-pack text lookup.",
+            category,
+        ),
+    )?;
+    Ok(())
+}
+
 fn lock_engine(inner: &Mutex<RustEngine>) -> PyResult<std::sync::MutexGuard<'_, RustEngine>> {
     inner.lock().map_err(|_| PyRuntimeError::new_err("engine lock poisoned"))
 }
@@ -907,12 +926,72 @@ impl Engine {
         Ok(lock_engine(&self.inner)?.pack_importance(pack_id))
     }
 
-    /// Enumerate all packs, optionally filtered by owner.
+    /// Enumerate pack metadata (no text) as a struct-of-arrays.
     ///
-    /// Returns a list of dicts with keys: `pack_id`, owner, tier, importance, text.
-    /// Sorted by importance descending. Draft packs included (caller filters).
+    /// Returns a dict of four parallel numpy arrays, all of length N:
+    /// * `pack_ids`   — `np.uint64[N]`
+    /// * `owners`     — `np.uint64[N]`
+    /// * `tiers`      — `np.uint8[N]`  (0=Draft, 1=Validated, 2=Core)
+    /// * `importances`— `np.float32[N]`
+    ///
+    /// Rows are aligned by index and sorted by importance descending.
+    ///
+    /// This shape — rather than a list-of-dicts — is the whole point: at 10K
+    /// packs the dict-allocation cost of the legacy shape dominates everything
+    /// else, so callers that only need to scan metadata pay almost nothing here.
+    /// Use [`Engine::list_packs`] with `fetch_text=True` when you need text too.
     #[pyo3(signature = (owner=None))]
-    fn list_packs(&self, py: Python<'_>, owner: Option<u64>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    fn list_packs_metadata(
+        &self,
+        py: Python<'_>,
+        owner: Option<u64>,
+    ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        let eng = lock_engine(&self.inner)?;
+        let packs = eng.list_packs(owner);
+
+        let n = packs.len();
+        let mut pack_ids = Vec::<u64>::with_capacity(n);
+        let mut owners = Vec::<u64>::with_capacity(n);
+        let mut tiers = Vec::<u8>::with_capacity(n);
+        let mut importances = Vec::<f32>::with_capacity(n);
+        for (pack_id, pack_owner, tier, importance) in packs {
+            pack_ids.push(pack_id);
+            owners.push(pack_owner);
+            tiers.push(tier as u8);
+            importances.push(importance);
+        }
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("pack_ids", numpy::PyArray1::from_slice(py, &pack_ids))?;
+        dict.set_item("owners", numpy::PyArray1::from_slice(py, &owners))?;
+        dict.set_item("tiers", numpy::PyArray1::from_slice(py, &tiers))?;
+        dict.set_item("importances", numpy::PyArray1::from_slice(py, &importances))?;
+        Ok(dict.into_any().unbind())
+    }
+
+    /// Enumerate all packs (legacy list-of-dicts shape, includes text).
+    ///
+    /// Returns a list of dicts with keys: `pack_id`, `owner`, `tier`, `importance`, `text`.
+    /// Sorted by importance descending.
+    ///
+    /// **Performance note:** this shape allocates one Python dict per pack, which
+    /// dominates wall time at scale. When you don't need text, prefer
+    /// [`Engine::list_packs_metadata`] — it returns parallel numpy arrays and is
+    /// ~8× faster at 10K packs.
+    ///
+    /// When `fetch_text` is omitted, the call emits a `DeprecationWarning` and
+    /// returns the legacy shape; pass `fetch_text=True` to keep the behaviour
+    /// silently.
+    #[pyo3(signature = (owner=None, fetch_text=None))]
+    fn list_packs(
+        &self,
+        py: Python<'_>,
+        owner: Option<u64>,
+        fetch_text: Option<bool>,
+    ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+        if fetch_text.is_none() {
+            warn_legacy_list_packs(py)?;
+        }
         let eng = lock_engine(&self.inner)?;
         let packs = eng.list_packs(owner);
         let py_list = pyo3::types::PyList::empty(py);

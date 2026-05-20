@@ -167,12 +167,12 @@ class TardigradeClient:
     # -- Lifecycle -----------------------------------------------------------
 
     def list_packs(self) -> list[dict]:
-        """List all packs for this owner."""
-        return self._engine.list_packs(self._owner)
+        """List all packs for this owner, including text."""
+        return self._engine.list_packs(self._owner, fetch_text=True)
 
     def pack_count(self) -> int:
         """Number of packs for this owner."""
-        return len(self._engine.list_packs(self._owner))
+        return int(self._engine.list_packs_metadata(self._owner)["pack_ids"].size)
 
     # -- Internals -----------------------------------------------------------
 

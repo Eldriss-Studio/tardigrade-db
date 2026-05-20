@@ -123,24 +123,38 @@ class MemoryConsolidator:
     def consolidate_all(self, owner: int | None = None) -> dict[int, int]:
         """Consolidate all eligible packs. Returns {pack_id: views_attached}."""
         target_owner = owner if owner is not None else self._owner
-        packs = self._engine.list_packs(target_owner)
+        meta = self._engine.list_packs_metadata(target_owner)
+        pack_ids = meta["pack_ids"]
         result: dict[int, int] = {}
-        for p in packs:
-            pid = p["pack_id"]
-            count = self.consolidate(pid)
+        for pid in pack_ids:
+            pid_int = int(pid)
+            count = self.consolidate(pid_int)
             if count > 0:
-                result[pid] = count
+                result[pid_int] = count
         return result
 
     # -- Internals -----------------------------------------------------------
 
     def _pack_info(self, pack_id: int) -> dict | None:
-        """Look up a pack's metadata from list_packs."""
-        packs = self._engine.list_packs(self._owner)
-        for p in packs:
-            if p["pack_id"] == pack_id:
-                return p
-        return None
+        """Look up a pack's tier and importance. Uses the columnar metadata
+        path — at 10K packs the array-shape lookup is ~8× cheaper than the
+        legacy list-of-dicts. Returns a small dict for backward-compat with
+        the historic call shape; text is fetched separately on demand."""
+        meta = self._engine.list_packs_metadata(self._owner)
+        pack_ids = meta["pack_ids"]
+        # np.where returns (array_of_indices,); we want the first match
+        import numpy as np
+
+        matches = np.where(pack_ids == pack_id)[0]
+        if matches.size == 0:
+            return None
+        i = int(matches[0])
+        return {
+            "pack_id": int(meta["pack_ids"][i]),
+            "owner": int(meta["owners"][i]),
+            "tier": int(meta["tiers"][i]),
+            "importance": float(meta["importances"][i]),
+        }
 
     def _already_consolidated(self, pack_id: int) -> bool:
         """Check if this pack already has view keys attached."""

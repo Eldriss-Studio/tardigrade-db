@@ -215,7 +215,7 @@ def tardigrade_list_all() -> list:
     """
     kps = _get_kps()
     results = []
-    for entry in kps.engine.list_packs(kps.owner):
+    for entry in kps.engine.list_packs(kps.owner, fetch_text=True):
         pack_id = entry["pack_id"]
         links = kps.engine.pack_links(pack_id)
         results.append({

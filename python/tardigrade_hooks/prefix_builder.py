@@ -35,7 +35,7 @@ class MemoryPrefixBuilder:
         self._tokenizer = tokenizer
 
     def build(self) -> PrefixResult:
-        packs = self._engine.list_packs(owner=self._owner)
+        packs = self._engine.list_packs(owner=self._owner, fetch_text=True)
 
         eligible = []
         for p in packs:
