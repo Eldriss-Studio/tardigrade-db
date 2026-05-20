@@ -1372,6 +1372,40 @@ impl Engine {
         self.persist_packs_coalesced(&drained)
     }
 
+    /// Persist a known-size batch of packs with a single coalesced fsync.
+    ///
+    /// Eager counterpart to the streaming [`Engine::open_with_write_buffer`]:
+    /// the caller already has all N packs in hand and wants them durably
+    /// persisted now, in input order, sharing one `pool.append_batch` and
+    /// one text-store commit. Returns the assigned pack ids — strictly
+    /// increasing, aligned to the input slice index.
+    ///
+    /// If a streaming write buffer is configured, any pending entries are
+    /// flushed first so the batch's writes land after them. The batch
+    /// itself is not pushed into the buffer; it bypasses to its own fsync.
+    ///
+    /// An empty input is a no-op returning an empty vec.
+    pub fn mem_write_batch_packs(&mut self, packs: &[KVPack]) -> Result<Vec<PackId>> {
+        if packs.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Maintain write-ordering across the two batched APIs: any
+        // already-buffered packs land before this batch.
+        if self.write_buffer.is_some() {
+            self.flush_buffer()?;
+        }
+        let mut ids = Vec::with_capacity(packs.len());
+        let mut id_pack_pairs = Vec::with_capacity(packs.len());
+        for pack in packs {
+            let id = self.next_pack_id;
+            self.next_pack_id += 1;
+            ids.push(id);
+            id_pack_pairs.push((id, pack.clone()));
+        }
+        self.persist_packs_coalesced(&id_pack_pairs)?;
+        Ok(ids)
+    }
+
     /// Persist a slice of `(pack_id, pack)` tuples with a single
     /// `pool.append_batch` fsync. The pack ids must already be
     /// reserved (we do not increment `next_pack_id` here).

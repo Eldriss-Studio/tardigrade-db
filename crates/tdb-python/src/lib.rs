@@ -15,6 +15,11 @@ use pyo3::prelude::*;
 
 use tdb_engine::engine::Engine as RustEngine;
 
+/// One element of a `mem_write_batch_packs` input list: a tuple of
+/// `(owner, retrieval_key, layer_payloads, salience, text)`.
+type BatchPackInput<'py> =
+    (u64, PyReadonlyArray1<'py, f32>, Vec<(u16, PyReadonlyArray1<'py, f32>)>, f32, Option<String>);
+
 /// A single retrieval result returned from `mem_read`.
 #[pyclass]
 #[derive(Debug)]
@@ -734,6 +739,61 @@ impl Engine {
         dict.set_item("last_sweep_epoch_secs", status.last_sweep_epoch_secs)?;
         dict.set_item("last_compaction_epoch_secs", status.last_compaction_epoch_secs)?;
         Ok(dict.into_any().unbind())
+    }
+
+    /// Persist a known-size batch of packs with one coalesced fsync.
+    ///
+    /// Each pack is a tuple `(owner, retrieval_key, layer_payloads, salience, text)`
+    /// where `layer_payloads` is a list of `(layer_idx, data)` tuples and `text`
+    /// is optional. Returns a list of assigned pack ids, strictly increasing
+    /// and aligned to the input order.
+    ///
+    /// Distinct from [`Engine::open_with_write_buffer`]: this is the eager
+    /// "I have N packs in hand, persist them all now" path. If a streaming
+    /// write buffer is configured, its pending entries are flushed first so
+    /// the batch lands after them.
+    ///
+    /// An empty input returns an empty list and does not touch storage.
+    fn mem_write_batch_packs(
+        &self,
+        py: Python<'_>,
+        packs: Vec<BatchPackInput<'_>>,
+    ) -> PyResult<Vec<u64>> {
+        use tdb_core::kv_pack::{KVLayerPayload, KVPack};
+
+        if packs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let kv_packs: Vec<KVPack> = packs
+            .into_iter()
+            .map(|(owner, retrieval_key, layer_payloads, salience, text)| {
+                let key = retrieval_key
+                    .as_slice()
+                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                    .to_vec();
+                let layers: Vec<KVLayerPayload> = layer_payloads
+                    .iter()
+                    .map(|(idx, data)| {
+                        Ok(KVLayerPayload {
+                            layer_idx: *idx,
+                            data: data
+                                .as_slice()
+                                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                                .to_vec(),
+                        })
+                    })
+                    .collect::<PyResult<Vec<_>>>()?;
+                Ok::<_, PyErr>(KVPack { id: 0, owner, retrieval_key: key, layers, salience, text })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+
+        let engine = Arc::clone(&self.inner);
+        py.detach(move || {
+            lock_engine(&engine)?
+                .mem_write_batch_packs(&kv_packs)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
     }
 
     /// Store a complete multi-layer KV pack from a raw per-token retrieval matrix.

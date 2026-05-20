@@ -1,0 +1,11 @@
+{
+  "topic": "batch vs sequential write wall time",
+  "n_packs": 50,
+  "n_runs": 5,
+  "dim": 64,
+  "sequential_seconds_median": 0.07237864799753879,
+  "batch_seconds_median": 0.0019700290031323675,
+  "speedup": 36.739889556171995,
+  "pass_criterion_speedup": 2.0,
+  "passed": true
+}
