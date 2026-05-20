@@ -10,6 +10,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _no changes yet_
 
+## [0.5.0] — 2026-05-20
+
+Faster pack enumeration via columnar metadata API; multi-pack injection now works on quantized models.
+
+### Public API
+
+- **`Engine.list_packs_metadata(owner)`**: new — returns a dict of four parallel numpy arrays (`pack_ids`, `owners`, `tiers`, `importances`). Single Rust→Python crossing, no text fetch, no per-row dict allocation. ~1.3× faster than `list_packs` at 10K packs. Use when iterating / filtering pack metadata without needing inline text.
+- **`Engine.list_packs(owner)`**: now emits `DeprecationWarning` when called without `fetch_text=True`. Pass `fetch_text=True` to keep the legacy list-of-dicts shape silently; switch to `list_packs_metadata` if you don't need inline text.
+
+### Bug Fixes
+
+- **`KnowledgePackStore.retrieve_and_inject_multi()` / `retrieve_with_trace()`**: no longer raise `RuntimeError: Expected query, key, and value to have the same dtype` on bf16 / fp16 / 4-bit-quantized models. Internal cache builder was producing fp32 regardless of model dtype; `_move_cache_to_device` now casts to the model's compute dtype when called by these paths. Single-pack `retrieve_and_inject` had this fix since v0.3.2; the multi-pack path was missed.
+
+### Performance
+
+- **`Engine.list_packs(owner)`**: 1.30× faster at 10K packs.
+
 ## [0.4.1] — 2026-05-19
 
 Patch release: multimodal HuggingFace models now work end-to-end. Gemma 3 (1B / 4B / 12B / 27B), Llama 3.2 Vision, Qwen-VL, Phi-4-MM, and any other text-decoder bundled with a vision encoder are now supported across `is_supported`, `KnowledgePackStore`, and the calibration framework.
