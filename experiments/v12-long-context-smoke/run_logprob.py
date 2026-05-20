@@ -49,7 +49,10 @@ from tardigrade_db import Engine
 from tardigrade_hooks import CalibrationRegistry, select_query_layer
 from tardigrade_hooks.kp_injector import KnowledgePackStore
 
-MODEL_ID = "google/gemma-3-4b-it"
+MODEL_ID = os.environ.get("LOGPROB_MODEL", "google/gemma-3-4b-it")
+# Quantization: "4bit" (NF4 + bf16 compute, needed for >2B at 8GiB),
+# "bf16" (default for ≤2B models), or "fp32" (smaller models / debugging).
+QUANTIZATION = os.environ.get("LOGPROB_QUANT", "4bit").strip().lower()
 DEVICE = "cuda"
 N_TRIALS_PER_CELL = int(os.environ.get("LOGPROB_N", "10"))
 
@@ -71,17 +74,29 @@ def build_filler_tokens(tokenizer, target_n_tokens: int) -> list[int]:
 
 
 def load_model_and_engine(engine_dir: Path):
-    print(f"[{time.strftime('%H:%M:%S')}] loading {MODEL_ID} 4-bit on {DEVICE}…", flush=True)
+    print(f"[{time.strftime('%H:%M:%S')}] loading {MODEL_ID} ({QUANTIZATION}) on {DEVICE}…", flush=True)
     tok = AutoTokenizer.from_pretrained(MODEL_ID)
-    bnb = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID, quantization_config=bnb, output_hidden_states=True,
-    )
+    if QUANTIZATION == "4bit":
+        bnb = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID, quantization_config=bnb, output_hidden_states=True,
+        )
+        # bitsandbytes places weights itself — no .to(DEVICE)
+    elif QUANTIZATION == "bf16":
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID, torch_dtype=torch.bfloat16, output_hidden_states=True,
+        )
+        model.to(DEVICE)
+    else:  # fp32 / default precision
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID, torch_dtype=torch.float32, output_hidden_states=True,
+        )
+        model.to(DEVICE)
     getattr(model, "eval")()  # PyTorch eval-mode toggle via getattr
 
     engine = Engine(str(engine_dir))
@@ -109,7 +124,8 @@ def logprob_of_token(model, ext_cache, prompt_ids: torch.Tensor,
     return float(log_probs[target_token_id].item())
 
 
-def run_q_b_logprob(tok, model, engine, kps) -> list[dict]:
+def run_q_b_logprob(tok, model, engine, kps,
+                     partial_out_path: Path | None = None) -> list[dict]:
     """For each N in {256, 1024, 2048, 4096, 8192}, run n trials. Each
     trial:
       1. Pick a 3-digit room number.
@@ -122,10 +138,17 @@ def run_q_b_logprob(tok, model, engine, kps) -> list[dict]:
       6. Get logprob of the planted answer's first token in this state.
       7. Control: same, but no fact-KV (empty starting cache).
       8. Record both logprobs and their delta.
+
+    Progress: prints a per-trial line every 5 trials and after each cell
+    writes the accumulated trials to ``partial_out_path`` (if provided)
+    so a separate process / shell can ``tail`` or ``jq`` partial state
+    without waiting for the full sweep to finish.
     """
     Ns = [256, 1024, 2048, 4096, 8192]
     trials: list[dict] = []
     rng = random.Random(11)
+    total_trials = N_TRIALS_PER_CELL * len(Ns)
+    trial_global_idx = 0
 
     for n_filler in Ns:
         for trial_idx in range(N_TRIALS_PER_CELL):
@@ -168,7 +191,12 @@ def run_q_b_logprob(tok, model, engine, kps) -> list[dict]:
             try:
                 with torch.no_grad():
                     ext = model(filler_t, past_key_values=cache, use_cache=True)
-                    inject_cache = ext.past_key_values
+                # Hybrid models (RecurrentGemma) return CausalLMOutput without
+                # past_key_values; they mutate the passed-in cache in place
+                # instead. Fall back to the input cache if the output didn't
+                # surface it. Same pattern as _hidden_states.py.
+                returned = getattr(ext, "past_key_values", None)
+                inject_cache = returned if returned is not None else cache
                 logprob_inject = logprob_of_token(model, inject_cache,
                                                     completion_t, answer_token_id)
                 err_inject = None
@@ -183,9 +211,16 @@ def run_q_b_logprob(tok, model, engine, kps) -> list[dict]:
 
             # --- CONTROL condition (no injection) -------------------------
             try:
+                # Control: forward filler with no pre-existing cache. For
+                # hybrid models that don't return past_key_values, we'd
+                # need to start from a model-provided empty cache. Use
+                # DynamicCache as a placeholder; model populates it.
+                from transformers import DynamicCache
+                control_in = DynamicCache(config=model.config)
                 with torch.no_grad():
-                    ext = model(filler_t, use_cache=True)
-                    control_cache = ext.past_key_values
+                    ext = model(filler_t, past_key_values=control_in, use_cache=True)
+                returned = getattr(ext, "past_key_values", None)
+                control_cache = returned if returned is not None else control_in
                 logprob_control = logprob_of_token(model, control_cache,
                                                      completion_t, answer_token_id)
                 err_control = None
@@ -209,6 +244,19 @@ def run_q_b_logprob(tok, model, engine, kps) -> list[dict]:
                 "elapsed_ms": elapsed_ms,
             })
 
+            # Per-trial heartbeat — every trial for tight feedback while
+            # a sweep is in flight. Stays on one line per trial; greppable
+            # via "^\[Q-B trial\]".
+            trial_global_idx += 1
+            inj_disp = f"{logprob_inject:.3f}" if math.isfinite(logprob_inject) else "inf"
+            ctl_disp = f"{logprob_control:.3f}" if math.isfinite(logprob_control) else "inf"
+            delta_disp = f"{delta:+.3f}" if math.isfinite(delta) else "—"
+            print(f"  [Q-B trial] N={n_filler:>5} t={trial_idx+1:>3}/{N_TRIALS_PER_CELL}  "
+                  f"({trial_global_idx}/{total_trials} overall)  "
+                  f"inj={inj_disp} ctl={ctl_disp} Δ={delta_disp}  "
+                  f"{elapsed_ms:.0f}ms",
+                  flush=True)
+
         # Per-N summary
         cell = [t for t in trials if t["n_filler"] == n_filler]
         deltas = [t["delta_log_ratio"] for t in cell
@@ -230,28 +278,57 @@ def run_q_b_logprob(tok, model, engine, kps) -> list[dict]:
             print(f"  [Q-B logprob] N={n_filler:>5}  (no finite trials)",
                   flush=True)
 
+        # Snapshot trials-so-far to disk so a separate shell can
+        # inspect partial results without waiting for the whole sweep.
+        if partial_out_path is not None:
+            try:
+                partial_out_path.write_text(json.dumps({
+                    "model_id": MODEL_ID,
+                    "quantization": QUANTIZATION,
+                    "n_trials_per_cell": N_TRIALS_PER_CELL,
+                    "device": DEVICE,
+                    "metric": "next-token logprob of planted-answer first token",
+                    "status": "partial",
+                    "completed_N_cells": sorted({t["n_filler"] for t in trials}),
+                    "q_b_logprob_trials": trials,
+                }, indent=2))
+            except Exception:
+                pass  # don't let a write failure abort the sweep
+
     return trials
 
 
 def main() -> int:
     print(f"[{time.strftime('%H:%M:%S')}] N_TRIALS_PER_CELL={N_TRIALS_PER_CELL}")
+    slug = MODEL_ID.replace("/", "__")
+    final_path = HERE / f"results_logprob_{slug}_{QUANTIZATION}.json"
+    partial_path = HERE / f"results_logprob_{slug}_{QUANTIZATION}.partial.json"
+    print(f"[{time.strftime('%H:%M:%S')}] partial snapshots → {partial_path.name}")
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tok, model, engine, kps = load_model_and_engine(Path(tmpdir))
 
         print(f"[{time.strftime('%H:%M:%S')}] === Q-B logprob sweep ===")
-        trials = run_q_b_logprob(tok, model, engine, kps)
+        trials = run_q_b_logprob(tok, model, engine, kps,
+                                  partial_out_path=partial_path)
 
         results = {
             "model_id": MODEL_ID,
-            "quantization": "4bit-nf4-bf16",
+            "quantization": QUANTIZATION,
             "n_trials_per_cell": N_TRIALS_PER_CELL,
             "device": DEVICE,
             "metric": "next-token logprob of planted-answer first token",
+            "status": "complete",
             "q_b_logprob_trials": trials,
         }
-        out_path = HERE / f"results_logprob.json"
-        out_path.write_text(json.dumps(results, indent=2))
-        print(f"[{time.strftime('%H:%M:%S')}] wrote {out_path}")
+        final_path.write_text(json.dumps(results, indent=2))
+        # Clean up the partial-snapshot file now that the final exists.
+        try:
+            if partial_path.exists():
+                partial_path.unlink()
+        except Exception:
+            pass
+        print(f"[{time.strftime('%H:%M:%S')}] wrote {final_path}")
 
     return 0
 
