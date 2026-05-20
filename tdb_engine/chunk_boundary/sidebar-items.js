@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["PARAGRAPH_CRLF","PARAGRAPH_LF","SENTENCE_ENDINGS"],"enum":["BoundaryStrategy"],"fn":["find_chunk_boundary","paragraph_split","sentence_split","whitespace_split"],"struct":["UnknownBoundaryStrategy"]};
