@@ -52,6 +52,25 @@ const DEFAULT_SLB_CAPACITY: usize = 4096;
 ///
 /// If the key is per-token encoded (has header), averages all token vectors.
 /// If it's already a plain vector, returns it unchanged.
+/// Build an encoded per-token retrieval key from a flat `(n_tokens × dim)`
+/// f32 buffer. The header sentinel + `dim` slot are written so the buffer
+/// survives Q4 quantization round-trip; `n_tokens` is intentionally left at
+/// `0.0` because Q4 would corrupt that slot and decoders compute `n` from
+/// `data.len() / dim` instead.
+///
+/// Callers must validate that `dim > 0` and that the buffer length is a
+/// multiple of `dim`; this helper trusts its input.
+fn encode_token_matrix(query_tokens: &[f32], dim: usize) -> Vec<f32> {
+    let mut encoded = Vec::with_capacity(HEADER_SIZE + query_tokens.len());
+    encoded.push(HEADER_SENTINEL);
+    encoded.resize(N_TOKENS_IDX, 0.0);
+    encoded.push(0.0);
+    encoded.push(dim as f32);
+    encoded.resize(HEADER_SIZE, 0.0);
+    encoded.extend_from_slice(query_tokens);
+    encoded
+}
+
 fn mean_pool_key(key: &[f32]) -> Vec<f32> {
     fixed_dim_key(key).unwrap_or_default()
 }
@@ -895,7 +914,9 @@ impl Engine {
     /// per-token encoded key in Rust before delegating to [`Self::mem_read`]. This
     /// eliminates a redundant Python encoding + Rust parsing cycle in the hot path.
     ///
-    /// `query_tokens` length must equal `n_tokens * dim`.
+    /// `query_tokens` length must equal `n_tokens * dim`. An empty or malformed
+    /// matrix returns an empty result rather than raising — query callers
+    /// commonly tolerate "no signal" gracefully.
     pub fn mem_read_tokens(
         &mut self,
         query_tokens: &[f32],
@@ -907,21 +928,42 @@ impl Engine {
         if n_tokens == 0 || dim == 0 || query_tokens.len() != n_tokens * dim {
             return Ok(Vec::new());
         }
-
-        // Build the encoded key in-place: header + flattened tokens (one allocation).
-        // The `n_tokens` slot is left at 0.0 — it does not survive Q4 round-trip
-        // (see HEADER_SIZE docs in tdb-retrieval/per_token.rs). Decoders infer
-        // `n` from `data.len() / dim`.
-        let _ = n_tokens;
-        let mut encoded = Vec::with_capacity(HEADER_SIZE + query_tokens.len());
-        encoded.push(HEADER_SENTINEL);
-        encoded.resize(N_TOKENS_IDX, 0.0);
-        encoded.push(0.0);
-        encoded.push(dim as f32);
-        encoded.resize(HEADER_SIZE, 0.0);
-        encoded.extend_from_slice(query_tokens);
-
+        let encoded = encode_token_matrix(query_tokens, dim);
         self.mem_read(&encoded, k, owner_filter)
+    }
+
+    /// Write a complete multi-layer KV pack from a raw per-token retrieval
+    /// matrix (Facade Simplification — write-side counterpart to
+    /// [`Self::mem_read_tokens`]).
+    ///
+    /// The caller passes a flat `n_tokens × dim` token matrix and the layer
+    /// payloads. The engine builds the encoded retrieval key in Rust, attaches
+    /// it to the pack, and delegates to [`Self::mem_write_pack`]. No Python-side
+    /// `encode_per_token` step required.
+    ///
+    /// `query_tokens` length must equal `n_tokens * dim`. An empty or malformed
+    /// matrix returns [`TardigradeError::EmptyTokenMatrix`] — silent no-op on
+    /// a write would create an unqueryable pack.
+    pub fn mem_write_pack_tokens(
+        &mut self,
+        owner: OwnerId,
+        query_tokens: &[f32],
+        n_tokens: usize,
+        dim: usize,
+        layers: Vec<KVLayerPayload>,
+        salience: f32,
+        text: Option<String>,
+    ) -> Result<PackId> {
+        if n_tokens == 0 || dim == 0 || query_tokens.len() != n_tokens * dim {
+            return Err(TardigradeError::EmptyTokenMatrix {
+                n_tokens,
+                dim,
+                buffer_len: query_tokens.len(),
+            });
+        }
+        let encoded = encode_token_matrix(query_tokens, dim);
+        let pack = KVPack { id: 0, owner, retrieval_key: encoded, layers, salience, text };
+        self.mem_write_pack(&pack)
     }
 
     /// Get transitive ancestors of a cell following `CausedBy` edges.

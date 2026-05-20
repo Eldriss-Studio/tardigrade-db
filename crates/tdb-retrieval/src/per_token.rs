@@ -207,7 +207,16 @@ pub struct PerTokenRetriever {
     /// Running sum of outer products (`x_j * x_k`) across all tokens, stored
     /// as a flat `dim*dim` matrix in row-major order. Used to compute corpus
     /// covariance for ZCA whitening.
+    ///
+    /// Only populated when `track_whitening` is enabled — the dim×dim
+    /// accumulation is O(dim²) per token and dominates write latency at
+    /// large dim, so we pay for it only when whitening is actually used.
     corpus_sq_sum: Vec<f32>,
+    /// Whether to accumulate the outer-product covariance on every insert.
+    /// Default `false`; flipped by [`Self::enable_whitening_tracking`] which
+    /// backfills from existing stored tokens before subsequent inserts begin
+    /// contributing.
+    track_whitening: bool,
     /// Cached ZCA whitening matrix (dim*dim, row-major). Invalidated when
     /// `corpus_token_count` changes.
     whitening_cache: Option<Vec<f32>>,
@@ -343,6 +352,7 @@ impl PerTokenRetriever {
             corpus_sum: Vec::new(),
             corpus_token_count: 0,
             corpus_sq_sum: Vec::new(),
+            track_whitening: false,
             whitening_cache: None,
             whitening_cache_count: 0,
             token_cache: Mutex::new(cache),
@@ -436,9 +446,12 @@ impl PerTokenRetriever {
     /// than 2 tokens have been inserted.
     ///
     /// Computed from the running sums: `Cov[j,k] = E[x_j*x_k] - E[x_j]*E[x_k]`.
-    pub fn corpus_covariance(&self) -> Option<Vec<f32>> {
+    pub fn corpus_covariance(&mut self) -> Option<Vec<f32>> {
         if self.corpus_token_count < 2 || self.corpus_sum.is_empty() {
             return None;
+        }
+        if !self.track_whitening {
+            self.enable_whitening_tracking();
         }
         let dim = self.corpus_sum.len();
         if self.corpus_sq_sum.len() != dim * dim {
@@ -460,7 +473,15 @@ impl PerTokenRetriever {
     /// Computed via eigendecomposition of the corpus covariance matrix using
     /// `faer`. The cache is invalidated when `corpus_token_count` changes.
     /// Returns `None` if the corpus is too small or eigendecomposition fails.
+    ///
+    /// Calling this method enables whitening tracking on first use: any
+    /// existing stored tokens are folded into the covariance matrix and
+    /// subsequent inserts contribute incrementally. The first call is
+    /// therefore `O(stored_tokens * dim^2)`; steady-state calls are cached.
     pub fn whitening_matrix(&mut self) -> Option<&[f32]> {
+        if !self.track_whitening {
+            self.enable_whitening_tracking();
+        }
         if self.corpus_token_count == self.whitening_cache_count
             && let Some(ref cache) = self.whitening_cache
         {
@@ -490,9 +511,14 @@ impl PerTokenRetriever {
             // Mismatched dim resets it; corpus_token_count is reset to keep mean valid.
             self.corpus_sum = vec![0.0; dim];
             self.corpus_token_count = 0;
-            self.corpus_sq_sum = vec![0.0; dim * dim];
+            self.corpus_sq_sum =
+                if self.track_whitening { vec![0.0; dim * dim] } else { Vec::new() };
             self.whitening_cache = None;
             self.whitening_cache_count = 0;
+        } else if self.track_whitening && self.corpus_sq_sum.len() != dim * dim {
+            // Whitening was enabled after the running sum was sized; bring
+            // the covariance buffer online without resetting the mean.
+            self.corpus_sq_sum = vec![0.0; dim * dim];
         }
     }
 
@@ -506,14 +532,52 @@ impl PerTokenRetriever {
         }
         self.corpus_token_count += 1;
 
-        // Accumulate outer product for covariance computation.
-        if self.corpus_sq_sum.len() == dim * dim {
+        // Outer-product accumulation is opt-in (whitening only) — gated to
+        // skip O(dim²) work per token on the default write path.
+        if self.track_whitening && self.corpus_sq_sum.len() == dim * dim {
             for j in 0..dim {
                 for k in 0..dim {
                     self.corpus_sq_sum[j * dim + k] += token[j] * token[k];
                 }
             }
         }
+    }
+
+    /// Turn on whitening covariance tracking and backfill the outer-product
+    /// matrix from tokens already in the store. Subsequent inserts will
+    /// contribute incrementally as usual.
+    ///
+    /// Called by `WhiteningStrategy` (in `crate::refinement`) on first use.
+    /// Idempotent: a second call is a no-op once tracking is enabled.
+    pub fn enable_whitening_tracking(&mut self) {
+        if self.track_whitening {
+            return;
+        }
+        self.track_whitening = true;
+        let dim = self.corpus_sum.len();
+        if dim == 0 {
+            return;
+        }
+        self.corpus_sq_sum = vec![0.0; dim * dim];
+
+        // Backfill from existing INT8-stored tokens (dequantize on the fly).
+        let n_tokens = self.store.len();
+        let mut buf = vec![0.0_f32; dim];
+        for idx in 0..n_tokens {
+            let scale = self.store.scales[idx];
+            let qrow = self.store.token_data(idx);
+            for (slot, q) in buf.iter_mut().zip(qrow.iter()) {
+                *slot = (*q as f32) * scale;
+            }
+            for (j, &bj) in buf.iter().enumerate() {
+                let row = &mut self.corpus_sq_sum[j * dim..(j + 1) * dim];
+                for (cell, &bk) in row.iter_mut().zip(buf.iter()) {
+                    *cell += bj * bk;
+                }
+            }
+        }
+        self.whitening_cache = None;
+        self.whitening_cache_count = 0;
     }
 
     fn candidate_limit(&self, k: usize) -> usize {
@@ -1425,7 +1489,7 @@ mod tests {
 
     #[test]
     fn test_corpus_covariance_none_when_empty() {
-        let r = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
+        let mut r = PerTokenRetriever::with_scoring_mode(ScoringMode::Top5Avg);
         assert!(r.corpus_covariance().is_none());
     }
 

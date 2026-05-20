@@ -736,6 +736,67 @@ impl Engine {
         Ok(dict.into_any().unbind())
     }
 
+    /// Store a complete multi-layer KV pack from a raw per-token retrieval matrix.
+    ///
+    /// Accepts a 2D `NumPy` array of shape `(n_tokens, dim)` directly. The
+    /// engine builds the encoded retrieval key in one allocation in Rust,
+    /// avoiding the Python-side `encode_per_token` round-trip (header build +
+    /// flatten + `PyO3` copy + Rust re-parse).
+    ///
+    /// Symmetric write-side counterpart to [`Engine::mem_read_tokens`]. Prefer
+    /// this over [`Engine::mem_write_pack`] when the caller already has the
+    /// retrieval tokens as a 2D matrix; use [`Engine::mem_write_pack`] when
+    /// the key is already encoded.
+    ///
+    /// Returns the assigned pack ID. Raises `RuntimeError` (stable code
+    /// `tdb::write::empty_token_matrix`) on an empty / malformed matrix —
+    /// silently writing such a pack would create an unqueryable cell.
+    #[pyo3(signature = (owner, token_matrix, layer_payloads, salience, text=None))]
+    fn mem_write_pack_tokens(
+        &self,
+        py: Python<'_>,
+        owner: u64,
+        token_matrix: PyReadonlyArray2<'_, f32>,
+        layer_payloads: Vec<(u16, PyReadonlyArray1<'_, f32>)>,
+        salience: f32,
+        text: Option<String>,
+    ) -> PyResult<u64> {
+        use tdb_core::kv_pack::KVLayerPayload;
+
+        let tokens_arr = token_matrix.as_array();
+        let shape = tokens_arr.shape();
+        let n_tokens = shape[0];
+        let dim = shape[1];
+
+        // Non-contiguous views (e.g. `tokens[::2]`) must work; fall back to a
+        // copy when the strided layout disagrees with C-order.
+        let flat: Vec<f32> = if let Some(slice) = tokens_arr.as_slice() {
+            slice.to_vec()
+        } else {
+            tokens_arr.iter().copied().collect()
+        };
+
+        let layers: Vec<KVLayerPayload> = layer_payloads
+            .iter()
+            .map(|(idx, data)| {
+                Ok(KVLayerPayload {
+                    layer_idx: *idx,
+                    data: data
+                        .as_slice()
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                        .to_vec(),
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+
+        let engine = Arc::clone(&self.inner);
+        py.detach(move || {
+            lock_engine(&engine)?
+                .mem_write_pack_tokens(owner, &flat, n_tokens, dim, layers, salience, text)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
     /// Store a complete multi-layer KV cache as a single atomic pack.
     ///
     /// Returns the assigned pack ID.

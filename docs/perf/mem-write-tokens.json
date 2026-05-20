@@ -1,0 +1,14 @@
+{
+  "topic": "mem_write_pack absolute per-write latency",
+  "seq_len": 256,
+  "dim": 1024,
+  "n_writes_per_run": 20,
+  "n_runs": 3,
+  "encoded_seconds_median": 0.08105870299914386,
+  "token_seconds_median": 0.08012626399795408,
+  "encoded_per_write_ms": 4.052935149957193,
+  "token_per_write_ms": 4.006313199897704,
+  "encoded_to_token_ratio": 1.0116371206476515,
+  "pass_criterion_per_write_ms": 10.0,
+  "passed": true
+}

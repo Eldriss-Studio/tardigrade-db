@@ -167,14 +167,14 @@ Every phase has four sections: **Builds**, **Gates** (ATs from above that must p
 
 Phase 1 therefore splits into two sub-phases. The first ships the bridge cleanup (small perf, real API improvement, deprecation pathway). The second adds the storage-layer index that actually unlocks the speedup. They merge independently and the headline 8× target now sits on 1b, not 1a.
 
-#### Phase 1a — PyO3 columnar metadata path (in flight)
+#### Phase 1a — PyO3 columnar metadata path ✅ shipped (`288f252` + `d1aa3fd`)
 - **Builds:** PyO3 `list_packs_metadata(owner)` returning `{"pack_ids": np.uint64[N], "owners": np.uint64[N], "tiers": np.uint8[N], "importances": np.float32[N]}` (parallel columns, no per-row dicts). PyO3 `list_packs(owner, fetch_text=True|None)` keeps the legacy list-of-dicts shape; omitted kwarg emits a `DeprecationWarning` matching the `sweep.py` convention. Update callers: `consolidator.py` (two sites, migrate to columnar), `client.pack_count` (columnar), `client.list_packs` / `prefix_builder.py` / `mcp/server.py` (pass `fetch_text=True` explicitly — they genuinely need text). **No Rust engine change**; PyO3 only.
 - **Gates:** Phase 1a ATs (empty owner, four aligned arrays, importance-descending order, fetch_text=True returns text, deprecation warning fires at least once, concurrent reader safety, 10K-pack consolidate latency under `@pytest.mark.slow`).
 - **Patterns:** Interface Segregation (metadata vs full); Adapter (Python deprecation wrapper).
-- **Bench gate:** `experiments/phase1-list-packs-microbench.py` at 10K packs. **Pass:** ≥ 1.2× speedup. Documents the lower-than-promised wall-clock reduction and the discovery that the dominant cost is storage-layer, not PyO3.
+- **Bench gate:** `experiments/list_packs_microbench.py` at 10K packs. **Pass:** ≥ 1.2× speedup. Documents the lower-than-promised wall-clock reduction and the discovery that the dominant cost is storage-layer, not PyO3.
 - **Observability:** the latency AT replaces the original call-count check with a behavioural budget (`consolidate(target) < 500ms at 10K packs`).
 
-#### Phase 1b — `PackDirectory` owner index (storage-layer)
+#### Phase 1b — `PackDirectory` owner index (storage-layer) ✅ shipped (`d1aa3fd`)
 - **Builds:** add `pack_owners: HashMap<PackId, OwnerId>` to `crates/tdb-engine/src/pack_directory.rs` (or equivalent persistent location). Maintained at write time: every `mem_write_pack` / `mem_write_pack_tokens` / `mem_write_batch_packs` inserts; every `delete_pack` removes. Rebuilt from segment scan on engine open (no snapshot-format change required if we rebuild rather than persist; document the recovery contract either way per CLAUDE.md's reliability rules). `Engine::list_packs` becomes a pure in-memory iteration: walk `pack_directory.pack_ids()`, read owner from `pack_owners`, read `(tier, importance)` from governance, sort by importance. Zero `pool.get` calls.
 - **Gates (new ATs):**
   1. `it_returns_correct_owner_for_each_pack_after_writes`
@@ -184,7 +184,7 @@ Phase 1 therefore splits into two sub-phases. The first ships the bridge cleanup
   5. `it_returns_empty_metadata_when_directory_is_empty`
   6. `it_preserves_sort_order_through_owner_index_path`
 - **Patterns:** **in-memory secondary index** (the same shape as `pack_directory.pack_ids()` already has — extends an existing pattern). No new structural pattern; this is just adding a column to an existing index.
-- **Bench gate:** re-run `experiments/phase1-list-packs-microbench.py`. **Pass:** ≥ 8× speedup at 10K packs (the original Phase 1 target, now technically achievable).
+- **Bench gate:** `experiments/list_packs_microbench.py`. **Achieved:** 10.4× speedup vs the pre-1b baseline (5.5 ms vs 57 ms at 10K packs); absolute latency gate < 10 ms passes; consolidator-at-10K latency 42 ms (< 50 ms gate).
 - **Reliability rule (CLAUDE.md mandatory):** "Recovery contract required" — the owner index is derived state. Document that it is rebuilt from segment scan on `Engine::open`, that crashes leave the segment trail authoritative, and add a recovery AT (`it_rebuilds_owner_index_after_simulated_crash`).
 - **Snapshot/restore:** if the index is *not* persisted, snapshot/restore is unchanged. If we choose to persist it (faster open at scale), the snapshot format version bumps and we need a regression AT (`it_restores_pre_1b_snapshot_correctly`). Default: don't persist; rebuild on open. Revisit if open latency becomes the next bottleneck.
 

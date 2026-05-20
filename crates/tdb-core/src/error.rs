@@ -183,6 +183,20 @@ pub enum TardigradeError {
         )
     )]
     FlushFailed { failed_offset: u64, detail: String },
+
+    /// Returned by the token-matrix write API when the caller passes a
+    /// matrix with zero rows, zero columns, or a flat buffer whose
+    /// length disagrees with `n_tokens * dim`.
+    #[error(
+        "empty or malformed token matrix: n_tokens={n_tokens}, dim={dim}, buffer_len={buffer_len}"
+    )]
+    #[diagnostic(
+        code(tdb::write::empty_token_matrix),
+        help(
+            "mem_write_pack_tokens requires a (n_tokens, dim) matrix with n_tokens >= 1 and dim >= 1; verify the caller's token capture is not returning an empty tensor"
+        )
+    )]
+    EmptyTokenMatrix { n_tokens: usize, dim: usize, buffer_len: usize },
 }
 
 pub type Result<T> = std::result::Result<T, TardigradeError>;
