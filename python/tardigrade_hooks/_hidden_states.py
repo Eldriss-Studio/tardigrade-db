@@ -156,12 +156,47 @@ def _compute_per_layer_hidden_states(
     return hidden_per_layer, payloads, seq_len
 
 
+# Block-type vocabulary across HF config conventions.
+#
+# Softmax variants — different attention-mask shapes (full, local window,
+# sliding window) but all produce a standard K/V cache that softmax
+# attention reads. From tardigrade-db's perspective these are
+# interchangeable: they all expose `layer.keys` / `layer.values` tensors,
+# they all participate in retrieval the same way.
+_SOFTMAX_BLOCK_TYPES: frozenset[str] = frozenset({
+    "attention",
+    "full_attention",
+    "sliding_attention",   # Gemma 2, Mistral, Phi-3 — alternating window
+    "local_attention",     # Longformer / BigBird family
+    "window_attention",    # alias seen in some configs
+    "global_attention",    # Longformer global-token layers
+})
+
+# Recurrent / linear-attention variants — no softmax K/V to cache. These
+# include Griffin's recurrent layers (RecurrentGemma), Mamba SSM layers
+# (Jamba), and the various linear-attention families (Qwen3-Next's
+# DeltaNet / GatedDeltaNet, Zamba). Tardigrade-db skips them at storage
+# time because there's no observable retrieval signal in their state.
+_RECURRENT_BLOCK_TYPES: frozenset[str] = frozenset({
+    "recurrent",
+    "linear_attention",
+    "mamba",
+    "delta_net",
+    "gated_delta_net",
+})
+
+
 def layer_kind_labels(cfg: Any, n_hidden_states: int) -> list[str]:
     """Return a label per ``hidden_states`` index.
 
     Index 0 is the embedding output; indices 1..n_layers are the per-layer
     outputs. Returns one of: ``"embedding"``, ``"attention"``, ``"recurrent"``,
     or the raw config string truncated to 8 chars if neither.
+
+    Softmax-style attention variants (full, sliding, local, window, global)
+    all normalise to ``"attention"`` — they're interchangeable for tardigrade's
+    retrieval path. Recurrent / linear-attention variants (Griffin recurrent,
+    Mamba, DeltaNet) normalise to ``"recurrent"``.
     """
     block_types = getattr(cfg, "layers_block_type", None) or getattr(
         cfg, "layer_types", None
@@ -171,9 +206,9 @@ def layer_kind_labels(cfg: Any, n_hidden_states: int) -> list[str]:
         return ["embedding"] + ["attention"] * (n_hidden_states - 1)
     labels = ["embedding"]
     for t in block_types:
-        if t in ("attention", "full_attention"):
+        if t in _SOFTMAX_BLOCK_TYPES:
             labels.append("attention")
-        elif t in ("recurrent", "linear_attention"):
+        elif t in _RECURRENT_BLOCK_TYPES:
             labels.append("recurrent")
         else:
             labels.append(str(t)[:8])

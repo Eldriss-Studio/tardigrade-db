@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Bug Fixes
 
 - **`KnowledgePackStore.generate()` / `generate_with_trace()`**: no longer crashes mid-turn on hybrid-attention models. v0.3.4 fixed the `store()` path's sparse-layer iteration but three cache-clone loops in the generate-side methods still called `layer.keys.clone()` unconditionally, raising `AttributeError: 'NoneType' object has no attribute 'clone'` on RecurrentGemma / Jamba / Qwen3-Next where recurrent layer slots have `.keys = None`. Extracted to a shared `_clone_cache` helper that skips empty slots and preserves the sparse cache shape produced by `retrieve_and_inject`.
+- **`softmax_layer_count` / `layer_kind_labels`**: architecture classifier now recognises the full vocabulary of HF config layer-type names. Pre-fix, only literal `"attention"` and `"full_attention"` counted as softmax — `"sliding_attention"` (Gemma 2, Mistral, Phi-3), `"local_attention"` and `"global_attention"` (Longformer family) were silently misclassified, causing `is_supported` to report these uniform-softmax models as hybrid. Recurrent vocabulary likewise expanded to recognise `"mamba"`, `"delta_net"`, `"gated_delta_net"` (Jamba, Qwen3-Next, Zamba) alongside the existing `"recurrent"` / `"linear_attention"`. Runtime behavior was already correct (the engine looks at the actual cache shape, not the config label) — this fix makes the diagnostic surface accurate.
 
 ## [0.3.4] — 2026-05-19
 

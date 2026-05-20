@@ -706,6 +706,112 @@ def test_softmax_layer_count_treats_full_attention_as_softmax():
     assert softmax_layer_count(cfg) == 2
 
 
+def test_softmax_layer_count_recognises_sliding_attention():
+    """Gemma 2 / Mistral / Phi-3 alternate ``"sliding_attention"`` with
+    ``"full_attention"``. Sliding-window attention is still softmax — it
+    just constrains the attention mask to a local window — and produces
+    a standard K/V cache. The classifier was treating it as unknown
+    (and therefore as non-softmax), miscounting these uniform-softmax
+    models as hybrid in ``is_supported`` reports."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import softmax_layer_count
+
+    cfg = SimpleNamespace(
+        num_hidden_layers=4,
+        layers_block_type=[
+            "sliding_attention", "full_attention",
+            "sliding_attention", "full_attention",
+        ],
+    )
+    assert softmax_layer_count(cfg) == 4
+
+
+def test_softmax_layer_count_recognises_local_and_global_attention():
+    """Longformer / BigBird family configs use ``"local_attention"`` and
+    ``"global_attention"``. Both are softmax variants; both produce
+    K/V caches; both must count."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import softmax_layer_count
+
+    cfg = SimpleNamespace(
+        num_hidden_layers=3,
+        layer_types=["local_attention", "global_attention", "local_attention"],
+    )
+    assert softmax_layer_count(cfg) == 3
+
+
+def test_softmax_layer_count_treats_delta_net_as_recurrent():
+    """Qwen3-Next labels its linear-attention layers as ``"delta_net"``
+    / ``"gated_delta_net"`` in the HF config. These have no softmax K/V
+    cache to store and must not be counted as softmax layers — they're
+    the recurrent half of the hybrid architecture, same shape of concern
+    as RecurrentGemma's ``"recurrent"`` labels."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import softmax_layer_count
+
+    cfg = SimpleNamespace(
+        num_hidden_layers=4,
+        layer_types=[
+            "delta_net", "delta_net", "delta_net", "full_attention",
+        ],
+    )
+    assert softmax_layer_count(cfg) == 1
+
+
+def test_softmax_layer_count_treats_mamba_as_recurrent():
+    """SSM / Mamba labels (``"mamba"``) — pure state-space, no softmax
+    K/V cache. Must not be counted as softmax layers."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import softmax_layer_count
+
+    cfg = SimpleNamespace(
+        num_hidden_layers=4,
+        layer_types=["mamba", "mamba", "full_attention", "mamba"],
+    )
+    assert softmax_layer_count(cfg) == 1
+
+
+def test_layer_kind_labels_normalises_sliding_attention_to_attention():
+    """The label vocabulary kept simple — sliding-window attention
+    surfaces as ``"attention"`` in the returned labels, matching how
+    consumers read the kind tag (used by calibration sweep diagnostics
+    and by ``softmax_layer_count``)."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import layer_kind_labels
+
+    cfg = SimpleNamespace(
+        num_hidden_layers=2,
+        layers_block_type=["sliding_attention", "full_attention"],
+    )
+    labels = layer_kind_labels(cfg, n_hidden_states=3)
+    # Index 0 is the embedding output; 1 and 2 are the per-layer outputs.
+    assert labels == ["embedding", "attention", "attention"]
+
+
+def test_layer_kind_labels_normalises_delta_net_to_recurrent():
+    """Calibration sweep logs the layer kind for each candidate.
+    ``"delta_net"`` / ``"gated_delta_net"`` / ``"mamba"`` are all
+    recurrent / linear-attention variants and should surface as
+    ``"recurrent"`` in the labels — otherwise the log shows ugly
+    truncated strings like ``"delta_ne"`` (the pre-fix behavior of
+    truncating unknown labels to 8 chars)."""
+    from types import SimpleNamespace
+
+    from tardigrade_hooks._hidden_states import layer_kind_labels
+
+    cfg = SimpleNamespace(
+        num_hidden_layers=3,
+        layer_types=["delta_net", "gated_delta_net", "mamba"],
+    )
+    labels = layer_kind_labels(cfg, n_hidden_states=4)
+    assert labels == ["embedding", "recurrent", "recurrent", "recurrent"]
+
+
 def test_kp_n_softmax_layers_equals_n_layers_on_uniform_softmax(kps):
     """Uniform-softmax model: ``n_softmax_layers == n_layers`` so existing
     pack-integrity guards retain their strength. This is the regression
