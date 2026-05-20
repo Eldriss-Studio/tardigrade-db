@@ -136,10 +136,11 @@ class MemoryConsolidator:
     # -- Internals -----------------------------------------------------------
 
     def _pack_info(self, pack_id: int) -> dict | None:
-        """Look up a pack's tier and importance. Uses the columnar metadata
-        path — at 10K packs the array-shape lookup is ~8× cheaper than the
-        legacy list-of-dicts. Returns a small dict for backward-compat with
-        the historic call shape; text is fetched separately on demand."""
+        """Look up a pack's tier and importance via the columnar metadata API.
+
+        `np.where` finds the row index in the four parallel arrays and we
+        return a small dict so the rest of `consolidate()` can address fields
+        by name. Text is fetched separately on demand."""
         meta = self._engine.list_packs_metadata(self._owner)
         pack_ids = meta["pack_ids"]
         # np.where returns (array_of_indices,); we want the first match

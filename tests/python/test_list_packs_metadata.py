@@ -1,18 +1,16 @@
-"""Acceptance tests for the `list_packs` text-fetch split.
+"""Acceptance tests for `Engine.list_packs_metadata` and `Engine.list_packs`.
 
-The original `Engine.list_packs(owner)` PyO3 binding fetched `pack_text` for
-every pack while building 10K Python dicts inside its marshalling loop
-(`crates/tdb-python/src/lib.rs:925` pre-split). The bench gate revealed the
-dominant cost is not the text fetch but the dict allocation itself.
+Two enumeration APIs cover the metadata-vs-text axis:
 
-The fix introduces a columnar metadata path:
+* `Engine.list_packs_metadata(owner)` returns a dict of four parallel numpy
+  arrays — `pack_ids`, `owners`, `tiers`, `importances` — built in one
+  Rust→Python crossing. No per-row Python dict, no text fetch.
+* `Engine.list_packs(owner, fetch_text=True)` returns the list-of-dicts
+  shape with `text` included, for callers that need text inline.
 
-* `Engine.list_packs_metadata(owner)` returns a dict of four parallel
-  numpy arrays — no per-row Python dict, no text fetch. ~8× faster at scale.
-* `Engine.list_packs(owner, fetch_text=True)` keeps the legacy list-of-dicts
-  shape for callers that need text inline.
-
-Plan: .claude/plans/python-rust-boundary-migration-plan.md, Phase 1.
+The no-kwarg `Engine.list_packs(owner)` form emits a `DeprecationWarning`
+matching the codebase convention (see `tardigrade_hooks/sweep.py`) and
+returns the same list-of-dicts shape as the kwarg form.
 """
 
 from __future__ import annotations
@@ -142,12 +140,11 @@ def test_legacy_list_packs_emits_deprecation_warning(tmp_path):
 
 @pytest.mark.slow
 def test_consolidate_one_pack_completes_under_50ms_at_10k_packs(tmp_path):
-    """Behavioural latency assertion.
+    """Behavioural latency assertion on `MemoryConsolidator.consolidate`.
 
-    With the columnar metadata path the consolidator's `_pack_info` lookup
-    becomes one numpy `np.where` over four contiguous arrays. The 50ms budget
-    is tight enough that the old list-of-dicts path (~85ms per scan)
-    cannot meet it, even before counting the consolidation work itself.
+    At 10K packs `_pack_info` walks the columnar metadata once with
+    `np.where`. The 50ms budget reflects an enumeration that answers from
+    `PackDirectory`'s in-memory indices, not from per-pack pool reads.
 
     Setup writes 10K packs (≈80s on SSD) so this only runs under `-m slow`.
     """
@@ -165,6 +162,23 @@ def test_consolidate_one_pack_completes_under_50ms_at_10k_packs(tmp_path):
     start = time.perf_counter()
     consolidator.consolidate(target_pid)
     elapsed_ms = (time.perf_counter() - start) * 1000
+
+    # Also time the bare metadata call to compare with what we measured in
+    # the microbench — should reveal whether consolidate is amortising it
+    # somehow or whether the microbench overcounted.
+    meta_runs = []
+    for _ in range(5):
+        ms_start = time.perf_counter()
+        engine.list_packs_metadata(OWNER)
+        meta_runs.append((time.perf_counter() - ms_start) * 1000)
+    meta_runs.sort()
+    meta_median_ms = meta_runs[len(meta_runs) // 2]
+
+    print(
+        f"\n  consolidate({target_pid}) @ {n_packs} packs: {elapsed_ms:.2f} ms"
+        f"\n  list_packs_metadata median (5 runs):       {meta_median_ms:.2f} ms",
+        flush=True,
+    )
 
     assert elapsed_ms < 50.0, (
         f"consolidate({target_pid}) at {n_packs} packs took {elapsed_ms:.1f}ms; "

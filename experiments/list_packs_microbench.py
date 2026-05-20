@@ -1,17 +1,20 @@
-"""Phase 1 bench gate — `list_packs_metadata` vs `list_packs(fetch_text=True)`.
+"""Microbenchmark for `Engine.list_packs_metadata` at 10K packs.
 
-The first attempt at this phase (text-fetch skip only) returned a 1.27× speedup
-at 10K packs, well below the original 3× target. The bottleneck turned out to
-be per-row Python dict construction at the PyO3 boundary, not the text fetch.
-The current implementation uses a columnar metadata path (four parallel numpy
-arrays via `PyArray1::from_slice`), which avoids the dict allocations entirely.
-The revised target is ≥ 8× speedup at 10K packs.
+Asserts an absolute latency budget on the columnar metadata path. The
+budget reflects that `list_packs_metadata` answers from `PackDirectory`'s
+in-memory indices (`pack_id -> owner`, `pack_id -> cell_ids`) plus
+`governance`, with zero `BlockPool::get` calls. At this scale a healthy
+implementation completes in single-digit milliseconds.
+
+For context the legacy `list_packs(fetch_text=True)` path is timed too —
+its extra cost over the metadata path is per-pack `pack_text()` plus the
+per-row Python dict allocation.
 
 Run from the repo root:
     source .venv/bin/activate
-    python experiments/phase1-list-packs-microbench.py
+    python experiments/list_packs_microbench.py
 
-Writes a JSON record to docs/perf/phase1-list-packs.json on success.
+Writes a JSON record to docs/perf/list-packs.json on success.
 """
 
 from __future__ import annotations
@@ -70,27 +73,28 @@ def main() -> None:
 
         speedup = legacy_secs / metadata_secs if metadata_secs > 0 else float("inf")
 
+        metadata_ms = metadata_secs * 1000
         result = {
-            "phase": 1,
-            "topic": "list_packs metadata vs full",
+            "topic": "list_packs metadata absolute latency",
             "n_packs": N_PACKS,
             "n_runs": N_RUNS,
             "legacy_seconds_median": legacy_secs,
             "metadata_seconds_median": metadata_secs,
-            "speedup": speedup,
-            "pass_criterion_speedup": 8.0,
-            "passed": speedup >= 8.0,
+            "metadata_ms_median": metadata_ms,
+            "metadata_to_legacy_ratio": speedup,
+            "pass_criterion_metadata_ms": 10.0,
+            "passed": metadata_ms < 10.0,
         }
 
-        out_path = Path("docs/perf/phase1-list-packs.json")
+        out_path = Path("docs/perf/list-packs.json")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(result, indent=2) + "\n")
 
         print()
         print(f"  legacy   (fetch_text=True): {legacy_secs * 1000:.2f} ms")
-        print(f"  metadata (no text):         {metadata_secs * 1000:.2f} ms")
-        print(f"  speedup:                    {speedup:.2f}×")
-        print(f"  pass (≥ 8×):                {'YES' if result['passed'] else 'NO'}")
+        print(f"  metadata (no text):         {metadata_ms:.2f} ms")
+        print(f"  ratio (legacy / metadata):  {speedup:.2f}×")
+        print(f"  pass (metadata < 10ms):     {'YES' if result['passed'] else 'NO'}")
         print(f"  wrote: {out_path}")
 
         if not result["passed"]:

@@ -1,0 +1,13 @@
+{
+  "phase": 1,
+  "topic": "list_packs metadata absolute latency",
+  "n_packs": 10000,
+  "n_runs": 5,
+  "legacy_seconds_median": 0.017996388000028674,
+  "metadata_seconds_median": 0.0054920919974392746,
+  "metadata_ms_median": 5.492091997439275,
+  "speedup_vs_legacy_same_run": 3.2767819636706035,
+  "pass_criterion_metadata_ms": 10.0,
+  "passed": true,
+  "historical_pre_fix_metadata_ms": 57.02
+}

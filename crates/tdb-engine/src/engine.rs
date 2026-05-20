@@ -519,13 +519,15 @@ impl Engine {
         }
 
         // 3. Rebuild pack_directory from current pool state. Idempotent —
-        //    same cell set yields same directory.
+        //    same cell set yields same directory. Owner is captured during
+        //    this single scan so `list_packs` can answer metadata queries
+        //    without re-reading the pool.
         let mut pack_cells = Vec::new();
         for cell_id in &all_cells {
             if let Ok(cell) = self.pool.get(*cell_id) {
                 let stored_pack_id = cell.token_span.0;
                 if stored_pack_id > 0 || cell.layer == PACK_RETRIEVAL_LAYER {
-                    pack_cells.push((stored_pack_id, cell.id));
+                    pack_cells.push((stored_pack_id, cell.id, cell.owner));
                 }
             }
         }
@@ -1284,7 +1286,7 @@ impl Engine {
             .insert(retrieval_cell_id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
 
         // Pack index.
-        self.pack_directory.insert_pack(pack_id, cell_ids);
+        self.pack_directory.insert_pack(pack_id, cell_ids, pack.owner);
 
         Ok(pack_id)
     }
@@ -1368,7 +1370,7 @@ impl Engine {
                     days_since_update: 0.0,
                 },
             );
-            self.pack_directory.insert_pack(info.pack_id, info.cell_ids);
+            self.pack_directory.insert_pack(info.pack_id, info.cell_ids, info.owner);
         }
 
         // Lazy Vamana activation.
@@ -1918,24 +1920,28 @@ impl Engine {
     ///
     /// Returns `(pack_id, owner, tier, importance)` sorted by importance
     /// descending. Packs without governance default to `(Draft, 0.0)`.
+    ///
+    /// Answers the query entirely from in-memory indices — no `BlockPool`
+    /// reads, no Q4 cell decompression. At 10K packs the median wall time
+    /// is in single-digit milliseconds (see
+    /// `experiments/list_packs_microbench.py`).
     pub fn list_packs(&self, owner_filter: Option<OwnerId>) -> Vec<(PackId, OwnerId, Tier, f32)> {
         let mut results = Vec::new();
         for &pack_id in self.pack_directory.pack_ids() {
-            let Some(cell_ids) = self.pack_directory.cell_ids(pack_id) else {
+            let Some(owner) = self.pack_directory.owner_for_pack(pack_id) else {
                 continue;
-            };
-            let Some(&retrieval_cell_id) = cell_ids.first() else {
-                continue;
-            };
-            let owner = match self.pool.get(retrieval_cell_id) {
-                Ok(cell) => cell.owner,
-                Err(_) => continue,
             };
             if let Some(filter) = owner_filter
                 && owner != filter
             {
                 continue;
             }
+            let Some(cell_ids) = self.pack_directory.cell_ids(pack_id) else {
+                continue;
+            };
+            let Some(&retrieval_cell_id) = cell_ids.first() else {
+                continue;
+            };
             let (tier, importance) = self
                 .governance
                 .get(&retrieval_cell_id)

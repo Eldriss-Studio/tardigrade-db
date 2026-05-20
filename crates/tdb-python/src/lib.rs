@@ -67,9 +67,8 @@ struct Engine {
 }
 
 /// Emit a Python `DeprecationWarning` for callers using `list_packs` without
-/// an explicit `fetch_text=` kwarg. Frequency matches the codebase convention
-/// (`tardigrade_hooks/sweep.py`): warn on every call. Python's default warnings
-/// filter deduplicates by source location.
+/// an explicit `fetch_text=` kwarg. Fires on every call; Python's default
+/// warnings filter deduplicates by source location.
 fn warn_legacy_list_packs(py: Python<'_>) -> PyResult<()> {
     let warnings_mod = py.import("warnings")?;
     let category = py.get_type::<pyo3::exceptions::PyDeprecationWarning>();
@@ -936,10 +935,10 @@ impl Engine {
     ///
     /// Rows are aligned by index and sorted by importance descending.
     ///
-    /// This shape — rather than a list-of-dicts — is the whole point: at 10K
-    /// packs the dict-allocation cost of the legacy shape dominates everything
-    /// else, so callers that only need to scan metadata pay almost nothing here.
-    /// Use [`Engine::list_packs`] with `fetch_text=True` when you need text too.
+    /// The columnar shape lets the call answer from `PackDirectory`'s
+    /// in-memory indices via a single Rust→Python crossing, with no per-row
+    /// Python dict allocation. Use [`Engine::list_packs`] with
+    /// `fetch_text=True` when you need text alongside the metadata.
     #[pyo3(signature = (owner=None))]
     fn list_packs_metadata(
         &self,
@@ -969,19 +968,19 @@ impl Engine {
         Ok(dict.into_any().unbind())
     }
 
-    /// Enumerate all packs (legacy list-of-dicts shape, includes text).
+    /// Enumerate all packs as a list of dicts, with text included.
     ///
     /// Returns a list of dicts with keys: `pack_id`, `owner`, `tier`, `importance`, `text`.
     /// Sorted by importance descending.
     ///
     /// **Performance note:** this shape allocates one Python dict per pack, which
     /// dominates wall time at scale. When you don't need text, prefer
-    /// [`Engine::list_packs_metadata`] — it returns parallel numpy arrays and is
-    /// ~8× faster at 10K packs.
+    /// [`Engine::list_packs_metadata`] — it returns parallel numpy arrays from a
+    /// single Rust→Python crossing.
     ///
     /// When `fetch_text` is omitted, the call emits a `DeprecationWarning` and
-    /// returns the legacy shape; pass `fetch_text=True` to keep the behaviour
-    /// silently.
+    /// returns the list-of-dicts shape; pass `fetch_text=True` to keep the
+    /// behaviour silently.
     #[pyo3(signature = (owner=None, fetch_text=None))]
     fn list_packs(
         &self,
