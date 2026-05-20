@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_no changes yet_
+
+## [0.4.0] — 2026-05-19
+
+Minor release adding consumer-side pre-flight (`is_supported`) and closing the second half of the hybrid-attention story v0.3.3/v0.3.4 opened. The full pipeline — calibration, storage, retrieval, injection, generation — now works end-to-end on RecurrentGemma, Gemma 2, Jamba, and other architectures with non-trivial layer-type vocabularies.
+
 ### Public API
 
 - **`tardigrade_hooks.is_supported(model, tokenizer) → CompatibilityReport`**: pre-flight model compatibility checker. Returns a frozen dataclass with `is_supported`, `architecture` (`"uniform_softmax"` | `"hybrid"` | `"unknown"`), `n_hidden_layers`, `n_softmax_layers`, `recommended_strategy`, `adapter_type`, `notes`, and `blockers`. Pure-config — no forward pass, no device hop. Lets consumers refuse incompatible models at boot instead of crashing inside `KnowledgePackStore.store()` at runtime.
