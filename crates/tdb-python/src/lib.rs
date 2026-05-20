@@ -89,6 +89,25 @@ fn warn_legacy_list_packs(py: Python<'_>) -> PyResult<()> {
     Ok(())
 }
 
+/// Resolve the effective salience for a write given the caller's explicit
+/// value and an optional [`SalienceMode`] name. Returns the salience to
+/// store or a `ValueError`-shaped error on an unknown mode.
+///
+/// The derivation lives in [`tdb_core::salience::SalienceMode::resolve`];
+/// this function just adapts string→enum and re-shapes the error for
+/// Python consumers.
+fn resolve_salience(explicit: f32, mode: Option<&str>, encoded_key: &[f32]) -> PyResult<f32> {
+    use tdb_core::salience::SalienceMode;
+    use tdb_retrieval::per_token::HEADER_SIZE;
+    let mode = match mode {
+        None => return Ok(explicit),
+        Some(s) => s,
+    };
+    let parsed = SalienceMode::parse(mode)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(parsed.resolve(explicit, encoded_key, HEADER_SIZE))
+}
+
 fn lock_engine(inner: &Mutex<RustEngine>) -> PyResult<std::sync::MutexGuard<'_, RustEngine>> {
     inner.lock().map_err(|_| PyRuntimeError::new_err("engine lock poisoned"))
 }
@@ -811,7 +830,7 @@ impl Engine {
     /// Returns the assigned pack ID. Raises `RuntimeError` (stable code
     /// `tdb::write::empty_token_matrix`) on an empty / malformed matrix —
     /// silently writing such a pack would create an unqueryable cell.
-    #[pyo3(signature = (owner, token_matrix, layer_payloads, salience, text=None))]
+    #[pyo3(signature = (owner, token_matrix, layer_payloads, salience, text=None, salience_mode=None))]
     fn mem_write_pack_tokens(
         &self,
         py: Python<'_>,
@@ -820,8 +839,10 @@ impl Engine {
         layer_payloads: Vec<(u16, PyReadonlyArray1<'_, f32>)>,
         salience: f32,
         text: Option<String>,
+        salience_mode: Option<&str>,
     ) -> PyResult<u64> {
         use tdb_core::kv_pack::KVLayerPayload;
+        use tdb_retrieval::per_token::encode_per_token_keys;
 
         let tokens_arr = token_matrix.as_array();
         let shape = tokens_arr.shape();
@@ -834,6 +855,20 @@ impl Engine {
             slice.to_vec()
         } else {
             tokens_arr.iter().copied().collect()
+        };
+
+        // For salience_mode resolution we need the encoded key the engine
+        // will see. When the caller passes a derivation mode (not `None`
+        // and not `"none"`) we build the encoded key view in Python-land
+        // too; otherwise we skip the cost.
+        let mode_needs_key = matches!(salience_mode, Some(m) if m != "none");
+        let effective_salience = if mode_needs_key && n_tokens > 0 && dim > 0 {
+            let row_refs: Vec<&[f32]> =
+                (0..n_tokens).map(|t| &flat[t * dim..(t + 1) * dim]).collect();
+            let encoded = encode_per_token_keys(&row_refs);
+            resolve_salience(salience, salience_mode, &encoded)?
+        } else {
+            salience
         };
 
         let layers: Vec<KVLayerPayload> = layer_payloads
@@ -852,7 +887,15 @@ impl Engine {
         let engine = Arc::clone(&self.inner);
         py.detach(move || {
             lock_engine(&engine)?
-                .mem_write_pack_tokens(owner, &flat, n_tokens, dim, layers, salience, text)
+                .mem_write_pack_tokens(
+                    owner,
+                    &flat,
+                    n_tokens,
+                    dim,
+                    layers,
+                    effective_salience,
+                    text,
+                )
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
@@ -860,7 +903,7 @@ impl Engine {
     /// Store a complete multi-layer KV cache as a single atomic pack.
     ///
     /// Returns the assigned pack ID.
-    #[pyo3(signature = (owner, retrieval_key, layer_payloads, salience, text=None))]
+    #[pyo3(signature = (owner, retrieval_key, layer_payloads, salience, text=None, salience_mode=None))]
     fn mem_write_pack(
         &self,
         py: Python<'_>,
@@ -869,11 +912,14 @@ impl Engine {
         layer_payloads: Vec<(u16, PyReadonlyArray1<'_, f32>)>,
         salience: f32,
         text: Option<String>,
+        salience_mode: Option<&str>,
     ) -> PyResult<u64> {
         use tdb_core::kv_pack::{KVLayerPayload, KVPack};
 
         let key =
             retrieval_key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?.to_vec();
+
+        let effective_salience = resolve_salience(salience, salience_mode, &key)?;
 
         let layers: Vec<KVLayerPayload> = layer_payloads
             .iter()
@@ -888,7 +934,8 @@ impl Engine {
             })
             .collect::<PyResult<Vec<_>>>()?;
 
-        let pack = KVPack { id: 0, owner, retrieval_key: key, layers, salience, text };
+        let pack =
+            KVPack { id: 0, owner, retrieval_key: key, layers, salience: effective_salience, text };
 
         let engine = Arc::clone(&self.inner);
         py.detach(move || {
@@ -1428,6 +1475,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ENCODING_SENTINEL", tdb_engine::encoding::HEADER_SENTINEL)?;
     m.add("ENCODING_N_TOKENS_IDX", tdb_engine::encoding::N_TOKENS_IDX)?;
     m.add("ENCODING_DIM_IDX", tdb_engine::encoding::DIM_IDX)?;
+
+    m.add("SALIENCE_SCALE", tdb_core::salience::SALIENCE_SCALE)?;
+    m.add("SALIENCE_CAP", tdb_core::salience::SALIENCE_CAP)?;
 
     Ok(())
 }

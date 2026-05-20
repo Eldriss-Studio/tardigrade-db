@@ -87,11 +87,13 @@
 pub mod error;
 pub mod kv_pack;
 pub mod memory_cell;
+pub mod salience;
 pub mod synaptic_bank;
 pub mod types;
 
 pub use error::TardigradeError;
 pub use kv_pack::{KVLayerPayload, KVPack, PackId, PackReadResult};
 pub use memory_cell::MemoryCell;
+pub use salience::{SALIENCE_CAP, SALIENCE_SCALE, SalienceMode};
 pub use synaptic_bank::SynapticBankEntry;
 pub use types::{CellId, LayerId, OwnerId, SynapticId, TagBits, Tier};
