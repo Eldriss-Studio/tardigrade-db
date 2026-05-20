@@ -79,7 +79,7 @@ def store_fact(engine, model, tok, adapter, fact_text, query_layer, hidden_size,
     Captures K/V from softmax layers only — recurrent / linear layers are
     skipped, because (a) they don't expose .keys/.values, (b) the v11 spike
     showed they contribute nothing observable to recall anyway. This is
-    exactly the Phase 1 codec design under test.
+    the codec design under test in this spike.
     """
     device = model.device
     messages = adapter.store_messages(fact_text)

@@ -124,7 +124,7 @@ def main():
     print(f"  Avg latency:   {np.mean(lats):.1f}ms")
 
     print(f"\n  -- Comparison --")
-    print(f"  Q*K pipeline (Phase 22):        40.0%")
+    print(f"  Q*K pipeline (historical):       40.0%")
     print(f"  Diagnostic (outside engine):   100.0%")
     print(f"  RAG baseline:                  100.0%")
     print(f"  THIS RUN (engine pipeline):     {pct:.1f}%")

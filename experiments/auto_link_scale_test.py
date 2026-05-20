@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 33: Auto-linking scale test.
+"""Auto-linking scale test.
 
 Store 100 background memories, then 40 cross-ref detail facts
 individually (NOT with store_linked). Auto-linking should connect
@@ -135,7 +135,7 @@ def main():
     print(f"  Auto-links formed: {total_links}", flush=True)
     print(f"  Pairs correctly linked: {correct_links}/20", flush=True)
     print(f"\n  Text RAG:            {rag_correct}/{len(CROSS_REF_PAIRS)} ({100*rag_correct//len(CROSS_REF_PAIRS)}%)", flush=True)
-    print(f"  store_linked (prev): 14/20 (70%) [Phase 32]", flush=True)
+    print(f"  store_linked baseline: 14/20 (70%)", flush=True)
     print(f"  Auto-linked:         {trace_correct}/{len(CROSS_REF_PAIRS)} ({100*trace_correct//len(CROSS_REF_PAIRS)}%)", flush=True)
 
     if trace_correct > 14:

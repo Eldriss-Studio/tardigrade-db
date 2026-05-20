@@ -2495,8 +2495,9 @@ fn test_refresh_rebuilds_slb_when_key_dim_changes() {
     };
     let _pid = writer.mem_write_pack(&pack).unwrap();
 
-    // Refresh reader, then issue a query at the writer's key dim. Before the
-    // fix, this panics inside SLB; after the fix, it returns results.
+    // Refresh reader, then issue a query at the writer's key dim. The SLB
+    // must serve queries whose dim matches the writer's, even when the
+    // reader was opened before any write happened.
     reader.refresh().unwrap();
     let query = encode_per_token_keys(&[&vec![0.5_f32; 1024]]);
     let _results = reader.mem_read_pack(&query, 1, None).unwrap();

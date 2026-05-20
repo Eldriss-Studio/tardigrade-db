@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Phase 31: Trace-linked multi-hop retrieval experiment.
+"""Trace-linked multi-hop retrieval experiment.
 
 Compares: baseline retrieval (0/10 find both) vs trace-linked (should
 find both via links). Uses Qwen3-0.6B.
 
-Decision gate G8: trace retrieval finds both packs 10/10
-Decision gate G9: trace + injection >= 6/10 (matching oracle ceiling)
+Decision gates:
+  G8 — trace retrieval finds both packs 10/10
+  G9 — trace + injection >= 6/10 (matching oracle ceiling)
 
 Usage:
     source .venv/bin/activate
@@ -151,8 +152,8 @@ def main():
     print("SUMMARY")
     print("=" * 70)
     print(f"  Text RAG:               {rag_correct}/{len(MULTI_FACTS)}")
-    print(f"  Baseline injection:     3/10 (Phase 30)")
-    print(f"  Oracle injection:       6/10 (Phase 30B)")
+    print(f"  Baseline injection (no trace): 3/10")
+    print(f"  Oracle injection (gold packs): 6/10")
     print(f"  Trace retrieval found:  {retrieval_all_found}/10 all packs")
     print(f"  Trace + injection:      {trace_correct}/{len(MULTI_FACTS)}")
     print()

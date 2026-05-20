@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 30B: Oracle injection + higher-k retrieval diagnostic.
+"""Oracle injection + higher-k retrieval diagnostic.
 
 Two tests in one script:
 

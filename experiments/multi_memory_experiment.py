@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Multi-memory KV injection experiment (Phase 30).
+"""Multi-memory KV injection experiment.
 
 Compares naive KV concatenation vs text RAG on cross-referencing facts
 that require synthesizing information from 2+ memories.

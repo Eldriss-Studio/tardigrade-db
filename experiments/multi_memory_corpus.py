@@ -4,7 +4,7 @@
 # No single fact contains the full answer — the model must synthesize
 # information across injected memories.
 #
-# Designed for multi-memory KV injection experiments (Phase 30).
+# Designed for multi-memory KV injection experiments.
 
 MULTI_FACTS = [
     {

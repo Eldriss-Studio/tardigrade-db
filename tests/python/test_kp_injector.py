@@ -473,7 +473,7 @@ def test_legacy_system_adapter_builds_retrieve_messages():
     ]
 
 
-# -- Phase 2: KnowledgePackStore integration with RetrievalKeyStrategy ------
+# -- KnowledgePackStore integration with RetrievalKeyStrategy ---------------
 
 def test_kp_default_constructor_builds_hidden_state_strategy(engine, gpt2, tokenizer):
     """When no strategy/registry/query_layer is provided, the default
@@ -632,7 +632,7 @@ def test_kp_retrieve_invokes_retrieval_key_strategy_compute(engine, gpt2, tokeni
     assert all(c == ("compute", 5) for c in calls)
 
 
-# -- Phase 2.5: hybrid-safe storage path ---------------------------------------
+# -- Hybrid-safe storage path --------------------------------------------------
 #
 # Storage was hybrid-unsafe through v0.3.3: ``KnowledgePackStore.store()``
 # unconditionally read ``kv.layers[li].keys[0]`` over ``range(n_layers)``,
@@ -798,8 +798,8 @@ def test_layer_kind_labels_normalises_delta_net_to_recurrent():
     ``"delta_net"`` / ``"gated_delta_net"`` / ``"mamba"`` are all
     recurrent / linear-attention variants and should surface as
     ``"recurrent"`` in the labels — otherwise the log shows ugly
-    truncated strings like ``"delta_ne"`` (the pre-fix behavior of
-    truncating unknown labels to 8 chars)."""
+    truncated strings like ``"delta_ne"`` if unknown labels are
+    truncated to 8 chars."""
     from types import SimpleNamespace
 
     from tardigrade_hooks._hidden_states import layer_kind_labels
@@ -1005,8 +1005,8 @@ def test_kp_text_only_models_unaffected_by_text_config_resolution(kps):
     """REGRESSION: GIVEN the existing GPT-2 fixture (real HF config that
     exposes get_text_config returning self),
     WHEN KnowledgePackStore reads its dimensions,
-    THEN n_layers / hidden_size match the pre-fix values
-    (GPT-2 = 12 layers, 768 hidden)."""
+    THEN n_layers / hidden_size match the canonical GPT-2 values
+    (12 layers, 768 hidden)."""
     assert kps.n_layers == 12
     assert kps.n_softmax_layers == 12
     assert kps.hidden_size == 768

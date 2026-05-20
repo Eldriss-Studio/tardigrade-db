@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 30B diagnostic: does standard embedding RAG also fail at multi-hop?
+"""Diagnostic: does standard embedding RAG also fail at multi-hop?
 
 Tests whether e5-small-v2 cosine similarity retrieval finds BOTH
 needed facts for cross-referencing queries.

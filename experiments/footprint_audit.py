@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Footprint growth audit — Track A slice A2 GPU runner.
+"""Footprint growth audit — GPU runner.
 
 Ingests synthetic memory cells at the sample points in
 :data:`FOOTPRINT_SAMPLE_POINTS` and snapshots engine arena bytes +
-process RSS at each point. Writes the JSON the positioning doc
-(slice A3) consumes.
+process RSS at each point. Writes the JSON consumed by the latency-
+first positioning doc.
 
 Usage::
 

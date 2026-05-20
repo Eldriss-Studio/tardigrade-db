@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# Phase 25: Injection vs Text RAG -- the existential test.
+# Injection vs Text RAG — the existential test.
 #
 # Same novel facts, same queries, two paths:
 #   A) Text RAG: paste memory text into prompt, generate
 #   B) KV Injection: inject stored KV tensors into cache, generate
 #
-# Uses GPT-2 (proven injection pipeline from Phase 18).
+# Uses GPT-2 (the smallest model with a proven injection pipeline).
 
 import shutil
 import sys
@@ -98,7 +98,7 @@ def run_kv_injection(model, tokenizer, facts):
 
 def main():
     print("=" * 70)
-    print("Phase 25: Injection vs Text RAG")
+    print("Injection vs Text RAG")
     print(f"Novel facts: {len(NOVEL_FACTS)} | Model: GPT-2")
     print("=" * 70)
 

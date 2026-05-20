@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 30 diagnostic: are the right packs being retrieved?
+"""Diagnostic: are the right packs being retrieved on multi-memory queries?
 
 Hypothesis: multi-memory injection fails not because of cross-attention
 or position corruption, but because the retriever returns the WRONG

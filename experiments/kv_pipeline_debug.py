@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Phase 26: Stage-by-stage KV pipeline diagnostic.
+# Stage-by-stage KV pipeline diagnostic.
 #
 # Direct injection works (8/10). Through TardigradeDB: 0/10.
 # This script tests each stage to find where fidelity breaks.

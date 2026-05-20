@@ -2,13 +2,12 @@
 
 LoCoMo single_hop, multi_hop, temporal, open_domain, adversarial are
 different abilities — system A may beat system B overall while losing
-the temporal slice. The runner must surface that split so the audit
-doc can attribute movement to a real cause. Same shape applies to
-LongMemEval's ``question_type``.
+the temporal slice. The runner must surface that split so readers can
+attribute movement to a real cause. Same shape applies to LongMemEval's
+``question_type``.
 
 Pin the contract on the static aggregation helper directly so the
-test is hermetic — no adapter or evaluator wiring needed. the bench audit
-audit 2026-05-16 #89.
+test is hermetic — no adapter or evaluator wiring needed.
 """
 
 from __future__ import annotations

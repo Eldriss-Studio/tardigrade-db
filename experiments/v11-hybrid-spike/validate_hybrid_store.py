@@ -1,10 +1,10 @@
-"""Phase 2.5 validation: KnowledgePackStore.store() no longer crashes on
+"""Validation: KnowledgePackStore.store() does not crash on
 hybrid-attention models.
 
-Pre-fix (≤ 0.3.3): the unconditional `kv.layers[li].keys[0]` loop in
-`store()` raised AttributeError on RecurrentGemma's recurrent layers
-(which have no `.keys`). Post-fix (commit 6ed22c6): the softmax-only
-filter from `_softmax_layer_payloads` skips them.
+RecurrentGemma's recurrent layers expose no `.keys` attribute. The
+softmax-only filter from `_softmax_layer_payloads` skips them so the
+unconditional `kv.layers[li].keys[0]` loop in `store()` never runs on
+those layers.
 
 This script writes 5 facts and checks two contracts:
 

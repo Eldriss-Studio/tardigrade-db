@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 34: Do entity tokens produce higher per-token matches than topic tokens?
+"""Do entity tokens produce higher per-token matches than topic tokens?
 
 Compares max per-token cosine similarity between:
   A) Cross-ref linking fact vs its related background memory (entity match)

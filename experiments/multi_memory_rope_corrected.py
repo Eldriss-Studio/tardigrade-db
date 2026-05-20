@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Phase 30A: RoPE-corrected multi-memory injection experiment.
+"""RoPE-corrected multi-memory injection experiment.
 
 Tests whether fixing RoPE positions before concatenating KV packs
 restores cross-fact reasoning. Based on CacheBlend (EuroSys 2025).
 
-Decision gate G4a:
+Decision gate:
   >= 7/10 -> ship RoPECorrectedConcatComposer. Skip HKVD.
-  5-6/10 -> proceed to Phase 30B (HKVD selective recomputation)
+  5-6/10 -> proceed to HKVD selective recomputation
   < 5/10 -> position is not the primary issue
 
 Usage:
@@ -168,10 +168,10 @@ def main():
 
     if rope_correct >= 7:
         print("  DECISION GATE G4a: PASS -- RoPE correction >= 7/10")
-        print("  Ship RoPECorrectedConcatComposer as default. Skip Phase 30B.")
+        print("  Ship RoPECorrectedConcatComposer as default. Skip HKVD.")
     elif rope_correct >= 5:
         print("  DECISION GATE G4b: BORDERLINE -- RoPE correction 5-6/10")
-        print("  Position helps but insufficient. Proceed to Phase 30B (HKVD).")
+        print("  Position helps but insufficient. Proceed to HKVD selective recomputation.")
     else:
         print("  DECISION GATE G4c: FAIL -- RoPE correction < 5/10")
         print("  Position is not the primary issue. Fall back to hybrid approach.")

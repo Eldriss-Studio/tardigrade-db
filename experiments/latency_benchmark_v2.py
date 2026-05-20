@@ -4,7 +4,7 @@
 Wires the Strategy + Template Method primitives in
 ``tdb_bench.latency.bench_v2`` to real Qwen3-0.6B + the engine, then
 writes the report JSON consumed by
-``docs/positioning/latency_first.md`` (Track A slice A3).
+``docs/positioning/latency_first.md``.
 
 Usage::
 

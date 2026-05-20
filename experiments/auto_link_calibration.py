@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 33: Calibrate auto-link threshold.
+"""Calibrate auto-link threshold.
 
 Measure retrieval scores between cross-ref detail facts and existing
 background memories. Determine threshold separating related from unrelated.

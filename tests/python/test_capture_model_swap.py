@@ -1,8 +1,7 @@
 """ATDD: capture-model swap to Qwen3-1.7B.
 
 Pins that the engine + adapter handle a different capture model than
-the default Qwen3-0.6B without code changes — just the env-var swap
-the audit confirmed clean.
+the default Qwen3-0.6B without code changes — just the env-var swap.
 
 * B1.1 — synthetic-fact recall@5 at Qwen3-1.7B is at least the small-
   corpus floor (90% on 20 cells).

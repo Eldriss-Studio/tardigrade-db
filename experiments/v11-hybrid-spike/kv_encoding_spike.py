@@ -1,6 +1,6 @@
-"""Phase 2 spike: K-vector encoding as retrieval key for hybrid models.
+"""Spike: K-vector encoding as retrieval key for hybrid models.
 
-Today's hidden-state-based calibration flatlined on RecurrentGemma at
+Hidden-state-based calibration flatlined on RecurrentGemma at
 every layer (best ~3/20 top-1). Per Michalak & Abreu 2025 retrieval
 lives in attention heads, not in any layer's mean-pooled residual
 stream. The natural alternative: use the K projections of softmax
@@ -9,9 +9,8 @@ attention layers directly as the retrieval encoding.
 This spike answers: **does K-vector encoding produce retrievable
 keys on a hybrid model?** Acceptance: at least one softmax layer
 achieves ≥ 50% top-1 on the 20-fact bundled corpus. If yes →
-proceed to Phase 2 library work (RetrievalKeyStrategy interface).
-If no → publish negative result, pivot to per-head selection or
-learned adapter.
+graduate the strategy into `RetrievalKeyStrategy`. If no → publish
+negative result, pivot to per-head selection or a learned adapter.
 
 Also runs on Qwen3 as a sanity check — K-vector encoding should
 match or beat hidden-state baseline (~90% top-1) on a uniform-
@@ -186,7 +185,7 @@ def main():
         best = max(valid, key=lambda r: (r["top1"], r["top5"], r["layer"]))
         print(f"Best softmax layer: {best['layer']}  top-1 {best['top1']}/{LIMIT}  top-5 {best['top5']}/{LIMIT}")
         bar = 0.5 * LIMIT
-        verdict = "PASS — proceed to Phase 2 library work" if best["top1"] >= bar else "FAIL — pivot to per-head or learned-adapter approach"
+        verdict = "PASS — graduate the strategy into RetrievalKeyStrategy" if best["top1"] >= bar else "FAIL — pivot to per-head or learned-adapter approach"
         print(f"Acceptance (≥{int(bar)} top-1): {verdict}")
     else:
         print("All layers errored — investigate before drawing conclusions.")

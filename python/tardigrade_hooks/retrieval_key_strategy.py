@@ -3,8 +3,8 @@
 Design pattern: **Strategy**.
 
 Different model architectures encode retrieval-discriminative information
-in different parts of the residual stream. Phase 1's calibration sweep
-showed:
+in different parts of the residual stream. The calibration sweep in
+`tardigrade_hooks.calibrate` showed:
 
 - **Uniform-softmax models** (Qwen3, Llama-3, Mistral, Gemma-2): mean-pooled
   hidden states at a deep semantic layer encode retrieval well (Qwen3 hits
@@ -137,8 +137,9 @@ class HiddenStateKeyStrategy(RetrievalKeyStrategy):
 
     Args:
         query_layer: Index into ``output.hidden_states``. 0 is the
-            embedding output; 1..n are per-layer outputs. Phase 1
-            calibration picks this empirically; the library default
+            embedding output; 1..n are per-layer outputs. The
+            calibration sweep in ``tardigrade_hooks.calibrate`` picks
+            this empirically; the library default
             (in ``constants.DEFAULT_CAPTURE_LAYER_RATIO``) is
             ``int(num_hidden_layers * 0.67)``.
     """
