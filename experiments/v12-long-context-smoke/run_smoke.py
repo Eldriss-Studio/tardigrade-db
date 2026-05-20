@@ -226,18 +226,27 @@ def run_q_a(tok, model, engine, kps) -> list[dict]:
 
 def run_q_b(tok, model, engine, kps) -> list[dict]:
     """Sweep N ∈ {256, 1024, 2048, 4096, 8192} × n trials × {with-inject,
-    no-inject control}. Per trial: store a short fact, populate cache
-    via retrieve_and_inject, forward N filler tokens through the model
-    with that cache, then forward the query + generate. Score: does
-    the generated text contain the password?"""
+    no-inject control}. Per trial: store a fluent neutral fact (the
+    needle), populate cache via retrieve_and_inject, forward N filler
+    tokens through the model with that cache, then forward the query +
+    generate. Score: does the generated text contain the planted
+    distinctive substring?
+
+    The needle is a meeting-rescheduled fact with a "Hall Brennan-NNN"
+    room number — a fluent sentence that doesn't trigger Gemma 3's
+    password-pattern safety refusal, and a distinctive substring the
+    model is unlikely to hallucinate without the injected context.
+    Replaces the HORIZON-style password needle from RULER, which
+    gemma-3-4b-it refused categorically at all N (see results doc).
+    """
     Ns = [256, 1024, 2048, 4096, 8192]
     trials: list[dict] = []
     rng = random.Random(7)
 
     for n_filler in Ns:
         for trial_idx in range(N_TRIALS_PER_CELL):
-            password = f"HORIZON-{rng.randint(1000, 9999)}"
-            fact = f"The password for the vault is {password}."
+            room = f"Hall Brennan-{rng.randint(100, 999)}"
+            fact = f"The Velmoor Conference was rescheduled to Friday at 3:45 PM in {room} for the keynote by Dr. Felmey."
             for inject in (True, False):
                 t_start = time.perf_counter()
                 pack_id = None
@@ -245,7 +254,7 @@ def run_q_b(tok, model, engine, kps) -> list[dict]:
                 if inject:
                     pack_id = kps.store(fact, auto_link=False)
                     cache, _, _ = kps.retrieve_and_inject(
-                        "What is the password for the vault?",
+                        "Where was the Velmoor Conference rescheduled to?",
                     )
 
                 filler_ids = build_filler_tokens(tok, n_filler)
@@ -261,7 +270,7 @@ def run_q_b(tok, model, engine, kps) -> list[dict]:
                             ext = model(filler_t, use_cache=True)
                             ext_cache = ext.past_key_values
 
-                        query_text = "What is the password for the vault?"
+                        query_text = "Where was the Velmoor Conference rescheduled to?"
                         query_ids = tok.encode(query_text, return_tensors="pt").to(model.device)
                         kv_len = ext_cache.get_seq_length() if hasattr(ext_cache, "get_seq_length") else n_filler
                         q_len = query_ids.shape[1]
@@ -275,7 +284,7 @@ def run_q_b(tok, model, engine, kps) -> list[dict]:
                         )
                     text = tok.decode(out[0, query_ids.shape[1]:],
                                        skip_special_tokens=True)
-                    hit = password in text
+                    hit = room in text
                     err = None
                 except Exception as e:
                     text = ""
@@ -284,7 +293,7 @@ def run_q_b(tok, model, engine, kps) -> list[dict]:
 
                 trials.append({
                     "question": "B", "n_filler": n_filler, "trial_idx": trial_idx,
-                    "inject": inject, "password": password,
+                    "inject": inject, "room": room,
                     "hit": hit, "generated": text[:200],
                     "error": err,
                     "elapsed_ms": (time.perf_counter() - t_start) * 1000,
@@ -308,15 +317,24 @@ def run_q_b(tok, model, engine, kps) -> list[dict]:
 
 
 def main() -> int:
-    print(f"[{time.strftime('%H:%M:%S')}] N_TRIALS_PER_CELL={N_TRIALS_PER_CELL}")
+    skip_q_a = os.environ.get("SMOKE_SKIP_Q_A", "").lower() in ("1", "true")
+    skip_q_b = os.environ.get("SMOKE_SKIP_Q_B", "").lower() in ("1", "true")
+    out_suffix = os.environ.get("SMOKE_OUT_SUFFIX", "")
+
+    print(f"[{time.strftime('%H:%M:%S')}] N_TRIALS_PER_CELL={N_TRIALS_PER_CELL} "
+          f"skip_q_a={skip_q_a} skip_q_b={skip_q_b}")
     with tempfile.TemporaryDirectory() as tmpdir:
         tok, model, engine, kps = load_model_and_engine(Path(tmpdir))
 
-        print(f"[{time.strftime('%H:%M:%S')}] === Question A (long stored facts) ===")
-        a_trials = run_q_a(tok, model, engine, kps)
+        a_trials: list[dict] = []
+        if not skip_q_a:
+            print(f"[{time.strftime('%H:%M:%S')}] === Question A (long stored facts) ===")
+            a_trials = run_q_a(tok, model, engine, kps)
 
-        print(f"[{time.strftime('%H:%M:%S')}] === Question B (long active context) ===")
-        b_trials = run_q_b(tok, model, engine, kps)
+        b_trials: list[dict] = []
+        if not skip_q_b:
+            print(f"[{time.strftime('%H:%M:%S')}] === Question B (long active context) ===")
+            b_trials = run_q_b(tok, model, engine, kps)
 
         results = {
             "model_id": MODEL_ID,
@@ -326,7 +344,7 @@ def main() -> int:
             "q_a_trials": a_trials,
             "q_b_trials": b_trials,
         }
-        out_path = HERE / "results.json"
+        out_path = HERE / f"results{out_suffix}.json"
         out_path.write_text(json.dumps(results, indent=2))
         print(f"[{time.strftime('%H:%M:%S')}] wrote {out_path}")
 
