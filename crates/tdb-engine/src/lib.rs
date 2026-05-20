@@ -183,6 +183,7 @@
 
 pub mod cell_source_pool;
 pub mod checkpoint;
+pub mod chunk_boundary;
 pub mod engine;
 pub mod maintenance;
 pub(crate) mod pack_directory;

@@ -51,34 +51,39 @@ class BoundaryStrategy(ABC):
         ...
 
 
-class WhitespaceBoundaryStrategy(BoundaryStrategy):
-    """Split at the last whitespace before max_pos."""
+class _RustBoundaryAdapter(BoundaryStrategy):
+    """Adapter mapping the Python `BoundaryStrategy` ABC onto the Rust
+    `tdb_engine::chunk_boundary::find_chunk_boundary` implementation.
+
+    The Rust side owns the strategy semantics — whitespace returns the
+    last space, sentence returns the position after the terminal
+    punctuation, paragraph prefers `\\n\\n` and falls back through
+    sentence then whitespace. CJK sentence terminators are recognised
+    natively; no Python-side `_ENDINGS` tuple needs to stay in sync.
+    """
+
+    _STRATEGY: str
 
     def find_split(self, text: str, max_pos: int) -> int:
-        idx = text.rfind(" ", 0, max_pos)
-        if idx > 0:
-            return idx
-        return max_pos
+        from tardigrade_db import find_chunk_boundary
+
+        return find_chunk_boundary(text, max_pos, self._STRATEGY)
 
 
-class SentenceBoundaryStrategy(BoundaryStrategy):
+class WhitespaceBoundaryStrategy(_RustBoundaryAdapter):
+    """Split at the last whitespace before max_pos."""
+
+    _STRATEGY = "whitespace"
+
+
+class SentenceBoundaryStrategy(_RustBoundaryAdapter):
     """Split at the last sentence-ending punctuation before max_pos,
     falling back to whitespace."""
 
-    _ENDINGS = (".", "!", "?", "。", "！", "？")
-
-    def find_split(self, text: str, max_pos: int) -> int:
-        best = -1
-        for ch in self._ENDINGS:
-            idx = text.rfind(ch, 0, max_pos)
-            if idx > best:
-                best = idx
-        if best > 0:
-            return best + 1  # include the punctuation
-        return WhitespaceBoundaryStrategy().find_split(text, max_pos)
+    _STRATEGY = "sentence"
 
 
-class ParagraphBoundaryStrategy(BoundaryStrategy):
+class ParagraphBoundaryStrategy(_RustBoundaryAdapter):
     """Split preferring paragraph / turn boundaries (``\\n\\n``), then
     sentence end, then whitespace.
 
@@ -93,19 +98,7 @@ class ParagraphBoundaryStrategy(BoundaryStrategy):
     boundary in the lookback window.
     """
 
-    def find_split(self, text: str, max_pos: int) -> int:
-        # Prefer paragraph boundary (\n\n or \r\n\r\n).
-        idx = text.rfind("\n\n", 0, max_pos)
-        if idx > 0:
-            return idx
-        idx = text.rfind("\r\n\r\n", 0, max_pos)
-        if idx > 0:
-            return idx
-        # Fall back to sentence boundary.
-        sentence = SentenceBoundaryStrategy().find_split(text, max_pos)
-        if sentence > 0 and sentence < max_pos:
-            return sentence
-        return WhitespaceBoundaryStrategy().find_split(text, max_pos)
+    _STRATEGY = "paragraph"
 
 
 # ---------------------------------------------------------------------------

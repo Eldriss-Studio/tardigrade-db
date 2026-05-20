@@ -1479,5 +1479,21 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SALIENCE_SCALE", tdb_core::salience::SALIENCE_SCALE)?;
     m.add("SALIENCE_CAP", tdb_core::salience::SALIENCE_CAP)?;
 
+    m.add_function(wrap_pyfunction!(find_chunk_boundary, m)?)?;
+
     Ok(())
+}
+
+/// Find a byte position `<= max_pos` to split `text` at, preferring the
+/// natural boundary indicated by `strategy`.
+///
+/// `strategy` is one of `"whitespace"`, `"sentence"`, or `"paragraph"`.
+/// See `tdb_engine::chunk_boundary` for the precise semantics — this is
+/// a direct `PyO3` surface over the Rust function.
+#[pyfunction]
+fn find_chunk_boundary(text: &str, max_pos: usize, strategy: &str) -> PyResult<usize> {
+    use tdb_engine::chunk_boundary::{BoundaryStrategy, find_chunk_boundary as inner};
+    let parsed = BoundaryStrategy::parse(strategy)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(inner(text, max_pos, parsed))
 }
