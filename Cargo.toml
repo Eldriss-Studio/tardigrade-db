@@ -38,7 +38,7 @@ crossbeam-epoch = "0.9"
 crossbeam-utils = "0.8"
 half = { version = "2", features = ["num-traits"] }
 bytemuck = { version = "1", features = ["derive"] }
-lru = "0.16"
+lru = "0.18"
 
 # Snapshot / persistence packaging (M1.2). `tar` for portable
 # archive packaging, `serde`/`serde_json` for the manifest header,
