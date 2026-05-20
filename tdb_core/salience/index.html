@@ -1,0 +1,52 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Salience derivation modes for pack writes."><title>tdb_core::salience - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module salience</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_core/index.html">tdb_<wbr>core</a><span class="version">0.5.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module salience</a></h2><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#constants" title="Constants">Constants</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate tdb_<wbr>core</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_core</a></div><h1>Module <span>salience</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_core/salience.rs.html#1-151">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Salience derivation modes for pack writes.</p>
+<p>A pack’s <em>salience</em> is a 0..100 score that seeds its initial position
+on the importance ladder. Two write contracts coexist:</p>
+<ul>
+<li>The caller may pass an explicit salience the engine stores verbatim
+(the default for legacy <code>mem_write_pack</code> callers).</li>
+<li>The caller may pass a <a href="enum.SalienceMode.html" title="enum tdb_core::salience::SalienceMode"><code>SalienceMode</code></a> and let the engine derive
+salience from the retrieval key’s magnitude. This keeps the formula
+in Rust, out of every consumer’s Python layer, and consistent across
+producers (<code>HuggingFace</code> hook, vLLM connector, MCP server).</li>
+</ul>
+<p>All derived modes apply <a href="constant.SALIENCE_SCALE.html" title="constant tdb_core::salience::SALIENCE_SCALE"><code>SALIENCE_SCALE</code></a> and clamp at <a href="constant.SALIENCE_CAP.html" title="constant tdb_core::salience::SALIENCE_CAP"><code>SALIENCE_CAP</code></a>
+so callers cannot accidentally over-rate a pack on a single write.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.UnknownSalienceMode.html" title="struct tdb_core::salience::UnknownSalienceMode">Unknown<wbr>Salience<wbr>Mode</a></dt><dd>Returned when <a href="enum.SalienceMode.html#method.parse" title="associated function tdb_core::salience::SalienceMode::parse"><code>SalienceMode::parse</code></a> receives an unknown name.</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.SalienceMode.html" title="enum tdb_core::salience::SalienceMode">Salience<wbr>Mode</a></dt><dd>How the engine should derive salience from the encoded retrieval key.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.SALIENCE_CAP.html" title="constant tdb_core::salience::SALIENCE_CAP">SALIENCE_<wbr>CAP</a></dt><dd>Maximum salience an automated derivation may assign. Caller-supplied
+salience is <strong>not</strong> clamped — explicit always wins.</dd><dt><a class="constant" href="constant.SALIENCE_SCALE.html" title="constant tdb_core::salience::SALIENCE_SCALE">SALIENCE_<wbr>SCALE</a></dt><dd>Multiplier mapping a per-element retrieval-key magnitude into the
+0..100 salience range. Chosen so that typical N(0, 1) hidden-state
+data sits in the 5..40 band — well clear of the cap.</dd></dl></section></div></main></body></html>

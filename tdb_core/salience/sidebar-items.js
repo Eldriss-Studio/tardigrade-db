@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SALIENCE_CAP","SALIENCE_SCALE"],"enum":["SalienceMode"],"struct":["UnknownSalienceMode"]};
