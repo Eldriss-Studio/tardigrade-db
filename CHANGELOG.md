@@ -10,6 +10,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _no changes yet_
 
+## [0.6.0] — 2026-05-20
+
+Write-path rewrite. `mem_write_pack` at typical LLM dimensions is now ~7× faster end-to-end, `list_packs` ~10× faster at 10K packs, and a new batch-write API collapses N fsyncs into one.
+
+### Public API
+
+- **`Engine.mem_write_pack_tokens(owner, token_matrix, layers, salience, text=None, salience_mode=None)`**: new — write-side counterpart to `mem_read_tokens`. Accepts a `(n_tokens, dim)` numpy matrix directly; Rust builds the encoded retrieval key in one allocation. No Python-side `encode_per_token` round-trip.
+- **`Engine.mem_write_batch_packs([pack, ...])`**: new — persist N packs with one coalesced fsync, returning assigned pack ids in input order. Eager counterpart to the streaming `open_with_write_buffer`.
+- **`mem_write_pack` / `mem_write_pack_tokens`**: new `salience_mode` kwarg. `"l2"` and `"max"` derive salience from the encoded retrieval key inside Rust using `tdb_core::SalienceMode`; `"none"` (default) preserves the caller's explicit `salience`.
+- **`tardigrade_db.find_chunk_boundary(text, max_pos, strategy)`**: new module-level function. `strategy` is `"whitespace"`, `"sentence"`, or `"paragraph"`. CJK sentence terminators (`。`, `！`, `？`) recognised natively. Backs the `BoundaryStrategy` ABC in `tardigrade_hooks.chunker`, which is now an Adapter.
+- **`tardigrade_db.SALIENCE_SCALE` / `SALIENCE_CAP`**: module-level constants mirroring the Rust derivation; replaces hardcoded `50.0` / `100.0` literals on the Python side.
+
+### Behaviour
+
+- **`Engine.list_packs()`** and **`list_packs_metadata()`** now answer entirely from in-memory indices on the new `PackDirectory` owner map — no per-pack `BlockPool::get`, no Q4 cell decompression. Recovery contract: the index is rebuilt from the segment scan on engine open, so the segment trail remains authoritative.
+- **Whitening covariance accumulation is now lazy.** The per-token outer-product `dim²` accumulation only runs when `WhiteningStrategy` is actually used; first call to `whitening_matrix()` flips the flag and backfills from the existing token store. Correctness unchanged for the whitening path.
+
+### Performance
+
+- **`Engine.list_packs_metadata(owner)`**: 57 ms → 5.5 ms median at 10K packs. ~10×.
+- **`Engine.mem_write_pack`**: 27.5 ms → 4 ms per write at `(seq_len=256, dim=1024)` under the streaming write buffer. ~7×. The win traces to the now-gated whitening covariance accumulation inside `PerTokenRetriever::insert`.
+- **`Engine.mem_write_batch_packs([×50])`**: 2 ms median vs 72 ms median for 50 sequential `mem_write_pack` calls (dim=64, NVMe SSD). 36.7×.
+
+### Bug Fixes
+
+- **HTTP `/mem/query`**: secondary `pack_text()` lookup removed. `mem_read_pack` already populates the `text` field; the fallback was dead defensiveness that added latency without ever changing the answer.
+
 ## [0.5.0] — 2026-05-20
 
 Faster pack enumeration via columnar metadata API; multi-pack injection now works on quantized models.
