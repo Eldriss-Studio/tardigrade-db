@@ -6,7 +6,7 @@
 [![Docs](https://img.shields.io/badge/docs-eldriss--studio.github.io-blue)](https://eldriss-studio.github.io/tardigrade-db)
 [![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](rust-toolchain.toml)
 
-> **TardigradeDB v0.7.0 is a research-grade preview.** Public APIs are stable; benchmark methodology is under active validation.
+> **TardigradeDB v0.7.1 is a research-grade preview.** Public APIs are stable; benchmark methodology is under active validation.
 
 A persistent KV-cache memory engine for LLMs. Store the model's own internal attention state, retrieve it later with attention-native scoring, and inject it back into the model without spending prompt tokens. Built from scratch in Rust with PyO3 Python bindings.
 
@@ -144,7 +144,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor workflow (CI g
 
 ## Project Status
 
-**Current version:** v0.7.0. Public APIs (Python + Rust) are stable for the 0.x series; breaking changes ride minor bumps per the semver pre-1.0 convention.
+**Current version:** v0.7.1. Public APIs (Python + Rust) are stable for the 0.x series; breaking changes ride minor bumps per the semver pre-1.0 convention.
 
 **Stable surfaces:**
 - The PyO3 Python API on `tardigrade_db.Engine` and the `tardigrade_hooks` consumer modules.

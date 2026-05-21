@@ -11,8 +11,8 @@ abstract: >-
   adaptive lifecycle policies, crash-safe persistence, and per-owner
   isolation.
 type: software
-version: "0.7.0"
-date-released: "2026-05-20"
+version: "0.7.1"
+date-released: "2026-05-21"
 license: MIT
 repository-code: "https://github.com/Eldriss-Studio/tardigrade-db"
 url: "https://eldriss-studio.github.io/tardigrade-db"

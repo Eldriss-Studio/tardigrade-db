@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_no changes yet_
+
+## [0.7.1] — 2026-05-21
+
 ### Documentation
 
 - **README**: restructured from 756 lines to ~229 lines following the
