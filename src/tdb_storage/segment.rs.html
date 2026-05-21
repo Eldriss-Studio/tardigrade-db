@@ -365,86 +365,110 @@
 <a href=#330 id=330 data-nosnippet>330</a>    })<span class="question-mark">?</span>;
 <a href=#331 id=331 data-nosnippet>331</a>    w.write_all(<span class="kw-2">&amp;</span>record_len.to_le_bytes())<span class="question-mark">?</span>;
 <a href=#332 id=332 data-nosnippet>332</a>
-<a href=#333 id=333 data-nosnippet>333</a>    <span class="comment">// Fixed fields.
-<a href=#334 id=334 data-nosnippet>334</a>    </span>w.write_all(<span class="kw-2">&amp;</span>cell.id.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#335 id=335 data-nosnippet>335</a>    w.write_all(<span class="kw-2">&amp;</span>cell.owner.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#336 id=336 data-nosnippet>336</a>    w.write_all(<span class="kw-2">&amp;</span>cell.layer.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#337 id=337 data-nosnippet>337</a>    w.write_all(<span class="kw-2">&amp;</span>(cell.key.len() <span class="kw">as </span>u32).to_le_bytes())<span class="question-mark">?</span>;
-<a href=#338 id=338 data-nosnippet>338</a>    w.write_all(<span class="kw-2">&amp;</span>(cell.value.len() <span class="kw">as </span>u32).to_le_bytes())<span class="question-mark">?</span>;
-<a href=#339 id=339 data-nosnippet>339</a>    w.write_all(<span class="kw-2">&amp;</span>(cell.pos_encoding.len() <span class="kw">as </span>u32).to_le_bytes())<span class="question-mark">?</span>;
-<a href=#340 id=340 data-nosnippet>340</a>    w.write_all(<span class="kw-2">&amp;</span>cell.token_span.<span class="number">0</span>.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#341 id=341 data-nosnippet>341</a>    w.write_all(<span class="kw-2">&amp;</span>cell.token_span.<span class="number">1</span>.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#342 id=342 data-nosnippet>342</a>    w.write_all(<span class="kw-2">&amp;</span>cell.meta.created_at.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#343 id=343 data-nosnippet>343</a>    w.write_all(<span class="kw-2">&amp;</span>cell.meta.updated_at.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#344 id=344 data-nosnippet>344</a>    w.write_all(<span class="kw-2">&amp;</span>cell.meta.importance.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#345 id=345 data-nosnippet>345</a>    w.write_all(<span class="kw-2">&amp;</span>cell.meta.tags.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#346 id=346 data-nosnippet>346</a>    w.write_all(<span class="kw-2">&amp;</span>[cell.meta.tier <span class="kw">as </span>u8])<span class="question-mark">?</span>;
-<a href=#347 id=347 data-nosnippet>347</a>
-<a href=#348 id=348 data-nosnippet>348</a>    <span class="comment">// Quantized key.
-<a href=#349 id=349 data-nosnippet>349</a>    </span>w.write_all(<span class="kw-2">&amp;</span>(key_q.scales.len() <span class="kw">as </span>u32).to_le_bytes())<span class="question-mark">?</span>;
-<a href=#350 id=350 data-nosnippet>350</a>    w.write_all(<span class="kw-2">&amp;</span>(key_q.data.len() <span class="kw">as </span>u32).to_le_bytes())<span class="question-mark">?</span>;
-<a href=#351 id=351 data-nosnippet>351</a>    <span class="comment">// Quantized value.
-<a href=#352 id=352 data-nosnippet>352</a>    </span>w.write_all(<span class="kw-2">&amp;</span>(val_q.scales.len() <span class="kw">as </span>u32).to_le_bytes())<span class="question-mark">?</span>;
-<a href=#353 id=353 data-nosnippet>353</a>    w.write_all(<span class="kw-2">&amp;</span>(val_q.data.len() <span class="kw">as </span>u32).to_le_bytes())<span class="question-mark">?</span>;
-<a href=#354 id=354 data-nosnippet>354</a>
-<a href=#355 id=355 data-nosnippet>355</a>    <span class="comment">// Variable-length data.
-<a href=#356 id=356 data-nosnippet>356</a>    </span>write_f32_slice(w, <span class="kw-2">&amp;</span>key_q.scales)<span class="question-mark">?</span>;
-<a href=#357 id=357 data-nosnippet>357</a>    w.write_all(<span class="kw-2">&amp;</span>key_q.data)<span class="question-mark">?</span>;
-<a href=#358 id=358 data-nosnippet>358</a>    write_f32_slice(w, <span class="kw-2">&amp;</span>val_q.scales)<span class="question-mark">?</span>;
-<a href=#359 id=359 data-nosnippet>359</a>    w.write_all(<span class="kw-2">&amp;</span>val_q.data)<span class="question-mark">?</span>;
-<a href=#360 id=360 data-nosnippet>360</a>    write_f32_slice(w, <span class="kw-2">&amp;</span>cell.pos_encoding)<span class="question-mark">?</span>;
-<a href=#361 id=361 data-nosnippet>361</a>
-<a href=#362 id=362 data-nosnippet>362</a>    <span class="prelude-val">Ok</span>(record_bytes <span class="kw">as </span>u64)
-<a href=#363 id=363 data-nosnippet>363</a>}
-<a href=#364 id=364 data-nosnippet>364</a>
-<a href=#365 id=365 data-nosnippet>365</a><span class="comment">// --- I/O helpers (little-endian) ---
-<a href=#366 id=366 data-nosnippet>366</a>
-<a href=#367 id=367 data-nosnippet>367</a></span><span class="kw">fn </span>write_f32_slice(w: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write, values: <span class="kw-2">&amp;</span>[f32]) -&gt; io::Result&lt;()&gt; {
-<a href=#368 id=368 data-nosnippet>368</a>    <span class="kw">for </span><span class="kw-2">&amp;</span>v <span class="kw">in </span>values {
-<a href=#369 id=369 data-nosnippet>369</a>        w.write_all(<span class="kw-2">&amp;</span>v.to_le_bytes())<span class="question-mark">?</span>;
-<a href=#370 id=370 data-nosnippet>370</a>    }
-<a href=#371 id=371 data-nosnippet>371</a>    <span class="prelude-val">Ok</span>(())
-<a href=#372 id=372 data-nosnippet>372</a>}
-<a href=#373 id=373 data-nosnippet>373</a>
-<a href=#374 id=374 data-nosnippet>374</a><span class="kw">fn </span>read_u8(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;u8&gt; {
-<a href=#375 id=375 data-nosnippet>375</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">1</span>];
-<a href=#376 id=376 data-nosnippet>376</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
-<a href=#377 id=377 data-nosnippet>377</a>    <span class="prelude-val">Ok</span>(buf[<span class="number">0</span>])
-<a href=#378 id=378 data-nosnippet>378</a>}
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a><span class="kw">fn </span>read_u16(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;u16&gt; {
-<a href=#381 id=381 data-nosnippet>381</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">2</span>];
-<a href=#382 id=382 data-nosnippet>382</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
-<a href=#383 id=383 data-nosnippet>383</a>    <span class="prelude-val">Ok</span>(u16::from_le_bytes(buf))
-<a href=#384 id=384 data-nosnippet>384</a>}
-<a href=#385 id=385 data-nosnippet>385</a>
-<a href=#386 id=386 data-nosnippet>386</a><span class="kw">fn </span>read_u32(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;u32&gt; {
-<a href=#387 id=387 data-nosnippet>387</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">4</span>];
-<a href=#388 id=388 data-nosnippet>388</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
-<a href=#389 id=389 data-nosnippet>389</a>    <span class="prelude-val">Ok</span>(u32::from_le_bytes(buf))
-<a href=#390 id=390 data-nosnippet>390</a>}
-<a href=#391 id=391 data-nosnippet>391</a>
-<a href=#392 id=392 data-nosnippet>392</a><span class="kw">fn </span>read_u64(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;u64&gt; {
-<a href=#393 id=393 data-nosnippet>393</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">8</span>];
-<a href=#394 id=394 data-nosnippet>394</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
-<a href=#395 id=395 data-nosnippet>395</a>    <span class="prelude-val">Ok</span>(u64::from_le_bytes(buf))
+<a href=#333 id=333 data-nosnippet>333</a>    <span class="comment">// Reason for the `as u32` casts below: every length is a component of
+<a href=#334 id=334 data-nosnippet>334</a>    // `record_bytes`, which the `try_into::&lt;u32&gt;` guard above just verified
+<a href=#335 id=335 data-nosnippet>335</a>    // fits in u32. Each component is therefore also ≤ u32::MAX. The acceptance
+<a href=#336 id=336 data-nosnippet>336</a>    // test `acceptance::record_overflow_returns_invalid_input` exercises the
+<a href=#337 id=337 data-nosnippet>337</a>    // outer guard.
+<a href=#338 id=338 data-nosnippet>338</a>    </span><span class="kw">let </span>key_len = u32_from_len(cell.key.len());
+<a href=#339 id=339 data-nosnippet>339</a>    <span class="kw">let </span>value_len = u32_from_len(cell.value.len());
+<a href=#340 id=340 data-nosnippet>340</a>    <span class="kw">let </span>pos_len = u32_from_len(cell.pos_encoding.len());
+<a href=#341 id=341 data-nosnippet>341</a>    <span class="kw">let </span>key_scales_len = u32_from_len(key_q.scales.len());
+<a href=#342 id=342 data-nosnippet>342</a>    <span class="kw">let </span>key_data_len = u32_from_len(key_q.data.len());
+<a href=#343 id=343 data-nosnippet>343</a>    <span class="kw">let </span>val_scales_len = u32_from_len(val_q.scales.len());
+<a href=#344 id=344 data-nosnippet>344</a>    <span class="kw">let </span>val_data_len = u32_from_len(val_q.data.len());
+<a href=#345 id=345 data-nosnippet>345</a>
+<a href=#346 id=346 data-nosnippet>346</a>    <span class="comment">// Fixed fields.
+<a href=#347 id=347 data-nosnippet>347</a>    </span>w.write_all(<span class="kw-2">&amp;</span>cell.id.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#348 id=348 data-nosnippet>348</a>    w.write_all(<span class="kw-2">&amp;</span>cell.owner.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#349 id=349 data-nosnippet>349</a>    w.write_all(<span class="kw-2">&amp;</span>cell.layer.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#350 id=350 data-nosnippet>350</a>    w.write_all(<span class="kw-2">&amp;</span>key_len.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#351 id=351 data-nosnippet>351</a>    w.write_all(<span class="kw-2">&amp;</span>value_len.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#352 id=352 data-nosnippet>352</a>    w.write_all(<span class="kw-2">&amp;</span>pos_len.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#353 id=353 data-nosnippet>353</a>    w.write_all(<span class="kw-2">&amp;</span>cell.token_span.<span class="number">0</span>.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#354 id=354 data-nosnippet>354</a>    w.write_all(<span class="kw-2">&amp;</span>cell.token_span.<span class="number">1</span>.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#355 id=355 data-nosnippet>355</a>    w.write_all(<span class="kw-2">&amp;</span>cell.meta.created_at.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#356 id=356 data-nosnippet>356</a>    w.write_all(<span class="kw-2">&amp;</span>cell.meta.updated_at.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#357 id=357 data-nosnippet>357</a>    w.write_all(<span class="kw-2">&amp;</span>cell.meta.importance.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#358 id=358 data-nosnippet>358</a>    w.write_all(<span class="kw-2">&amp;</span>cell.meta.tags.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#359 id=359 data-nosnippet>359</a>    w.write_all(<span class="kw-2">&amp;</span>[cell.meta.tier <span class="kw">as </span>u8])<span class="question-mark">?</span>;
+<a href=#360 id=360 data-nosnippet>360</a>
+<a href=#361 id=361 data-nosnippet>361</a>    <span class="comment">// Quantized key.
+<a href=#362 id=362 data-nosnippet>362</a>    </span>w.write_all(<span class="kw-2">&amp;</span>key_scales_len.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#363 id=363 data-nosnippet>363</a>    w.write_all(<span class="kw-2">&amp;</span>key_data_len.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#364 id=364 data-nosnippet>364</a>    <span class="comment">// Quantized value.
+<a href=#365 id=365 data-nosnippet>365</a>    </span>w.write_all(<span class="kw-2">&amp;</span>val_scales_len.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#366 id=366 data-nosnippet>366</a>    w.write_all(<span class="kw-2">&amp;</span>val_data_len.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#367 id=367 data-nosnippet>367</a>
+<a href=#368 id=368 data-nosnippet>368</a>    <span class="comment">// Variable-length data.
+<a href=#369 id=369 data-nosnippet>369</a>    </span>write_f32_slice(w, <span class="kw-2">&amp;</span>key_q.scales)<span class="question-mark">?</span>;
+<a href=#370 id=370 data-nosnippet>370</a>    w.write_all(<span class="kw-2">&amp;</span>key_q.data)<span class="question-mark">?</span>;
+<a href=#371 id=371 data-nosnippet>371</a>    write_f32_slice(w, <span class="kw-2">&amp;</span>val_q.scales)<span class="question-mark">?</span>;
+<a href=#372 id=372 data-nosnippet>372</a>    w.write_all(<span class="kw-2">&amp;</span>val_q.data)<span class="question-mark">?</span>;
+<a href=#373 id=373 data-nosnippet>373</a>    write_f32_slice(w, <span class="kw-2">&amp;</span>cell.pos_encoding)<span class="question-mark">?</span>;
+<a href=#374 id=374 data-nosnippet>374</a>
+<a href=#375 id=375 data-nosnippet>375</a>    <span class="prelude-val">Ok</span>(record_bytes <span class="kw">as </span>u64)
+<a href=#376 id=376 data-nosnippet>376</a>}
+<a href=#377 id=377 data-nosnippet>377</a>
+<a href=#378 id=378 data-nosnippet>378</a><span class="doccomment">/// Saturating-to-u32 length helper for serialization.
+<a href=#379 id=379 data-nosnippet>379</a>///
+<a href=#380 id=380 data-nosnippet>380</a>/// Used by [`write_cell_record`] where the caller has already validated that
+<a href=#381 id=381 data-nosnippet>381</a>/// the *total* record size fits in u32; each component length therefore also
+<a href=#382 id=382 data-nosnippet>382</a>/// fits in u32. The saturating cast preserves the existing behavior — the
+<a href=#383 id=383 data-nosnippet>383</a>/// outer guard would have rejected the cell before any of these casts run.
+<a href=#384 id=384 data-nosnippet>384</a></span><span class="attr">#[inline]
+<a href=#385 id=385 data-nosnippet>385</a></span><span class="kw">fn </span>u32_from_len(len: usize) -&gt; u32 {
+<a href=#386 id=386 data-nosnippet>386</a>    u32::try_from(len).unwrap_or(u32::MAX)
+<a href=#387 id=387 data-nosnippet>387</a>}
+<a href=#388 id=388 data-nosnippet>388</a>
+<a href=#389 id=389 data-nosnippet>389</a><span class="comment">// --- I/O helpers (little-endian) ---
+<a href=#390 id=390 data-nosnippet>390</a>
+<a href=#391 id=391 data-nosnippet>391</a></span><span class="kw">fn </span>write_f32_slice(w: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write, values: <span class="kw-2">&amp;</span>[f32]) -&gt; io::Result&lt;()&gt; {
+<a href=#392 id=392 data-nosnippet>392</a>    <span class="kw">for </span><span class="kw-2">&amp;</span>v <span class="kw">in </span>values {
+<a href=#393 id=393 data-nosnippet>393</a>        w.write_all(<span class="kw-2">&amp;</span>v.to_le_bytes())<span class="question-mark">?</span>;
+<a href=#394 id=394 data-nosnippet>394</a>    }
+<a href=#395 id=395 data-nosnippet>395</a>    <span class="prelude-val">Ok</span>(())
 <a href=#396 id=396 data-nosnippet>396</a>}
 <a href=#397 id=397 data-nosnippet>397</a>
-<a href=#398 id=398 data-nosnippet>398</a><span class="kw">fn </span>read_f32(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;f32&gt; {
-<a href=#399 id=399 data-nosnippet>399</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">4</span>];
+<a href=#398 id=398 data-nosnippet>398</a><span class="kw">fn </span>read_u8(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;u8&gt; {
+<a href=#399 id=399 data-nosnippet>399</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">1</span>];
 <a href=#400 id=400 data-nosnippet>400</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
-<a href=#401 id=401 data-nosnippet>401</a>    <span class="prelude-val">Ok</span>(f32::from_le_bytes(buf))
+<a href=#401 id=401 data-nosnippet>401</a>    <span class="prelude-val">Ok</span>(buf[<span class="number">0</span>])
 <a href=#402 id=402 data-nosnippet>402</a>}
 <a href=#403 id=403 data-nosnippet>403</a>
-<a href=#404 id=404 data-nosnippet>404</a><span class="kw">fn </span>read_f32_vec(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, count: usize) -&gt; io::Result&lt;Vec&lt;f32&gt;&gt; {
-<a href=#405 id=405 data-nosnippet>405</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = <span class="macro">vec!</span>[<span class="number">0u8</span>; count * <span class="number">4</span>];
+<a href=#404 id=404 data-nosnippet>404</a><span class="kw">fn </span>read_u16(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;u16&gt; {
+<a href=#405 id=405 data-nosnippet>405</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">2</span>];
 <a href=#406 id=406 data-nosnippet>406</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
-<a href=#407 id=407 data-nosnippet>407</a>    <span class="prelude-val">Ok</span>(buf.chunks_exact(<span class="number">4</span>).map(|c| f32::from_le_bytes([c[<span class="number">0</span>], c[<span class="number">1</span>], c[<span class="number">2</span>], c[<span class="number">3</span>]])).collect())
+<a href=#407 id=407 data-nosnippet>407</a>    <span class="prelude-val">Ok</span>(u16::from_le_bytes(buf))
 <a href=#408 id=408 data-nosnippet>408</a>}
 <a href=#409 id=409 data-nosnippet>409</a>
-<a href=#410 id=410 data-nosnippet>410</a><span class="kw">fn </span>read_bytes(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, count: usize) -&gt; io::Result&lt;Vec&lt;u8&gt;&gt; {
-<a href=#411 id=411 data-nosnippet>411</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = <span class="macro">vec!</span>[<span class="number">0u8</span>; count];
+<a href=#410 id=410 data-nosnippet>410</a><span class="kw">fn </span>read_u32(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;u32&gt; {
+<a href=#411 id=411 data-nosnippet>411</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">4</span>];
 <a href=#412 id=412 data-nosnippet>412</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
-<a href=#413 id=413 data-nosnippet>413</a>    <span class="prelude-val">Ok</span>(buf)
+<a href=#413 id=413 data-nosnippet>413</a>    <span class="prelude-val">Ok</span>(u32::from_le_bytes(buf))
 <a href=#414 id=414 data-nosnippet>414</a>}
+<a href=#415 id=415 data-nosnippet>415</a>
+<a href=#416 id=416 data-nosnippet>416</a><span class="kw">fn </span>read_u64(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;u64&gt; {
+<a href=#417 id=417 data-nosnippet>417</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">8</span>];
+<a href=#418 id=418 data-nosnippet>418</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
+<a href=#419 id=419 data-nosnippet>419</a>    <span class="prelude-val">Ok</span>(u64::from_le_bytes(buf))
+<a href=#420 id=420 data-nosnippet>420</a>}
+<a href=#421 id=421 data-nosnippet>421</a>
+<a href=#422 id=422 data-nosnippet>422</a><span class="kw">fn </span>read_f32(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read) -&gt; io::Result&lt;f32&gt; {
+<a href=#423 id=423 data-nosnippet>423</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">4</span>];
+<a href=#424 id=424 data-nosnippet>424</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
+<a href=#425 id=425 data-nosnippet>425</a>    <span class="prelude-val">Ok</span>(f32::from_le_bytes(buf))
+<a href=#426 id=426 data-nosnippet>426</a>}
+<a href=#427 id=427 data-nosnippet>427</a>
+<a href=#428 id=428 data-nosnippet>428</a><span class="kw">fn </span>read_f32_vec(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, count: usize) -&gt; io::Result&lt;Vec&lt;f32&gt;&gt; {
+<a href=#429 id=429 data-nosnippet>429</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = <span class="macro">vec!</span>[<span class="number">0u8</span>; count * <span class="number">4</span>];
+<a href=#430 id=430 data-nosnippet>430</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
+<a href=#431 id=431 data-nosnippet>431</a>    <span class="prelude-val">Ok</span>(buf.chunks_exact(<span class="number">4</span>).map(|c| f32::from_le_bytes([c[<span class="number">0</span>], c[<span class="number">1</span>], c[<span class="number">2</span>], c[<span class="number">3</span>]])).collect())
+<a href=#432 id=432 data-nosnippet>432</a>}
+<a href=#433 id=433 data-nosnippet>433</a>
+<a href=#434 id=434 data-nosnippet>434</a><span class="kw">fn </span>read_bytes(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, count: usize) -&gt; io::Result&lt;Vec&lt;u8&gt;&gt; {
+<a href=#435 id=435 data-nosnippet>435</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = <span class="macro">vec!</span>[<span class="number">0u8</span>; count];
+<a href=#436 id=436 data-nosnippet>436</a>    r.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
+<a href=#437 id=437 data-nosnippet>437</a>    <span class="prelude-val">Ok</span>(buf)
+<a href=#438 id=438 data-nosnippet>438</a>}
 </code></pre></div></section></main></body></html>

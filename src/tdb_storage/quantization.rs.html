@@ -143,57 +143,66 @@
 <a href=#108 id=108 data-nosnippet>108</a><span class="doccomment">/// Map a single f32 value to a 4-bit unsigned integer [0, 15] with zero-point at 8.
 <a href=#109 id=109 data-nosnippet>109</a></span><span class="attr">#[inline]
 <a href=#110 id=110 data-nosnippet>110</a></span><span class="kw">fn </span>quantize_value(value: f32, scale: f32) -&gt; u8 {
-<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">let </span>q = (value / scale).round() <span class="kw">as </span>i8;
-<a href=#112 id=112 data-nosnippet>112</a>    (q + <span class="number">8</span>).clamp(<span class="number">0</span>, <span class="number">15</span>) <span class="kw">as </span>u8
-<a href=#113 id=113 data-nosnippet>113</a>}
-<a href=#114 id=114 data-nosnippet>114</a>
-<a href=#115 id=115 data-nosnippet>115</a><span class="attr">#[cfg(test)]
-<a href=#116 id=116 data-nosnippet>116</a></span><span class="kw">mod </span>tests {
-<a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
-<a href=#118 id=118 data-nosnippet>118</a>
-<a href=#119 id=119 data-nosnippet>119</a>    <span class="attr">#[test]
-<a href=#120 id=120 data-nosnippet>120</a>    </span><span class="kw">fn </span>test_q4_round_trip_zeros() {
-<a href=#121 id=121 data-nosnippet>121</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[<span class="number">0.0</span>; <span class="number">64</span>];
-<a href=#122 id=122 data-nosnippet>122</a>        <span class="kw">let </span>quantized = Q4::quantize(<span class="kw-2">&amp;</span>values);
-<a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">let </span>restored = Q4::dequantize(<span class="kw-2">&amp;</span>quantized);
-<a href=#124 id=124 data-nosnippet>124</a>        <span class="macro">assert_eq!</span>(restored.len(), values.len());
-<a href=#125 id=125 data-nosnippet>125</a>        <span class="kw">for </span>v <span class="kw">in </span><span class="kw-2">&amp;</span>restored {
-<a href=#126 id=126 data-nosnippet>126</a>            <span class="macro">assert!</span>(v.abs() &lt; f32::EPSILON, <span class="string">"Expected 0.0, got {v}"</span>);
-<a href=#127 id=127 data-nosnippet>127</a>        }
-<a href=#128 id=128 data-nosnippet>128</a>    }
-<a href=#129 id=129 data-nosnippet>129</a>
-<a href=#130 id=130 data-nosnippet>130</a>    <span class="attr">#[test]
-<a href=#131 id=131 data-nosnippet>131</a>    </span><span class="kw">fn </span>test_q4_round_trip_preserves_length() {
-<a href=#132 id=132 data-nosnippet>132</a>        <span class="kw">for </span>len <span class="kw">in </span>[<span class="number">1</span>, <span class="number">15</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">33</span>, <span class="number">63</span>, <span class="number">64</span>, <span class="number">100</span>, <span class="number">128</span>, <span class="number">255</span>, <span class="number">256</span>] {
-<a href=#133 id=133 data-nosnippet>133</a>            <span class="kw">let </span>values: Vec&lt;f32&gt; = (<span class="number">0</span>..len).map(|i| (i <span class="kw">as </span>f32) * <span class="number">0.1</span>).collect();
-<a href=#134 id=134 data-nosnippet>134</a>            <span class="kw">let </span>quantized = Q4::quantize(<span class="kw-2">&amp;</span>values);
-<a href=#135 id=135 data-nosnippet>135</a>            <span class="kw">let </span>restored = Q4::dequantize(<span class="kw-2">&amp;</span>quantized);
-<a href=#136 id=136 data-nosnippet>136</a>            <span class="macro">assert_eq!</span>(restored.len(), values.len(), <span class="string">"Length mismatch for input size {len}"</span>);
-<a href=#137 id=137 data-nosnippet>137</a>        }
-<a href=#138 id=138 data-nosnippet>138</a>    }
-<a href=#139 id=139 data-nosnippet>139</a>
-<a href=#140 id=140 data-nosnippet>140</a>    <span class="attr">#[test]
-<a href=#141 id=141 data-nosnippet>141</a>    </span><span class="kw">fn </span>test_q4_mse_within_tolerance() {
-<a href=#142 id=142 data-nosnippet>142</a>        <span class="kw">let </span>values: Vec&lt;f32&gt; = (<span class="number">0</span>..<span class="number">256</span>).map(|i| ((i <span class="kw">as </span>f32) * <span class="number">0.1</span>).sin()).collect();
-<a href=#143 id=143 data-nosnippet>143</a>        <span class="kw">let </span>quantized = Q4::quantize(<span class="kw-2">&amp;</span>values);
-<a href=#144 id=144 data-nosnippet>144</a>        <span class="kw">let </span>restored = Q4::dequantize(<span class="kw-2">&amp;</span>quantized);
-<a href=#145 id=145 data-nosnippet>145</a>
-<a href=#146 id=146 data-nosnippet>146</a>        <span class="kw">let </span>mse: f32 =
-<a href=#147 id=147 data-nosnippet>147</a>            values.iter().zip(restored.iter()).map(|(a, b)| (a - b) * (a - b)).sum::&lt;f32&gt;()
-<a href=#148 id=148 data-nosnippet>148</a>                / values.len() <span class="kw">as </span>f32;
-<a href=#149 id=149 data-nosnippet>149</a>
-<a href=#150 id=150 data-nosnippet>150</a>        <span class="macro">assert!</span>(mse &lt; <span class="number">0.01</span>, <span class="string">"MSE {mse:.6} exceeds 0.01"</span>);
-<a href=#151 id=151 data-nosnippet>151</a>    }
-<a href=#152 id=152 data-nosnippet>152</a>
-<a href=#153 id=153 data-nosnippet>153</a>    <span class="attr">#[test]
-<a href=#154 id=154 data-nosnippet>154</a>    </span><span class="kw">fn </span>test_q4_compression_ratio() {
-<a href=#155 id=155 data-nosnippet>155</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[<span class="number">1.0f32</span>; <span class="number">128</span>];
-<a href=#156 id=156 data-nosnippet>156</a>        <span class="kw">let </span>quantized = Q4::quantize(<span class="kw-2">&amp;</span>values);
-<a href=#157 id=157 data-nosnippet>157</a>        <span class="kw">let </span>original_bytes = values.len() * <span class="number">4</span>; <span class="comment">// f32 = 4 bytes
-<a href=#158 id=158 data-nosnippet>158</a>        </span><span class="kw">let </span>compressed_bytes = quantized.data.len() + quantized.scales.len() * <span class="number">4</span>;
-<a href=#159 id=159 data-nosnippet>159</a>        <span class="kw">let </span>ratio = original_bytes <span class="kw">as </span>f32 / compressed_bytes <span class="kw">as </span>f32;
-<a href=#160 id=160 data-nosnippet>160</a>        <span class="comment">// Q4 should achieve ~4x compression (4 bits vs 32 bits, plus scale overhead).
-<a href=#161 id=161 data-nosnippet>161</a>        </span><span class="macro">assert!</span>(ratio &gt; <span class="number">3.0</span>, <span class="string">"Compression ratio {ratio:.1}x is below 3x minimum"</span>);
-<a href=#162 id=162 data-nosnippet>162</a>    }
-<a href=#163 id=163 data-nosnippet>163</a>}
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="comment">// Reason: `(value / scale).round()` is the quantizer's bit-quantum
+<a href=#112 id=112 data-nosnippet>112</a>    // selection — values outside `[-8, 7]` are intentionally truncated to the
+<a href=#113 id=113 data-nosnippet>113</a>    // i8 range and the `clamp(0, 15)` below saturates anything that survived.
+<a href=#114 id=114 data-nosnippet>114</a>    // Q4 quantization is lossy by design; this is the lossy step.
+<a href=#115 id=115 data-nosnippet>115</a>    </span><span class="attr">#[allow(clippy::cast_possible_truncation)]
+<a href=#116 id=116 data-nosnippet>116</a>    </span><span class="kw">let </span>q = (value / scale).round() <span class="kw">as </span>i8;
+<a href=#117 id=117 data-nosnippet>117</a>    <span class="comment">// Reason: `clamp(0, 15)` guarantees the value is in `[0, 15]`, well within
+<a href=#118 id=118 data-nosnippet>118</a>    // u8's range — the cast is a type change, not a numeric change.
+<a href=#119 id=119 data-nosnippet>119</a>    </span><span class="attr">#[allow(clippy::cast_sign_loss)]
+<a href=#120 id=120 data-nosnippet>120</a>    </span><span class="kw">let </span>out = (q + <span class="number">8</span>).clamp(<span class="number">0</span>, <span class="number">15</span>) <span class="kw">as </span>u8;
+<a href=#121 id=121 data-nosnippet>121</a>    out
+<a href=#122 id=122 data-nosnippet>122</a>}
+<a href=#123 id=123 data-nosnippet>123</a>
+<a href=#124 id=124 data-nosnippet>124</a><span class="attr">#[cfg(test)]
+<a href=#125 id=125 data-nosnippet>125</a></span><span class="kw">mod </span>tests {
+<a href=#126 id=126 data-nosnippet>126</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
+<a href=#127 id=127 data-nosnippet>127</a>
+<a href=#128 id=128 data-nosnippet>128</a>    <span class="attr">#[test]
+<a href=#129 id=129 data-nosnippet>129</a>    </span><span class="kw">fn </span>test_q4_round_trip_zeros() {
+<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[<span class="number">0.0</span>; <span class="number">64</span>];
+<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">let </span>quantized = Q4::quantize(<span class="kw-2">&amp;</span>values);
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="kw">let </span>restored = Q4::dequantize(<span class="kw-2">&amp;</span>quantized);
+<a href=#133 id=133 data-nosnippet>133</a>        <span class="macro">assert_eq!</span>(restored.len(), values.len());
+<a href=#134 id=134 data-nosnippet>134</a>        <span class="kw">for </span>v <span class="kw">in </span><span class="kw-2">&amp;</span>restored {
+<a href=#135 id=135 data-nosnippet>135</a>            <span class="macro">assert!</span>(v.abs() &lt; f32::EPSILON, <span class="string">"Expected 0.0, got {v}"</span>);
+<a href=#136 id=136 data-nosnippet>136</a>        }
+<a href=#137 id=137 data-nosnippet>137</a>    }
+<a href=#138 id=138 data-nosnippet>138</a>
+<a href=#139 id=139 data-nosnippet>139</a>    <span class="attr">#[test]
+<a href=#140 id=140 data-nosnippet>140</a>    </span><span class="kw">fn </span>test_q4_round_trip_preserves_length() {
+<a href=#141 id=141 data-nosnippet>141</a>        <span class="kw">for </span>len <span class="kw">in </span>[<span class="number">1</span>, <span class="number">15</span>, <span class="number">31</span>, <span class="number">32</span>, <span class="number">33</span>, <span class="number">63</span>, <span class="number">64</span>, <span class="number">100</span>, <span class="number">128</span>, <span class="number">255</span>, <span class="number">256</span>] {
+<a href=#142 id=142 data-nosnippet>142</a>            <span class="kw">let </span>values: Vec&lt;f32&gt; = (<span class="number">0</span>..len).map(|i| (i <span class="kw">as </span>f32) * <span class="number">0.1</span>).collect();
+<a href=#143 id=143 data-nosnippet>143</a>            <span class="kw">let </span>quantized = Q4::quantize(<span class="kw-2">&amp;</span>values);
+<a href=#144 id=144 data-nosnippet>144</a>            <span class="kw">let </span>restored = Q4::dequantize(<span class="kw-2">&amp;</span>quantized);
+<a href=#145 id=145 data-nosnippet>145</a>            <span class="macro">assert_eq!</span>(restored.len(), values.len(), <span class="string">"Length mismatch for input size {len}"</span>);
+<a href=#146 id=146 data-nosnippet>146</a>        }
+<a href=#147 id=147 data-nosnippet>147</a>    }
+<a href=#148 id=148 data-nosnippet>148</a>
+<a href=#149 id=149 data-nosnippet>149</a>    <span class="attr">#[test]
+<a href=#150 id=150 data-nosnippet>150</a>    </span><span class="kw">fn </span>test_q4_mse_within_tolerance() {
+<a href=#151 id=151 data-nosnippet>151</a>        <span class="kw">let </span>values: Vec&lt;f32&gt; = (<span class="number">0</span>..<span class="number">256</span>).map(|i| ((i <span class="kw">as </span>f32) * <span class="number">0.1</span>).sin()).collect();
+<a href=#152 id=152 data-nosnippet>152</a>        <span class="kw">let </span>quantized = Q4::quantize(<span class="kw-2">&amp;</span>values);
+<a href=#153 id=153 data-nosnippet>153</a>        <span class="kw">let </span>restored = Q4::dequantize(<span class="kw-2">&amp;</span>quantized);
+<a href=#154 id=154 data-nosnippet>154</a>
+<a href=#155 id=155 data-nosnippet>155</a>        <span class="kw">let </span>mse: f32 =
+<a href=#156 id=156 data-nosnippet>156</a>            values.iter().zip(restored.iter()).map(|(a, b)| (a - b) * (a - b)).sum::&lt;f32&gt;()
+<a href=#157 id=157 data-nosnippet>157</a>                / values.len() <span class="kw">as </span>f32;
+<a href=#158 id=158 data-nosnippet>158</a>
+<a href=#159 id=159 data-nosnippet>159</a>        <span class="macro">assert!</span>(mse &lt; <span class="number">0.01</span>, <span class="string">"MSE {mse:.6} exceeds 0.01"</span>);
+<a href=#160 id=160 data-nosnippet>160</a>    }
+<a href=#161 id=161 data-nosnippet>161</a>
+<a href=#162 id=162 data-nosnippet>162</a>    <span class="attr">#[test]
+<a href=#163 id=163 data-nosnippet>163</a>    </span><span class="kw">fn </span>test_q4_compression_ratio() {
+<a href=#164 id=164 data-nosnippet>164</a>        <span class="kw">let </span>values = <span class="macro">vec!</span>[<span class="number">1.0f32</span>; <span class="number">128</span>];
+<a href=#165 id=165 data-nosnippet>165</a>        <span class="kw">let </span>quantized = Q4::quantize(<span class="kw-2">&amp;</span>values);
+<a href=#166 id=166 data-nosnippet>166</a>        <span class="kw">let </span>original_bytes = values.len() * <span class="number">4</span>; <span class="comment">// f32 = 4 bytes
+<a href=#167 id=167 data-nosnippet>167</a>        </span><span class="kw">let </span>compressed_bytes = quantized.data.len() + quantized.scales.len() * <span class="number">4</span>;
+<a href=#168 id=168 data-nosnippet>168</a>        <span class="kw">let </span>ratio = original_bytes <span class="kw">as </span>f32 / compressed_bytes <span class="kw">as </span>f32;
+<a href=#169 id=169 data-nosnippet>169</a>        <span class="comment">// Q4 should achieve ~4x compression (4 bits vs 32 bits, plus scale overhead).
+<a href=#170 id=170 data-nosnippet>170</a>        </span><span class="macro">assert!</span>(ratio &gt; <span class="number">3.0</span>, <span class="string">"Compression ratio {ratio:.1}x is below 3x minimum"</span>);
+<a href=#171 id=171 data-nosnippet>171</a>    }
+<a href=#172 id=172 data-nosnippet>172</a>}
 </code></pre></div></section></main></body></html>
