@@ -3,11 +3,14 @@
 //! Exposes the `Engine` as a Python class with `mem_write` / `mem_read` methods.
 //! Key/value vectors are exchanged as numpy arrays for zero-copy where possible.
 //!
-//! Thread safety: Engine is wrapped in `Arc<Mutex<>>` (Monitor Object pattern).
-//! Hot-path methods release the GIL via `py.detach()` so other Python threads
-//! can run while Rust computes.
+//! Thread safety: Engine is wrapped in `Arc<RwLock<>>` (Reader-Writer Lock
+//! pattern). Pack-read methods take a shared read guard and run in parallel
+//! across Python threads; write methods (and `mem_read`, which warm-promotes
+//! into the SLB) take the exclusive write guard. Hot-path methods release
+//! the GIL via `py.detach()` so other Python threads can run while Rust
+//! computes.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyRuntimeError;
@@ -62,14 +65,16 @@ impl ReadResult {
 
 /// `TardigradeDB` engine — persistent KV cache memory for LLM agents.
 ///
-/// Thread-safe: wrapped in `Arc<Mutex<>>` so the GIL can be released
-/// during engine operations and multiple Python threads can share one
-/// instance. A few read-only handles to internal substores are cached
-/// outside the mutex (currently the text store) so the corresponding
-/// fast-path methods can serve without serializing on the engine lock.
+/// Thread-safe: wrapped in `Arc<RwLock<>>` so multiple Python threads can
+/// hold shared read guards in parallel. Pack-read methods (`mem_read_pack`
+/// and its variants) acquire the read guard; write methods and `mem_read`
+/// (which performs SLB warm-promotion) acquire the exclusive write guard.
+/// A few read-only handles to internal substores are cached outside the
+/// lock (currently the text store) so the corresponding fast-path methods
+/// can serve without acquiring any guard at all.
 #[pyclass]
 struct Engine {
-    inner: Arc<Mutex<RustEngine>>,
+    inner: Arc<RwLock<RustEngine>>,
     /// Cached lock-free handle to the engine's text store. The handle
     /// observes every `store` / `store_batch` / `remove` call the
     /// engine performs because both this clone and the engine's clone
@@ -98,8 +103,18 @@ fn resolve_salience(explicit: f32, mode: Option<&str>, encoded_key: &[f32]) -> P
     Ok(parsed.resolve(explicit, encoded_key, HEADER_SIZE))
 }
 
-fn lock_engine(inner: &Mutex<RustEngine>) -> PyResult<std::sync::MutexGuard<'_, RustEngine>> {
-    inner.lock().map_err(|_| PyRuntimeError::new_err("engine lock poisoned"))
+/// Exclusive guard for write paths (mutations) and `mem_read` (which
+/// performs SLB warm-promotion on every returned cell).
+fn write_engine(
+    inner: &RwLock<RustEngine>,
+) -> PyResult<std::sync::RwLockWriteGuard<'_, RustEngine>> {
+    inner.write().map_err(|_| PyRuntimeError::new_err("engine lock poisoned"))
+}
+
+/// Shared guard for pack-read methods. Multiple readers may hold this
+/// simultaneously while no writer holds the exclusive guard.
+fn read_engine(inner: &RwLock<RustEngine>) -> PyResult<std::sync::RwLockReadGuard<'_, RustEngine>> {
+    inner.read().map_err(|_| PyRuntimeError::new_err("engine lock poisoned"))
 }
 
 #[pymethods]
@@ -124,7 +139,7 @@ impl Engine {
         }
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let text_store = inner.text_store_handle();
-        Ok(Self { inner: Arc::new(Mutex::new(inner)), text_store, maintenance_worker: None })
+        Ok(Self { inner: Arc::new(RwLock::new(inner)), text_store, maintenance_worker: None })
     }
 
     /// Write key/value vectors to the engine (cell-level API).
@@ -147,7 +162,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         py.detach(move || {
-            lock_engine(&engine)?
+            write_engine(&engine)?
                 .mem_write(owner, layer, &key_vec, value_vec, salience, parent_cell_id)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
@@ -193,7 +208,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         py.detach(move || {
-            lock_engine(&engine)?
+            write_engine(&engine)?
                 .mem_write_batch(&reqs)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
@@ -215,7 +230,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         let raw_results = py.detach(move || -> PyResult<Vec<_>> {
-            let mut eng = lock_engine(&engine)?;
+            let mut eng = write_engine(&engine)?;
             let results = eng
                 .mem_read(&query_vec, k, owner)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -270,7 +285,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         let raw_results = py.detach(move || -> PyResult<Vec<_>> {
-            let mut eng = lock_engine(&engine)?;
+            let mut eng = write_engine(&engine)?;
             let results = eng
                 .mem_read_tokens(&flat, n_tokens, dim, k, owner)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -317,13 +332,13 @@ impl Engine {
                     "unknown refinement mode '{mode}' (expected 'none', 'centered', 'prf', or 'whitened')"
                 ))
             })?;
-        lock_engine(&self.inner)?.set_refinement_strategy(strategy);
+        write_engine(&self.inner)?.set_refinement_strategy(strategy);
         Ok(())
     }
 
     /// Currently configured refinement mode as `"none" | "centered" | "whitened" | "prf"`.
     fn refinement_mode(&self) -> PyResult<String> {
-        Ok(lock_engine(&self.inner)?.refinement_mode_name().to_string())
+        Ok(read_engine(&self.inner)?.refinement_mode_name().to_string())
     }
 
     /// Enable or disable corpus-mean distance token importance reweighting.
@@ -332,50 +347,50 @@ impl Engine {
     /// `1 - cosine(token, corpus_mean)` before aggregation — distinctive tokens
     /// carry more retrieval signal than tokens aligned with the mean activation.
     fn set_token_reweighting(&self, enabled: bool) -> PyResult<()> {
-        lock_engine(&self.inner)?.set_token_reweighting(enabled);
+        write_engine(&self.inner)?.set_token_reweighting(enabled);
         Ok(())
     }
 
     /// Whether corpus-mean distance token importance reweighting is enabled.
     fn token_reweighting(&self) -> PyResult<bool> {
-        Ok(lock_engine(&self.inner)?.token_reweighting())
+        Ok(read_engine(&self.inner)?.token_reweighting())
     }
 
     /// Get the current importance score of a cell.
     fn cell_importance(&self, cell_id: u64) -> PyResult<Option<f32>> {
-        Ok(lock_engine(&self.inner)?.cell_importance(cell_id))
+        Ok(read_engine(&self.inner)?.cell_importance(cell_id))
     }
 
     /// Get the current tier of a cell (0=Draft, 1=Validated, 2=Core).
     fn cell_tier(&self, cell_id: u64) -> PyResult<Option<u8>> {
-        Ok(lock_engine(&self.inner)?.cell_tier(cell_id).map(|t| t as u8))
+        Ok(read_engine(&self.inner)?.cell_tier(cell_id).map(|t| t as u8))
     }
 
     /// Total number of cells in the engine.
     fn cell_count(&self) -> PyResult<usize> {
-        Ok(lock_engine(&self.inner)?.cell_count())
+        Ok(read_engine(&self.inner)?.cell_count())
     }
 
     /// Get transitive ancestors of a cell following causal edges.
     fn trace_ancestors(&self, cell_id: u64) -> PyResult<Vec<u64>> {
-        Ok(lock_engine(&self.inner)?.trace_ancestors(cell_id))
+        Ok(read_engine(&self.inner)?.trace_ancestors(cell_id))
     }
 
     /// Whether the Vamana ANN index is active.
     fn has_vamana(&self) -> PyResult<bool> {
-        Ok(lock_engine(&self.inner)?.has_vamana())
+        Ok(read_engine(&self.inner)?.has_vamana())
     }
 
     /// Simulate passage of time for governance decay (testing utility).
     fn advance_days(&self, days: f32) -> PyResult<()> {
-        lock_engine(&self.inner)?.advance_days(days);
+        write_engine(&self.inner)?.advance_days(days);
         Ok(())
     }
 
     /// Evict Draft-tier packs below the importance threshold.
     #[pyo3(signature = (importance_threshold, owner=None))]
     fn evict_draft_packs(&self, importance_threshold: f32, owner: Option<u64>) -> PyResult<usize> {
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .evict_draft_packs(importance_threshold, owner)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
@@ -388,7 +403,7 @@ impl Engine {
     /// want tier transitions visible before the next read.
     #[pyo3(signature = (hours=0.0, eviction_threshold=15.0))]
     fn sweep_now(&self, hours: f32, eviction_threshold: f32) -> PyResult<usize> {
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .sweep_now(hours, eviction_threshold)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
@@ -397,7 +412,7 @@ impl Engine {
     ///
     /// Returns owners in ascending order.
     fn list_owners(&self) -> PyResult<Vec<u64>> {
-        Ok(lock_engine(&self.inner)?.list_owners())
+        Ok(read_engine(&self.inner)?.list_owners())
     }
 
     /// Schedule an ``evict_draft`` action to fire at
@@ -416,7 +431,7 @@ impl Engine {
     ) -> PyResult<u64> {
         let fires_at =
             std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(fires_at_unix_secs);
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .schedule(
                 fires_at,
                 tdb_engine::scheduler::ScheduledAction::EvictDraft { owner, threshold },
@@ -427,7 +442,7 @@ impl Engine {
     /// Cancel a previously-scheduled action. Returns ``True`` if
     /// the entry was found and removed.
     fn cancel_scheduled(&self, id: u64) -> PyResult<bool> {
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .cancel_scheduled(id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
@@ -437,7 +452,7 @@ impl Engine {
     /// Entries are sorted by fire time ascending.
     fn list_scheduled(&self, py: Python<'_>) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
         use std::time::UNIX_EPOCH;
-        let entries = lock_engine(&self.inner)?.list_scheduled();
+        let entries = read_engine(&self.inner)?.list_scheduled();
         entries
             .iter()
             .map(|e| {
@@ -466,14 +481,14 @@ impl Engine {
     /// before the next tick of the background maintenance
     /// worker.
     fn fire_due_scheduled(&self) -> PyResult<usize> {
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .fire_due_scheduled(std::time::SystemTime::now())
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Return ``True`` iff the engine has at least one pack for ``owner``.
     fn owner_exists(&self, owner: u64) -> PyResult<bool> {
-        Ok(lock_engine(&self.inner)?.owner_exists(owner))
+        Ok(read_engine(&self.inner)?.owner_exists(owner))
     }
 
     /// Delete every pack belonging to ``owner``; return the count
@@ -481,7 +496,7 @@ impl Engine {
     /// unconditional — validated and core-tier packs are removed
     /// too. Returns ``0`` when the owner has no packs.
     fn delete_owner(&self, owner: u64) -> PyResult<usize> {
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .delete_owner(owner)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
@@ -494,7 +509,7 @@ impl Engine {
     /// ``out_path`` must be outside the engine's working directory —
     /// otherwise the tar walker would read its own output.
     fn snapshot(&self, py: Python<'_>, out_path: &str) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-        let manifest = lock_engine(&self.inner)?
+        let manifest = write_engine(&self.inner)?
             .snapshot(std::path::Path::new(out_path))
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let dict = pyo3::types::PyDict::new(py);
@@ -524,7 +539,7 @@ impl Engine {
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let text_store = engine.text_store_handle();
         Ok(Self {
-            inner: std::sync::Arc::new(std::sync::Mutex::new(engine)),
+            inner: std::sync::Arc::new(std::sync::RwLock::new(engine)),
             text_store,
             maintenance_worker: None,
         })
@@ -551,7 +566,7 @@ impl Engine {
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let text_store = engine.text_store_handle();
         Ok(Self {
-            inner: std::sync::Arc::new(std::sync::Mutex::new(engine)),
+            inner: std::sync::Arc::new(std::sync::RwLock::new(engine)),
             text_store,
             maintenance_worker: None,
         })
@@ -561,12 +576,14 @@ impl Engine {
     /// engine was opened without a buffer or when the buffer is
     /// already empty.
     fn flush_buffer(&self) -> PyResult<()> {
-        lock_engine(&self.inner)?.flush_buffer().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        write_engine(&self.inner)?
+            .flush_buffer()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Number of stages in the retrieval pipeline.
     fn pipeline_stage_count(&self) -> PyResult<usize> {
-        Ok(lock_engine(&self.inner)?.pipeline_stage_count())
+        Ok(read_engine(&self.inner)?.pipeline_stage_count())
     }
 
     // ── SynapticBank (`LoRA` adapter persistence) ─────────────────────────
@@ -624,7 +641,7 @@ impl Engine {
         );
         entry.last_used = last_used.unwrap_or(0);
         entry.quality = quality.unwrap_or(0.0);
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .store_synapsis(&entry)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
@@ -633,7 +650,7 @@ impl Engine {
     ///
     /// Returns list of dicts with f32 numpy arrays (f16 converted to f32 on return).
     fn load_synapsis(&self, py: Python<'_>, owner: u64) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
-        let entries = lock_engine(&self.inner)?
+        let entries = read_engine(&self.inner)?
             .load_synapsis(owner)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
@@ -664,7 +681,7 @@ impl Engine {
     /// `slb_occupancy`, `slb_capacity`, `vamana_active`, `pipeline_stages`,
     /// `governance_entries`, `trace_edges`, `arena_bytes`, `arena_bytes_per_cell`.
     fn status(&self, py: Python<'_>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-        let s = lock_engine(&self.inner)?.status();
+        let s = read_engine(&self.inner)?.status();
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("cell_count", s.cell_count)?;
         dict.set_item("pack_count", s.pack_count)?;
@@ -686,7 +703,7 @@ impl Engine {
     fn compact(&self, py: Python<'_>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let engine = Arc::clone(&self.inner);
         let result = py.detach(move || {
-            lock_engine(&engine)?.compact().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+            write_engine(&engine)?.compact().map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })?;
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("segments_compacted", result.segments_compacted)?;
@@ -804,7 +821,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         py.detach(move || {
-            lock_engine(&engine)?
+            write_engine(&engine)?
                 .mem_write_batch_packs(&kv_packs)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
@@ -881,7 +898,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         py.detach(move || {
-            lock_engine(&engine)?
+            write_engine(&engine)?
                 .mem_write_pack_tokens(
                     owner,
                     &flat,
@@ -934,7 +951,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         py.detach(move || {
-            lock_engine(&engine)?
+            write_engine(&engine)?
                 .mem_write_pack(&pack)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
@@ -956,7 +973,7 @@ impl Engine {
             view_keys.iter().map(|k| k.as_slice().map(|s| s.to_vec())).collect::<Result<_, _>>()?;
         let engine = Arc::clone(&self.inner);
         py.detach(move || {
-            lock_engine(&engine)?
+            write_engine(&engine)?
                 .add_view_keys(pack_id, &keys)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
@@ -966,7 +983,7 @@ impl Engine {
     ///
     /// Raises `RuntimeError` if the pack does not exist.
     fn view_count(&self, pack_id: u64) -> PyResult<usize> {
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .view_count(pack_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
@@ -1011,7 +1028,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         let result = py.detach(move || {
-            lock_engine(&engine)?
+            write_engine(&engine)?
                 .mem_write_pack_with_auto_link(&pack, threshold)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -1037,7 +1054,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         let results = py.detach(move || {
-            lock_engine(&engine)?
+            read_engine(&engine)?
                 .mem_read_pack(&query_vec, k, owner)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -1139,7 +1156,7 @@ impl Engine {
         let engine = Arc::clone(&self.inner);
         let raw_results =
             py.detach(move || -> PyResult<Vec<Vec<tdb_core::kv_pack::PackReadResult>>> {
-                let eng = lock_engine(&engine)?;
+                let eng = read_engine(&engine)?;
                 let mut out = Vec::with_capacity(n);
                 for ((q, k), owner) in owned_queries.iter().zip(ks.iter()).zip(owners.iter()) {
                     let rows = eng
@@ -1209,7 +1226,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         let raw = py.detach(move || -> PyResult<Vec<tdb_engine::engine::MultiLayerRow>> {
-            let eng = lock_engine(&engine)?;
+            let eng = read_engine(&engine)?;
             eng.mem_read_multi_layer(&owned_queries, k, rrf_k, owner)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -1241,7 +1258,7 @@ impl Engine {
 
     /// Number of KV Packs stored.
     fn pack_count(&self) -> PyResult<usize> {
-        Ok(lock_engine(&self.inner)?.pack_count())
+        Ok(read_engine(&self.inner)?.pack_count())
     }
 
     /// Re-sync in-memory state from disk.
@@ -1252,12 +1269,12 @@ impl Engine {
     /// refreshes governance / `pack_directory` / `text_store` / `deletion_log`.
     /// Idempotent and cheap when nothing changed on disk.
     fn refresh(&self) -> PyResult<()> {
-        lock_engine(&self.inner)?.refresh().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        write_engine(&self.inner)?.refresh().map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Get the importance score of a pack.
     fn pack_importance(&self, pack_id: u64) -> PyResult<Option<f32>> {
-        Ok(lock_engine(&self.inner)?.pack_importance(pack_id))
+        Ok(read_engine(&self.inner)?.pack_importance(pack_id))
     }
 
     /// Enumerate pack metadata (no text) as a struct-of-arrays.
@@ -1280,7 +1297,7 @@ impl Engine {
         py: Python<'_>,
         owner: Option<u64>,
     ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-        let eng = lock_engine(&self.inner)?;
+        let eng = read_engine(&self.inner)?;
         let packs = eng.list_packs(owner);
 
         let n = packs.len();
@@ -1319,14 +1336,14 @@ impl Engine {
         } else {
             arr.iter().copied().collect()
         };
-        let mut eng = lock_engine(&self.inner)?;
+        let mut eng = write_engine(&self.inner)?;
         eng.load_embedding_table(flat, vocab_size, hidden_size);
         Ok(())
     }
 
     /// Number of `load_embedding_table` calls (observability counter).
     fn embedding_table_load_count(&self) -> PyResult<u64> {
-        Ok(lock_engine(&self.inner)?.embedding_table_load_count())
+        Ok(read_engine(&self.inner)?.embedding_table_load_count())
     }
 
     /// Install a projection matrix for the `"projected"` strategy.
@@ -1342,7 +1359,7 @@ impl Engine {
         } else {
             arr.iter().copied().collect()
         };
-        let mut eng = lock_engine(&self.inner)?;
+        let mut eng = write_engine(&self.inner)?;
         eng.set_projection_matrix(flat, kv_dim, hidden_size);
         Ok(())
     }
@@ -1362,7 +1379,7 @@ impl Engine {
         strategy: &str,
     ) -> PyResult<Option<pyo3::Py<pyo3::PyAny>>> {
         use pyo3::exceptions::PyValueError;
-        let eng = lock_engine(&self.inner)?;
+        let eng = read_engine(&self.inner)?;
         let key = eng
             .compute_retrieval_key(&token_ids, strategy)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -1377,7 +1394,7 @@ impl Engine {
     /// request's fingerprint cannot survive into a new request that
     /// reuses the same block id.
     fn set_fingerprint_capacity(&self, capacity: usize) -> PyResult<()> {
-        lock_engine(&self.inner)?.set_fingerprint_capacity(capacity);
+        write_engine(&self.inner)?.set_fingerprint_capacity(capacity);
         Ok(())
     }
 
@@ -1385,26 +1402,26 @@ impl Engine {
     /// Returns `None` when absent or when the cache has not been
     /// sized yet via [`Engine::set_fingerprint_capacity`].
     fn fingerprint_get(&self, fingerprint: u64) -> PyResult<Option<u64>> {
-        Ok(lock_engine(&self.inner)?.fingerprint_get(fingerprint))
+        Ok(write_engine(&self.inner)?.fingerprint_get(fingerprint))
     }
 
     /// Store `pack_id` for this fingerprint, evicting the LRU entry
     /// when the cache is full.
     fn fingerprint_put(&self, fingerprint: u64, pack_id: u64) -> PyResult<()> {
-        lock_engine(&self.inner)?.fingerprint_put(fingerprint, pack_id);
+        write_engine(&self.inner)?.fingerprint_put(fingerprint, pack_id);
         Ok(())
     }
 
     /// Drop the entry for this fingerprint (no-op when absent).
     /// Call from the connector's `request_finished` lifecycle hook.
     fn fingerprint_release(&self, fingerprint: u64) -> PyResult<()> {
-        lock_engine(&self.inner)?.fingerprint_release(fingerprint);
+        write_engine(&self.inner)?.fingerprint_release(fingerprint);
         Ok(())
     }
 
     /// Current number of fingerprint entries (observability hook).
     fn fingerprint_len(&self) -> PyResult<usize> {
-        Ok(lock_engine(&self.inner)?.fingerprint_len())
+        Ok(read_engine(&self.inner)?.fingerprint_len())
     }
 
     /// Enumerate all packs as a list of dicts, with text included.
@@ -1429,7 +1446,7 @@ impl Engine {
         owner: Option<u64>,
         fetch_text: bool,
     ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-        let eng = lock_engine(&self.inner)?;
+        let eng = read_engine(&self.inner)?;
         let packs = eng.list_packs(owner);
         let py_list = pyo3::types::PyList::empty(py);
         for (pack_id, pack_owner, tier, importance) in packs {
@@ -1449,7 +1466,7 @@ impl Engine {
     fn load_pack_by_id(&self, py: Python<'_>, pack_id: u64) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let engine = Arc::clone(&self.inner);
         let result = py.detach(move || {
-            lock_engine(&engine)?
+            write_engine(&engine)?
                 .load_pack_by_id(pack_id)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -1483,21 +1500,21 @@ impl Engine {
                 "Invalid edge_type {edge_type}. Valid: 0=CausedBy, 1=Follows, 2=Contradicts, 3=Supports"
             ))
         })?;
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .add_pack_edge(pack_id_1, pack_id_2, et)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Create a durable Follows link between two packs.
     fn add_pack_link(&self, pack_id_1: u64, pack_id_2: u64) -> PyResult<()> {
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .add_pack_link(pack_id_1, pack_id_2)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Get all packs linked to a given pack via trace edges (any type).
     fn pack_links(&self, pack_id: u64) -> PyResult<Vec<u64>> {
-        Ok(lock_engine(&self.inner)?.pack_links(pack_id))
+        Ok(read_engine(&self.inner)?.pack_links(pack_id))
     }
 
     /// Get packs linked via a specific edge type.
@@ -1505,17 +1522,17 @@ impl Engine {
         use tdb_engine::EdgeType;
         let et = EdgeType::from_u8(edge_type)
             .ok_or_else(|| PyRuntimeError::new_err(format!("Invalid edge_type {edge_type}")))?;
-        Ok(lock_engine(&self.inner)?.pack_links_by_type(pack_id, et))
+        Ok(read_engine(&self.inner)?.pack_links_by_type(pack_id, et))
     }
 
     /// Get packs that support a given pack.
     fn pack_supports(&self, pack_id: u64) -> PyResult<Vec<u64>> {
-        Ok(lock_engine(&self.inner)?.pack_supports(pack_id))
+        Ok(read_engine(&self.inner)?.pack_supports(pack_id))
     }
 
     /// Get packs that contradict a given pack.
     fn pack_contradicts(&self, pack_id: u64) -> PyResult<Vec<u64>> {
-        Ok(lock_engine(&self.inner)?.pack_contradicts(pack_id))
+        Ok(read_engine(&self.inner)?.pack_contradicts(pack_id))
     }
 
     /// Retrieve packs with trace-boosted scoring.
@@ -1532,7 +1549,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         let results = py.detach(move || {
-            lock_engine(&engine)?
+            read_engine(&engine)?
                 .mem_read_pack_with_trace_boost(&query_vec, k, owner, boost_factor)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -1574,7 +1591,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         let results = py.detach(move || {
-            lock_engine(&engine)?
+            read_engine(&engine)?
                 .mem_read_pack_with_trace_boost_and_follow(&query_vec, k, owner, boost_factor)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -1614,7 +1631,7 @@ impl Engine {
 
     /// Set or update the stored text for an existing pack.
     fn set_pack_text(&self, pack_id: u64, text: &str) -> PyResult<()> {
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .set_pack_text(pack_id, text)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
@@ -1622,30 +1639,30 @@ impl Engine {
     /// Set or update text for many packs in a single batched fsync.
     fn set_pack_texts(&self, entries: Vec<(u64, String)>) -> PyResult<()> {
         let borrowed: Vec<(u64, &str)> = entries.iter().map(|(id, t)| (*id, t.as_str())).collect();
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .set_pack_texts(&borrowed)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Whether a pack with the given ID exists (and has not been deleted).
     fn pack_exists(&self, pack_id: u64) -> PyResult<bool> {
-        Ok(lock_engine(&self.inner)?.pack_exists(pack_id))
+        Ok(read_engine(&self.inner)?.pack_exists(pack_id))
     }
 
     /// Delete a pack permanently. Irreversible.
     fn delete_pack(&self, pack_id: u64) -> PyResult<()> {
-        lock_engine(&self.inner)?
+        write_engine(&self.inner)?
             .delete_pack(pack_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Explicit durability checkpoint — ensures all components have fsynced.
     fn flush(&self) -> PyResult<()> {
-        lock_engine(&self.inner)?.flush().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        write_engine(&self.inner)?.flush().map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn __repr__(&self) -> PyResult<String> {
-        let eng = lock_engine(&self.inner)?;
+        let eng = read_engine(&self.inner)?;
         Ok(format!("Engine(path='{}', cells={})", eng.dir().display(), eng.cell_count()))
     }
 }
@@ -1703,7 +1720,7 @@ impl CheckpointRepository {
         label: &str,
     ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let entry = {
-            let mut eng = lock_engine(&engine.inner)?;
+            let mut eng = write_engine(&engine.inner)?;
             self.inner
                 .save_from(&mut eng, label)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
@@ -1734,7 +1751,7 @@ impl CheckpointRepository {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let text_store = engine.text_store_handle();
         Ok(Engine {
-            inner: std::sync::Arc::new(std::sync::Mutex::new(engine)),
+            inner: std::sync::Arc::new(std::sync::RwLock::new(engine)),
             text_store,
             maintenance_worker: None,
         })

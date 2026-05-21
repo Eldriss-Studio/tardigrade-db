@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Concurrent pack reads. Multiple Python threads can now call `mem_read_pack` against a shared engine in parallel — measured **1.74× aggregate throughput** at 8 threads on a 192-pack corpus (33,682 queries/sec vs 19,309 single-threaded). Single-thread latency drops ~10 % from `Mutex` → `RwLock` acquire overhead; the win arrives from real parallel reads.
+
+### Concurrency
+
+- **`mem_read_pack`** and the trace-boost variants are lock-free across Python threads. Internally the Python wrapper switched from `Arc<Mutex<RustEngine>>` to `Arc<RwLock<RustEngine>>`; pack-read methods take the shared read guard, write methods (and `mem_read`, which warm-promotes into the SLB) take the exclusive write guard. Consumers that need lock-free concurrent reads must use the pack-read API — `mem_read` deliberately stays serialized.
+- **`Engine.mem_read_pack_batch`** and **`Engine.mem_read_multi_layer`**: same. One read guard for the whole batch; multiple batches across threads run in parallel.
+- **No API change.** Every existing method keeps its signature and Python-side behavior. The win is purely structural.
+
+### Engine internals (Rust API)
+
+- **`Engine::mem_read_pack`**, `mem_read_multi_layer`, `mem_read_pack_with_trace_boost`, `mem_read_pack_with_trace_boost_and_follow`, `load_pack_by_id`: all now take `&self`. Consumers wrapping the engine in an `Arc<RwLock<>>` get parallel reads through `.read()`.
+- **`Retriever::query`** / **`Retriever::query_with_source`**: take `&self`. SLB LRU counters move to `AtomicU64`; `PerTokenRetriever.last_scored_cell_count` moves to `AtomicUsize`. `Relaxed` ordering is safe because the outer writer lock provides the happens-before edge — documented at the SLB module level and on the trait.
+- **`CellGovernance`**: stored as `HashMap<CellId, Mutex<CellGovernance>>`. Picked over `DashMap` deliberately (no concurrent map growth needed under the outer writer lock) and over a `GovernanceRepository` trait deliberately (one impl, no abstraction earned).
+
+### Concurrency test surface
+
+- **New SLB property test**: 8 threads × 50 queries against a quiescent SLB return identical `(cell_id, score)` tuples — catches torn reads that would slip past single-thread tests.
+- **New engine acceptance test**: 8 threads × 25 queries against a shared seeded engine, asserts the retrieved pack-id set matches a quiescent baseline on every call.
+- **New end-to-end demo at `examples/concurrent_reads_demo.py`**: N readers against a shared engine with throughput + consistency reporting. Doubles as the comparator that measured the 1.74× win.
+
 ## [0.7.2] — 2026-05-21
 
 Warm-tier writes now take 2.66× less disk space; README + all eight `docs/guide/` pages rewritten through the `/write-docs` craft layer; publish workflow guarded against version/tag drift.

@@ -2,11 +2,11 @@
 //!
 //! Periodically runs governance sweep (decay + eviction) and segment
 //! compaction in a background thread. The worker shares an
-//! `Arc<Mutex<Engine>>` with the foreground — lock is held only during
-//! operations, never during sleep.
+//! `Arc<RwLock<Engine>>` with the foreground — the write guard is held
+//! only during sweep / compaction operations, never during sleep.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -78,7 +78,7 @@ impl MaintenanceWorker {
     /// # Panics
     /// Panics if the OS rejects the `thread::spawn` call (e.g. process
     /// thread-limit exhausted) — this is treated as unrecoverable.
-    pub fn start(&mut self, engine: Arc<Mutex<Engine>>) {
+    pub fn start(&mut self, engine: Arc<RwLock<Engine>>) {
         if !self.config.enabled || self.handle.is_some() {
             return;
         }
@@ -126,7 +126,7 @@ fn now_epoch_secs() -> u64 {
 
 #[expect(clippy::needless_pass_by_value)]
 fn run_loop(
-    engine: Arc<Mutex<Engine>>,
+    engine: Arc<RwLock<Engine>>,
     config: MaintenanceConfig,
     status: Arc<Mutex<MaintenanceStatus>>,
     stop_flag: Arc<AtomicBool>,
@@ -146,7 +146,7 @@ fn run_loop(
         }
 
         if last_sweep.elapsed() >= config.sweep_interval
-            && let Ok(mut eng) = engine.lock()
+            && let Ok(mut eng) = engine.write()
         {
             let days = config.hours_per_tick / 24.0;
             eng.advance_days(days);
@@ -167,7 +167,7 @@ fn run_loop(
         }
 
         if last_compaction.elapsed() >= config.compaction_interval
-            && let Ok(mut eng) = engine.lock()
+            && let Ok(mut eng) = engine.write()
         {
             if let Ok(result) = eng.compact() {
                 drop(eng);

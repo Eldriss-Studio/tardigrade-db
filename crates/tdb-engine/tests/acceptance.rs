@@ -3507,16 +3507,16 @@ fn test_flush_guarantees_durability() {
 
 // ── Background Maintenance (P5) ──────────────────────────────────────────
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tdb_engine::maintenance::{MaintenanceConfig, MaintenanceWorker};
 
 const MAINTENANCE_FAST_INTERVAL: Duration = Duration::from_millis(50);
 const MAINTENANCE_AGGRESSIVE_DECAY: f32 = 24.0;
 
-fn maintenance_test_engine(dir: &std::path::Path) -> Arc<Mutex<Engine>> {
+fn maintenance_test_engine(dir: &std::path::Path) -> Arc<RwLock<Engine>> {
     let engine = Engine::open_with_segment_size(dir, 512).unwrap();
-    Arc::new(Mutex::new(engine))
+    Arc::new(RwLock::new(engine))
 }
 
 /// ATDD: Maintenance worker runs governance sweep on schedule.
@@ -3526,7 +3526,7 @@ fn test_maintenance_runs_sweep() {
     let engine = maintenance_test_engine(dir.path());
 
     {
-        let mut eng = engine.lock().unwrap();
+        let mut eng = engine.write().unwrap();
         for i in 0..5u64 {
             let key = encode_per_token_keys(&[&[i as f32 + 1.0, 0.0, 0.0, 0.0]]);
             eng.mem_write_pack(&KVPack {
@@ -3565,7 +3565,7 @@ fn test_maintenance_evicts_drafts() {
     let engine = maintenance_test_engine(dir.path());
 
     {
-        let mut eng = engine.lock().unwrap();
+        let mut eng = engine.write().unwrap();
         for i in 0..3u64 {
             let key = encode_per_token_keys(&[&[i as f32 + 1.0, 0.0, 0.0, 0.0]]);
             eng.mem_write_pack(&KVPack {
@@ -3595,7 +3595,7 @@ fn test_maintenance_evicts_drafts() {
 
     let status = worker.status();
     assert!(status.total_packs_evicted > 0, "should have evicted at least one pack");
-    let remaining = engine.lock().unwrap().pack_count();
+    let remaining = engine.write().unwrap().pack_count();
     assert!(remaining < 3, "some packs should have been evicted, got {remaining}");
 }
 
