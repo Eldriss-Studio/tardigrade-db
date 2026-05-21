@@ -126,13 +126,13 @@
 <a href=#91 id=91 data-nosnippet>91</a>                }
 <a href=#92 id=92 data-nosnippet>92</a>                <span class="kw">let </span>byte = tensor.data[byte_offset + j];
 <a href=#93 id=93 data-nosnippet>93</a>                <span class="kw">let </span>q_low = i16::from(byte &amp; <span class="number">0x0F</span>) - <span class="number">8</span>;
-<a href=#94 id=94 data-nosnippet>94</a>                result.push(q_low <span class="kw">as </span>f32 * scale);
+<a href=#94 id=94 data-nosnippet>94</a>                result.push(f32::from(q_low) * scale);
 <a href=#95 id=95 data-nosnippet>95</a>
 <a href=#96 id=96 data-nosnippet>96</a>                <span class="kw">if </span>group_start + j * <span class="number">2 </span>+ <span class="number">1 </span>&gt;= tensor.original_len {
 <a href=#97 id=97 data-nosnippet>97</a>                    <span class="kw">break</span>;
 <a href=#98 id=98 data-nosnippet>98</a>                }
 <a href=#99 id=99 data-nosnippet>99</a>                <span class="kw">let </span>q_high = i16::from((byte &gt;&gt; <span class="number">4</span>) &amp; <span class="number">0x0F</span>) - <span class="number">8</span>;
-<a href=#100 id=100 data-nosnippet>100</a>                result.push(q_high <span class="kw">as </span>f32 * scale);
+<a href=#100 id=100 data-nosnippet>100</a>                result.push(f32::from(q_high) * scale);
 <a href=#101 id=101 data-nosnippet>101</a>            }
 <a href=#102 id=102 data-nosnippet>102</a>        }
 <a href=#103 id=103 data-nosnippet>103</a>
