@@ -1528,8 +1528,81 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SALIENCE_CAP", tdb_core::salience::SALIENCE_CAP)?;
 
     m.add_function(wrap_pyfunction!(find_chunk_boundary, m)?)?;
+    m.add_function(wrap_pyfunction!(flat_to_paged, m)?)?;
+    m.add_function(wrap_pyfunction!(paged_to_flat, m)?)?;
 
     Ok(())
+}
+
+/// Convert a flat `[K_flat | V_flat]` ndarray into vLLM paged blocks.
+///
+/// Returns `(k_blocks, v_blocks)` as 1-D float32 ndarrays of length
+/// `num_blocks * block_size * num_kv_heads * head_dim`. Reshape in
+/// Python with `.reshape(num_blocks, block_size, num_kv_heads, head_dim)`
+/// to recover the four-axis layout. Stateless — does not touch the engine.
+#[pyfunction]
+fn flat_to_paged(
+    py: Python<'_>,
+    flat_kv: PyReadonlyArray1<'_, f32>,
+    num_kv_heads: usize,
+    head_dim: usize,
+    block_size: usize,
+) -> PyResult<(pyo3::Py<pyo3::PyAny>, pyo3::Py<pyo3::PyAny>)> {
+    use pyo3::exceptions::PyValueError;
+    let arr = flat_kv.as_array();
+    let owned;
+    let slice: &[f32] = if let Some(s) = arr.as_slice() {
+        s
+    } else {
+        owned = arr.iter().copied().collect::<Vec<f32>>();
+        &owned
+    };
+    let (k, v) =
+        tdb_engine::engine::Engine::flat_to_paged(slice, num_kv_heads, head_dim, block_size)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((
+        numpy::PyArray1::from_vec(py, k).into_any().unbind(),
+        numpy::PyArray1::from_vec(py, v).into_any().unbind(),
+    ))
+}
+
+/// Convert vLLM paged K/V blocks back into a flat `[K_flat | V_flat]`
+/// float32 ndarray. Stateless — does not touch the engine.
+#[pyfunction]
+fn paged_to_flat(
+    py: Python<'_>,
+    k_blocks: PyReadonlyArray1<'_, f32>,
+    v_blocks: PyReadonlyArray1<'_, f32>,
+    seq_len: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    use pyo3::exceptions::PyValueError;
+    let k = k_blocks.as_array();
+    let v = v_blocks.as_array();
+    let k_owned;
+    let v_owned;
+    let k_slice: &[f32] = if let Some(s) = k.as_slice() {
+        s
+    } else {
+        k_owned = k.iter().copied().collect::<Vec<f32>>();
+        &k_owned
+    };
+    let v_slice: &[f32] = if let Some(s) = v.as_slice() {
+        s
+    } else {
+        v_owned = v.iter().copied().collect::<Vec<f32>>();
+        &v_owned
+    };
+    let out = tdb_engine::engine::Engine::paged_to_flat(
+        k_slice,
+        v_slice,
+        seq_len,
+        num_kv_heads,
+        head_dim,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(numpy::PyArray1::from_vec(py, out).into_any().unbind())
 }
 
 /// Find a byte position `<= max_pos` to split `text` at, preferring the

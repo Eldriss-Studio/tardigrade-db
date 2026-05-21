@@ -48,7 +48,9 @@ except ImportError:
     HAS_VLLM = False
 
 import tardigrade_db
-from tardigrade_vllm.format import blocks_to_flat, flat_to_blocks
+# Block-layout conversion now runs in Rust via Engine.flat_to_paged /
+# Engine.paged_to_flat. The Python format module is retained as the
+# numerical reference oracle for the Phase 8 parity tests.
 from tardigrade_vllm.slot_resolver import BatchSlice, RequestSlotResolver
 
 logger = logging.getLogger("tardigrade_vllm")
@@ -471,18 +473,20 @@ if HAS_VLLM:
                     layer_idx = layer_entry["layer_idx"]
                     layer_data = np.array(layer_entry["data"], dtype=np.float32)
 
-                    k_blocks, v_blocks = flat_to_blocks(
+                    k_flat, v_flat = tardigrade_db.flat_to_paged(
                         layer_data, self.num_kv_heads, self.head_dim,
                         self.block_size,
                     )
+                    block_floats = self.block_size * self.num_kv_heads * self.head_dim
+                    num_blocks = k_flat.size // block_floats
+                    k_blocks = k_flat.reshape(num_blocks, self.block_size, self.num_kv_heads, self.head_dim)
+                    v_blocks = v_flat.reshape(num_blocks, self.block_size, self.num_kv_heads, self.head_dim)
 
                     kv_cache = forward_context.kv_caches[layer_idx]
                     k_cache, v_cache = kv_cache[0], kv_cache[1]
 
                     k_tensor = torch.from_numpy(k_blocks)
                     v_tensor = torch.from_numpy(v_blocks)
-
-                    num_blocks = k_tensor.shape[0]
                     for i in range(min(num_blocks, len(block_ids))):
                         k_cache[block_ids[i]].copy_(k_tensor[i])
                         v_cache[block_ids[i]].copy_(v_tensor[i])

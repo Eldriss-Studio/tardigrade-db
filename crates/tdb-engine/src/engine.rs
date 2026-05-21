@@ -432,6 +432,88 @@ impl Engine {
         Ok(result)
     }
 
+    /// Convert a flat `[K_flat | V_flat]` buffer into vLLM paged-attention
+    /// block layout `(num_blocks, block_size, num_kv_heads, head_dim)`.
+    ///
+    /// Both halves of `flat_kv` are row-major `(seq_len, num_kv_heads, head_dim)`.
+    /// `seq_len` is inferred from `flat_kv.len() / (2 * num_kv_heads * head_dim)`.
+    /// Slots past `seq_len` in the final block are zero-padded.
+    ///
+    /// Returns `(k_blocks, v_blocks)` as flat row-major buffers each of
+    /// length `num_blocks * block_size * num_kv_heads * head_dim`.
+    pub fn flat_to_paged(
+        flat_kv: &[f32],
+        num_kv_heads: usize,
+        head_dim: usize,
+        block_size: usize,
+    ) -> Result<(Vec<f32>, Vec<f32>)> {
+        if num_kv_heads == 0 || head_dim == 0 || block_size == 0 {
+            return Err(TardigradeError::InvalidArgument(
+                "num_kv_heads, head_dim, block_size must all be > 0".into(),
+            ));
+        }
+        let kv_dim = num_kv_heads * head_dim;
+        let pair = 2 * kv_dim;
+        if !flat_kv.len().is_multiple_of(pair) {
+            return Err(TardigradeError::InvalidArgument(format!(
+                "flat_kv length {} is not a multiple of 2 * num_kv_heads * head_dim = {}",
+                flat_kv.len(),
+                pair,
+            )));
+        }
+        let seq_len = flat_kv.len() / pair;
+        if seq_len == 0 {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let num_blocks = seq_len.div_ceil(block_size);
+        let block_floats = num_blocks * block_size * kv_dim;
+        let half = seq_len * kv_dim;
+        // Avoid writing every f32 twice (calloc then memcpy):
+        // copy live data first, then zero-fill only the padding tail.
+        let mut k_blocks = Vec::with_capacity(block_floats);
+        k_blocks.extend_from_slice(&flat_kv[..half]);
+        k_blocks.resize(block_floats, 0.0);
+        let mut v_blocks = Vec::with_capacity(block_floats);
+        v_blocks.extend_from_slice(&flat_kv[half..]);
+        v_blocks.resize(block_floats, 0.0);
+        Ok((k_blocks, v_blocks))
+    }
+
+    /// Convert paged K/V block buffers back into a flat
+    /// `[K_flat | V_flat]` array of length `2 * seq_len * num_kv_heads * head_dim`.
+    ///
+    /// Returns `InvalidArgument` when `seq_len * num_kv_heads * head_dim`
+    /// exceeds either block buffer.
+    pub fn paged_to_flat(
+        k_blocks: &[f32],
+        v_blocks: &[f32],
+        seq_len: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+    ) -> Result<Vec<f32>> {
+        if num_kv_heads == 0 || head_dim == 0 {
+            return Err(TardigradeError::InvalidArgument(
+                "num_kv_heads and head_dim must be > 0".into(),
+            ));
+        }
+        let kv_dim = num_kv_heads * head_dim;
+        let half = seq_len * kv_dim;
+        if half > k_blocks.len() || half > v_blocks.len() {
+            return Err(TardigradeError::InvalidArgument(format!(
+                "seq_len={seq_len} exceeds block buffer capacity (k={}, v={}, kv_dim={kv_dim})",
+                k_blocks.len(),
+                v_blocks.len(),
+            )));
+        }
+        if seq_len == 0 {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::with_capacity(2 * half);
+        out.extend_from_slice(&k_blocks[..half]);
+        out.extend_from_slice(&v_blocks[..half]);
+        Ok(out)
+    }
+
     /// Replace the refinement strategy with a trait object directly (Strategy pattern).
     pub fn set_refinement_strategy(
         &mut self,
