@@ -232,7 +232,19 @@
 <a href=#197 id=197 data-nosnippet>197</a>        </span>)
 <a href=#198 id=198 data-nosnippet>198</a>    )]
 <a href=#199 id=199 data-nosnippet>199</a>    </span>EmptyTokenMatrix { n_tokens: usize, dim: usize, buffer_len: usize },
-<a href=#200 id=200 data-nosnippet>200</a>}
-<a href=#201 id=201 data-nosnippet>201</a>
-<a href=#202 id=202 data-nosnippet>202</a><span class="kw">pub type </span><span class="prelude-ty">Result</span>&lt;T&gt; = std::result::Result&lt;T, TardigradeError&gt;;
+<a href=#200 id=200 data-nosnippet>200</a>
+<a href=#201 id=201 data-nosnippet>201</a>    <span class="doccomment">/// Generic input-validation failure. Surfaces as a `ValueError` on the
+<a href=#202 id=202 data-nosnippet>202</a>    /// Python side. Reach for one of the typed variants above when the
+<a href=#203 id=203 data-nosnippet>203</a>    /// shape of the failure is stable; use this when the call simply
+<a href=#204 id=204 data-nosnippet>204</a>    /// disagrees with the API contract (unknown strategy name, mutually
+<a href=#205 id=205 data-nosnippet>205</a>    /// exclusive flags set together, etc.).
+<a href=#206 id=206 data-nosnippet>206</a>    </span><span class="attr">#[error(<span class="string">"invalid argument: {0}"</span>)]
+<a href=#207 id=207 data-nosnippet>207</a>    #[diagnostic(
+<a href=#208 id=208 data-nosnippet>208</a>        code(tdb::api::invalid_argument),
+<a href=#209 id=209 data-nosnippet>209</a>        help(<span class="string">"check the caller's arguments against the API contract"</span>)
+<a href=#210 id=210 data-nosnippet>210</a>    )]
+<a href=#211 id=211 data-nosnippet>211</a>    </span>InvalidArgument(String),
+<a href=#212 id=212 data-nosnippet>212</a>}
+<a href=#213 id=213 data-nosnippet>213</a>
+<a href=#214 id=214 data-nosnippet>214</a><span class="kw">pub type </span><span class="prelude-ty">Result</span>&lt;T&gt; = std::result::Result&lt;T, TardigradeError&gt;;
 </code></pre></div></section></main></body></html>

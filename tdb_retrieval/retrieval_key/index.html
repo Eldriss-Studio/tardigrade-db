@@ -1,0 +1,55 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Retrieval-key computation strategies (Strategy pattern)."><title>tdb_retrieval::retrieval_key - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_retrieval" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module retrieval_key</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_retrieval/index.html">tdb_<wbr>retrieval</a><span class="version">0.6.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module retrieval_<wbr>key</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#strategies" title="Strategies">Strategies</a></li><li><a href="#usage" title="Usage">Usage</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate tdb_<wbr>retrieval</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_retrieval</a></div><h1>Module <span>retrieval_<wbr>key</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_retrieval/retrieval_key.rs.html#1-241">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Retrieval-key computation strategies (Strategy pattern).</p>
+<p>A retrieval key is the vector that identifies a stored pack in latent
+space. For the vLLM connector path, the scheduler does not have hidden
+states — only token IDs. The token-embedding table is used as a cheap
+proxy: look up each token’s row, then fold the rows into one vector
+according to the chosen strategy.</p>
+<p>Both save and load sides use the same strategy so the resulting keys
+live in the same space and dot-product retrieval is meaningful.</p>
+<h2 id="strategies"><a class="doc-anchor" href="#strategies">§</a>Strategies</h2>
+<ul>
+<li><a href="struct.LastTokenStrategy.html" title="struct tdb_retrieval::retrieval_key::LastTokenStrategy"><code>LastTokenStrategy</code></a> — return the last in-range token’s embedding row.</li>
+<li><a href="struct.MeanPoolStrategy.html" title="struct tdb_retrieval::retrieval_key::MeanPoolStrategy"><code>MeanPoolStrategy</code></a>  — mean of all in-range token embedding rows.</li>
+<li><a href="struct.ProjectedStrategy.html" title="struct tdb_retrieval::retrieval_key::ProjectedStrategy"><code>ProjectedStrategy</code></a> — <code>W · last_token_embedding</code> for <code>hidden != kv_dim</code>.</li>
+</ul>
+<h2 id="usage"><a class="doc-anchor" href="#usage">§</a>Usage</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tdb_retrieval::retrieval_key::{EmbeddingTable, LastTokenStrategy, RetrievalKeyStrategy};
+
+<span class="kw">let </span>table = EmbeddingTable::new(<span class="macro">vec!</span>[<span class="number">0.0</span>, <span class="number">1.0</span>,  <span class="number">2.0</span>, <span class="number">3.0</span>,  <span class="number">4.0</span>, <span class="number">5.0</span>], <span class="number">3</span>, <span class="number">2</span>);
+<span class="kw">let </span>key = LastTokenStrategy.compute(<span class="kw-2">&amp;</span>[<span class="number">0</span>, <span class="number">2</span>], <span class="kw-2">&amp;</span>table).unwrap();
+<span class="macro">assert_eq!</span>(key, <span class="macro">vec!</span>[<span class="number">4.0</span>, <span class="number">5.0</span>]);</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.EmbeddingTable.html" title="struct tdb_retrieval::retrieval_key::EmbeddingTable">Embedding<wbr>Table</a></dt><dd>Token-embedding table owned by the engine.</dd><dt><a class="struct" href="struct.LastTokenStrategy.html" title="struct tdb_retrieval::retrieval_key::LastTokenStrategy">Last<wbr>Token<wbr>Strategy</a></dt><dd>Last in-range token’s embedding row (most common strategy).</dd><dt><a class="struct" href="struct.MeanPoolStrategy.html" title="struct tdb_retrieval::retrieval_key::MeanPoolStrategy">Mean<wbr>Pool<wbr>Strategy</a></dt><dd>Mean of all in-range token embedding rows.</dd><dt><a class="struct" href="struct.ProjectedStrategy.html" title="struct tdb_retrieval::retrieval_key::ProjectedStrategy">Projected<wbr>Strategy</a></dt><dd>Linear projection <code>W · embedding(last_token)</code> for <code>hidden_size</code> != <code>kv_dim</code>.</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.RetrievalKeyStrategy.html" title="trait tdb_retrieval::retrieval_key::RetrievalKeyStrategy">Retrieval<wbr>KeyStrategy</a></dt><dd>Strategy interface: fold token IDs into one retrieval-key vector.</dd></dl></section></div></main></body></html>
