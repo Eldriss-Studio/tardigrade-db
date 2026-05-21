@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Storage
+
+- **Warm-tier compression**: Validated/Core cells now take **2.66× less disk space**. Measured at 1024-dim KV: 1372 B/cell → 516 B/cell, 62 % saved on the warm tail. Method and caveats: [`docs/experiments/2026-05-21-warm-tier-codec.md`](docs/experiments/2026-05-21-warm-tier-codec.md).
+- **Codec is tier-gated**: zstd level 3 on Validated/Core writes, raw Q4 on Draft. Per-cell dispatch — mixed-tier batches land in one segment.
+- **No Python API change.** The codec is transparent end-to-end.
+- **Segment format bumped to v2**: one new `codec_id` byte per record. Legacy v1 segments remain readable as `UniformQ4`.
+- **New module** `tdb_storage::compression::CompressionCodec` (`UniformQ4 = 0`, `ZstdQ4 = 1`). Strategy seat for a future variable-bitrate-per-channel codec (~6–8× target) with no further on-disk changes.
+
 ### Documentation
 
 - **README**: revised seven sections through the new `/write-docs` skill's

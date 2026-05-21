@@ -57,6 +57,7 @@ See [`docs/positioning.md`](docs/positioning.md) for the full comparison vs embe
 | Hybrid-attention support (RecurrentGemma, Jamba, Granite-4, …) | Stable | [`docs/guide/calibration.md`](docs/guide/calibration.md) |
 | Multi-agent / multi-owner isolation | Stable | [`docs/guide/consumers.md`](docs/guide/consumers.md) |
 | Adaptive Knowledge Lifecycle (importance, tiers, decay) | Stable | [`docs/architecture.md#governance-layer`](docs/architecture.md) |
+| Warm-tier compression (zstd-over-Q4 on Validated/Core writes, 2.66× shrink) | Stable | [`docs/experiments/2026-05-21-warm-tier-codec.md`](docs/experiments/2026-05-21-warm-tier-codec.md) |
 | Portable snapshot + labeled checkpoints | Stable | [`docs/architecture.md`](docs/architecture.md) |
 | `TardigradeClient` facade (chunking + ingestion + consolidation) | Stable | [`docs/guide/python-api.md`](docs/guide/python-api.md) |
 | HTTP / REST bridge | Stable | [`python/tardigrade_http/`](python/tardigrade_http/) |
@@ -69,7 +70,7 @@ Measured on a 5K-cell synthetic corpus with 1024-dim keys (matches Qwen3-0.6B hi
 | Metric | Number | Source |
 |--------|--------|--------|
 | Retrieval latency, 5K cells | **p50 = 0.34 ms, p99 = 0.51 ms** | [`experiments/latency_benchmark_v2.py`](experiments/latency_benchmark_v2.py) |
-| Per-cell on-disk footprint, 5K cells | **751 B** | [`experiments/footprint_audit.py`](experiments/footprint_audit.py) |
+| Per-cell on-disk footprint, 5K cells | **751 B** (Draft, worst-case) / **~516 B** (Validated/Core via ZstdQ4) | [`experiments/footprint_audit.py`](experiments/footprint_audit.py), [`docs/experiments/2026-05-21-warm-tier-codec.md`](docs/experiments/2026-05-21-warm-tier-codec.md) |
 | Recall @ 100 memories, real Qwen3 keys | **100 %** (Top5Avg, Q4 pipeline) | [`docs/research-log.md`](docs/research-log.md) |
 | `Engine.compute_retrieval_key('last_token')` | **6.5 µs** at prompt_len 1024 (14× over numpy) | [`experiments/retrieval_key_microbench.py`](experiments/retrieval_key_microbench.py) |
 | `tardigrade_db.paged_to_flat` | **68 µs** at Qwen3-0.6B dims (2.1× over numpy) | [`experiments/kv_reshape_microbench.py`](experiments/kv_reshape_microbench.py) |

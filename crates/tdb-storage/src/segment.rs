@@ -3,7 +3,24 @@
 //! Each segment file has a small header followed by variable-length records.
 //! New segments are created when the current segment exceeds the size threshold.
 //!
-//! ## Record Layout (binary, little-endian)
+//! ## File Header
+//!
+//! ```text
+//! [magic: "TDBS" (4 bytes)]
+//! [version: u32]
+//! ```
+//!
+//! Two versions are supported on read:
+//!
+//! - **v1** — legacy format with no per-record codec byte. All cells are read as
+//!   [`CompressionCodec::UniformQ4`].
+//! - **v2** — adds a `codec_id` byte to each record so cells can be encoded by
+//!   different codecs in the same segment (tier-gated on write).
+//!
+//! New segments are always written in **v2**. v1 segments remain readable for
+//! backward compatibility.
+//!
+//! ## Record Layout (v2, binary, little-endian)
 //!
 //! ```text
 //! [record_len: u32]       — total bytes of this record (excluding this field)
@@ -20,16 +37,20 @@
 //! [importance: f32]       — importance score
 //! [tags: u32]             — tag bitfield
 //! [tier: u8]              — maturity tier enum
+//! [codec_id: u8]          — compression codec applied to key/value bytes (v2 only)
 //! [key_scales_len: u32]   — number of Q4 scale floats for key
-//! [key_data_len: u32]     — number of Q4 packed bytes for key
+//! [key_data_len: u32]     — on-disk byte length of the (codec-encoded) key payload
 //! [val_scales_len: u32]   — number of Q4 scale floats for value
-//! [val_data_len: u32]     — number of Q4 packed bytes for value
+//! [val_data_len: u32]     — on-disk byte length of the (codec-encoded) value payload
 //! [key_scales: ...]       — f32 scale factors
-//! [key_data: ...]         — packed Q4 bytes
+//! [key_data: ...]         — codec-encoded Q4 bytes
 //! [val_scales: ...]       — f32 scale factors
-//! [val_data: ...]         — packed Q4 bytes
+//! [val_data: ...]         — codec-encoded Q4 bytes
 //! [pos_encoding: ...]     — f32 values (unquantized)
 //! ```
+//!
+//! In v1 records the `codec_id` byte is absent; everything else has the same
+//! layout, and the key/value payloads are uncompressed Q4 bytes.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -39,14 +60,30 @@ use tdb_core::memory_cell::{CellMeta, MemoryCell};
 use tdb_core::types::Tier;
 use tdb_core::{CellId, LayerId, OwnerId};
 
+use crate::compression::CompressionCodec;
 use crate::quantization::{DequantizeStrategy, Q4, QuantizeStrategy, QuantizedTensor};
 
 /// File header magic bytes to identify segment files.
 const SEGMENT_MAGIC: &[u8; 4] = b"TDBS";
-/// Current segment format version.
-const SEGMENT_VERSION: u32 = 1;
+/// Legacy segment format — no per-record codec byte. Still readable.
+const SEGMENT_VERSION_V1: u32 = 1;
+/// Current segment format — adds a per-record `codec_id` byte so cells can be
+/// encoded by different codecs in the same segment.
+const SEGMENT_VERSION_V2: u32 = 2;
 /// Size of the file header: magic(4) + version(4) = 8 bytes.
 const FILE_HEADER_SIZE: u64 = 8;
+
+/// Select the on-disk compression codec for a cell based on its maturity tier.
+///
+/// Draft cells turn over fast and use the raw Q4 byte stream so writes pay no
+/// codec cost. Validated and Core cells are warm-but-stable and earn the
+/// ~3–4× footprint shrink from zstd.
+fn codec_for_tier(tier: Tier) -> CompressionCodec {
+    match tier {
+        Tier::Draft => CompressionCodec::UniformQ4,
+        Tier::Validated | Tier::Core => CompressionCodec::ZstdQ4,
+    }
+}
 
 /// Location of a record within a segment.
 #[derive(Debug, Clone, Copy)]
@@ -61,6 +98,9 @@ pub struct Segment {
     id: u32,
     path: PathBuf,
     size: u64,
+    /// On-disk format version (read from the file header on `open`, set to the
+    /// current version on `create`). Drives the dispatch in [`Self::read_at`].
+    version: u32,
 }
 
 impl Segment {
@@ -73,20 +113,48 @@ impl Segment {
         let path = segment_path(dir, id);
         let mut file = File::create(&path)?;
         file.write_all(SEGMENT_MAGIC)?;
-        file.write_all(&SEGMENT_VERSION.to_le_bytes())?;
+        file.write_all(&SEGMENT_VERSION_V2.to_le_bytes())?;
         file.flush()?;
-        Ok(Self { id, path, size: FILE_HEADER_SIZE })
+        Ok(Self { id, path, size: FILE_HEADER_SIZE, version: SEGMENT_VERSION_V2 })
     }
 
     /// Open an existing segment file.
     ///
+    /// Reads the file header to discover the on-disk format version, which the
+    /// read path uses to decide whether each record carries a `codec_id` byte.
+    ///
     /// # Errors
-    /// Returns an [`io::Error`] if the segment file does not exist or its
-    /// metadata cannot be read.
+    /// Returns an [`io::Error`] if the segment file does not exist, its
+    /// metadata cannot be read, its magic header is wrong, or its version is
+    /// not one the current binary understands.
     pub fn open(dir: &Path, id: u32) -> io::Result<Self> {
         let path = segment_path(dir, id);
         let meta = fs::metadata(&path)?;
-        Ok(Self { id, path, size: meta.len() })
+        let size = meta.len();
+        let version = if size >= FILE_HEADER_SIZE {
+            let mut file = File::open(&path)?;
+            let mut magic = [0u8; 4];
+            file.read_exact(&mut magic)?;
+            if &magic != SEGMENT_MAGIC {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid segment magic in {}", path.display()),
+                ));
+            }
+            let v = read_u32(&mut file)?;
+            if v != SEGMENT_VERSION_V1 && v != SEGMENT_VERSION_V2 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("segment {} has unsupported format version {v}", path.display()),
+                ));
+            }
+            v
+        } else {
+            // Empty / header-truncated file — treat as the current version so the
+            // first append produces a well-formed segment.
+            SEGMENT_VERSION_V2
+        };
+        Ok(Self { id, path, size, version })
     }
 
     #[must_use]
@@ -97,6 +165,12 @@ impl Segment {
     #[must_use]
     pub fn size(&self) -> u64 {
         self.size
+    }
+
+    /// On-disk format version this segment was opened/created at.
+    #[must_use]
+    pub fn version(&self) -> u32 {
+        self.version
     }
 
     /// Append a `MemoryCell` (quantized to Q4) and return its byte offset.
@@ -150,8 +224,9 @@ impl Segment {
     ///
     /// # Errors
     /// Returns an [`io::Error`] if the segment cannot be opened, the seek
-    /// fails, any field-by-field read short-reads, or the tier byte is not
-    /// one of `0`/`1`/`2` ([`io::ErrorKind::InvalidData`]).
+    /// fails, any field-by-field read short-reads, the tier byte is not
+    /// one of `0`/`1`/`2` ([`io::ErrorKind::InvalidData`]), or a v2 record
+    /// carries an unknown `codec_id`.
     pub fn read_at(&self, byte_offset: u64) -> io::Result<MemoryCell> {
         let mut file = File::open(&self.path)?;
         file.seek(SeekFrom::Start(byte_offset))?;
@@ -173,16 +248,29 @@ impl Segment {
         let tags = read_u32(&mut file)?;
         let tier_byte = read_u8(&mut file)?;
 
+        // v2 adds a codec_id byte right after tier. v1 segments wrote nothing
+        // here and assume `UniformQ4` (legacy Q4-on-disk).
+        let codec = if self.version >= SEGMENT_VERSION_V2 {
+            let codec_byte = read_u8(&mut file)?;
+            CompressionCodec::from_u8(codec_byte)?
+        } else {
+            CompressionCodec::UniformQ4
+        };
+
         let key_scales_len = read_u32(&mut file)? as usize;
         let key_data_len = read_u32(&mut file)? as usize;
         let val_scales_len = read_u32(&mut file)? as usize;
         let val_data_len = read_u32(&mut file)? as usize;
 
         let key_scales = read_f32_vec(&mut file, key_scales_len)?;
-        let key_data = read_bytes(&mut file, key_data_len)?;
+        let key_on_disk = read_bytes(&mut file, key_data_len)?;
         let val_scales = read_f32_vec(&mut file, val_scales_len)?;
-        let val_data = read_bytes(&mut file, val_data_len)?;
+        let val_on_disk = read_bytes(&mut file, val_data_len)?;
         let pos_encoding = read_f32_vec(&mut file, pos_dim)?;
+
+        // Decode bytes back to the raw Q4 stream the dequantizer understands.
+        let key_data = codec.decode(&key_on_disk)?;
+        let val_data = codec.decode(&val_on_disk)?;
 
         let key_q = QuantizedTensor { data: key_data, scales: key_scales, original_len: key_dim };
         let val_q = QuantizedTensor { data: val_data, scales: val_scales, original_len: value_dim };
@@ -300,28 +388,49 @@ pub fn list_segments(dir: &Path) -> io::Result<Vec<u32>> {
     Ok(ids)
 }
 
-fn compute_record_size(key_q: &QuantizedTensor, val_q: &QuantizedTensor, pos_len: usize) -> usize {
-    // Fixed fields: id(8) + owner(8) + layer(2) + key_dim(4) + value_dim(4) + pos_dim(4)
+/// Compute the v2 record body size given the on-disk (codec-encoded) payload sizes.
+fn compute_record_size_v2(
+    key_scales_count: usize,
+    key_payload_bytes: usize,
+    val_scales_count: usize,
+    val_payload_bytes: usize,
+    pos_len: usize,
+) -> usize {
+    // Fixed v2 fields: id(8) + owner(8) + layer(2) + key_dim(4) + value_dim(4) + pos_dim(4)
     //   + token_span(16) + created_at(8) + updated_at(8) + importance(4) + tags(4) + tier(1)
-    //   + key_scales_len(4) + key_data_len(4) + val_scales_len(4) + val_data_len(4)
-    let fixed = 8 + 8 + 2 + 4 + 4 + 4 + 16 + 8 + 8 + 4 + 4 + 1 + 4 + 4 + 4 + 4;
-    let variable = key_q.scales.len() * 4
-        + key_q.data.len()
-        + val_q.scales.len() * 4
-        + val_q.data.len()
+    //   + codec_id(1) + key_scales_len(4) + key_data_len(4) + val_scales_len(4) + val_data_len(4)
+    let fixed = 8 + 8 + 2 + 4 + 4 + 4 + 16 + 8 + 8 + 4 + 4 + 1 + 1 + 4 + 4 + 4 + 4;
+    let variable = key_scales_count * 4
+        + key_payload_bytes
+        + val_scales_count * 4
+        + val_payload_bytes
         + pos_len * 4;
     fixed + variable
 }
 
 // --- Write helpers ---
 
-/// Serialize a single `MemoryCell` to a writer (Q4 quantized).
+/// Serialize a single `MemoryCell` to a writer using the v2 record layout
+/// (with a `codec_id` byte) and the tier-selected compression codec.
+///
 /// Returns the record body size (excluding the 4-byte `record_len` prefix).
 fn write_cell_record(w: &mut impl Write, cell: &MemoryCell) -> io::Result<u64> {
+    let codec = codec_for_tier(cell.meta.tier);
     let key_q = Q4::quantize(&cell.key);
     let val_q = Q4::quantize(&cell.value);
 
-    let record_bytes = compute_record_size(&key_q, &val_q, cell.pos_encoding.len());
+    // Encode the Q4 byte streams through the selected codec *before* sizing
+    // the record so the on-disk byte counts are known up front.
+    let key_payload = codec.encode(&key_q.data)?;
+    let val_payload = codec.encode(&val_q.data)?;
+
+    let record_bytes = compute_record_size_v2(
+        key_q.scales.len(),
+        key_payload.len(),
+        val_q.scales.len(),
+        val_payload.len(),
+        cell.pos_encoding.len(),
+    );
     let record_len: u32 = record_bytes.try_into().map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -339,9 +448,9 @@ fn write_cell_record(w: &mut impl Write, cell: &MemoryCell) -> io::Result<u64> {
     let value_len = u32_from_len(cell.value.len());
     let pos_len = u32_from_len(cell.pos_encoding.len());
     let key_scales_len = u32_from_len(key_q.scales.len());
-    let key_data_len = u32_from_len(key_q.data.len());
+    let key_data_len = u32_from_len(key_payload.len());
     let val_scales_len = u32_from_len(val_q.scales.len());
-    let val_data_len = u32_from_len(val_q.data.len());
+    let val_data_len = u32_from_len(val_payload.len());
 
     // Fixed fields.
     w.write_all(&cell.id.to_le_bytes())?;
@@ -357,6 +466,7 @@ fn write_cell_record(w: &mut impl Write, cell: &MemoryCell) -> io::Result<u64> {
     w.write_all(&cell.meta.importance.to_le_bytes())?;
     w.write_all(&cell.meta.tags.to_le_bytes())?;
     w.write_all(&[cell.meta.tier as u8])?;
+    w.write_all(&[codec.as_u8()])?;
 
     // Quantized key.
     w.write_all(&key_scales_len.to_le_bytes())?;
@@ -367,9 +477,9 @@ fn write_cell_record(w: &mut impl Write, cell: &MemoryCell) -> io::Result<u64> {
 
     // Variable-length data.
     write_f32_slice(w, &key_q.scales)?;
-    w.write_all(&key_q.data)?;
+    w.write_all(&key_payload)?;
     write_f32_slice(w, &val_q.scales)?;
-    w.write_all(&val_q.data)?;
+    w.write_all(&val_payload)?;
     write_f32_slice(w, &cell.pos_encoding)?;
 
     Ok(record_bytes as u64)

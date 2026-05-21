@@ -34,6 +34,11 @@ thiserror = "2"
 # `#[derive(Diagnostic)]` macro.
 miette = { version = "7", default-features = false, features = ["derive"] }
 memmap2 = "0.9"
+# Generic-purpose entropy coder used by `ZstdQ4Codec` to compress
+# already-Q4-quantized cell bytes before they hit disk. Level 3 is the
+# encode/ratio sweet spot for byte-oriented payloads (level 19 buys ~5%
+# more compression for 10× the encode time — not worth it on a write path).
+zstd = { version = "0.13", default-features = false }
 crossbeam-epoch = "0.9"
 crossbeam-utils = "0.8"
 half = { version = "2", features = ["num-traits"] }

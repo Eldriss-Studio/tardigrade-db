@@ -16,6 +16,7 @@ half = { workspace = true }
 memmap2 = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -29,3 +30,7 @@ harness = false
 [[bench]]
 name = "block_pool"
 harness = false
+
+[[example]]
+name = "codec_footprint"
+path = "examples/codec_footprint.rs"

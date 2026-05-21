@@ -98,6 +98,30 @@ real cost when corpus size scales — at 1M cells:
 - TardigradeDB: ~720 MB on disk
 - Mem0 / Qdrant default: ~4 GB on disk
 
+### Warm-tier compression (2026-05-21)
+
+The 751 B/cell number above is the **Draft-tier** number — what
+every cell costs immediately after capture, before governance has
+seen it. Validated and Core cells (the long tail of warm-but-stable
+memories) now pass through an additional zstd-over-Q4 codec on
+write, producing a measured **2.66× shrink** over uniform Q4.
+
+```
+100 cells × 1024-dim KV (sin/cos input, 2026-05-21)
+  Draft (uniform Q4):       1372 B/cell  (137 KB total)
+  Validated (ZstdQ4):        516 B/cell  ( 50 KB total)
+  Saved:                            62 %
+```
+
+Method: `cargo run -p tdb-storage --example codec_footprint --release`.
+Full record: [`docs/experiments/2026-05-21-warm-tier-codec.md`](../experiments/2026-05-21-warm-tier-codec.md).
+
+The "5K cells × 1024-dim → 3.76 MB" footprint number above stays
+honest because it measures all-Draft cells (the worst case). A
+real consumer running for hours will see most cells promoted to
+Validated/Core; expected steady-state footprint sits between the
+two numbers depending on the importance-score distribution.
+
 ---
 
 ## 3 — KV-native API: zero-prompt-token retrieval

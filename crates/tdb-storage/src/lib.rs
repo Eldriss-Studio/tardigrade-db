@@ -38,6 +38,16 @@
 //! Position encodings are stored **unquantized** (`f32`) because they must be
 //! reproduced exactly for safe historical KV block reuse.
 //!
+//! # Warm-tier compression
+//!
+//! After Q4 quantization, cells written at `Tier::Validated` or `Tier::Core`
+//! pass through an additional [`compression::CompressionCodec::ZstdQ4`] pass —
+//! zstd level 3 over the Q4 byte stream — for an extra ~2.66× footprint shrink
+//! on the warm-but-stable long tail of memories. Draft cells stay on raw Q4
+//! so the write path pays no codec cost while a cell is still turning over.
+//! The codec is identified per record by a single `codec_id` byte in the
+//! segment record header (segment file format v2).
+//!
 //! # Segment File Format
 //!
 //! ```text
@@ -95,6 +105,7 @@
 #![deny(unsafe_code)]
 
 pub mod block_pool;
+pub mod compression;
 pub mod deletion_log;
 pub mod quantization;
 pub mod segment;

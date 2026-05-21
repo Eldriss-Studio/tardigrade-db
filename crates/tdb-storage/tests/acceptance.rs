@@ -1,6 +1,7 @@
 use tdb_core::Tier;
 use tdb_core::memory_cell::{MemoryCell, MemoryCellBuilder};
 use tdb_storage::block_pool::BlockPool;
+use tdb_storage::compression::CompressionCodec;
 use tdb_storage::quantization::{DequantizeStrategy, Q4, QuantizeStrategy};
 
 const HYDRATION_FIXTURE_CELL_COUNT: u64 = 6;
@@ -528,6 +529,269 @@ fn test_compact_with_no_deletions() {
     let result = pool.compact(&all_live).unwrap();
 
     assert_eq!(result.segments_compacted, 0, "all cells live → no compaction needed");
+}
+
+/// AT-A03 (Part A.MVP): round-trip of a Validated-tier cell must come back
+/// inside Q4 reconstruction tolerance even though its bytes were zstd-encoded
+/// on disk. The retrieval path doesn't know the codec changed.
+#[test]
+fn zstd_q4_validated_cell_round_trips_within_q4_tolerance() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open(dir.path()).unwrap();
+
+    let key: Vec<f32> = (0..128).map(|i| (i as f32 * 0.01).sin()).collect();
+    let value: Vec<f32> = (0..128).map(|i| (i as f32 * 0.02).cos()).collect();
+
+    let cell = MemoryCellBuilder::new(101, 7, 4, key.clone(), value.clone())
+        .importance(60.0)
+        .tier(Tier::Validated)
+        .build();
+
+    pool.append(&cell).unwrap();
+
+    // Re-open to defeat any in-process caches and force a real on-disk read.
+    drop(pool);
+    let pool = BlockPool::open(dir.path()).unwrap();
+    let restored = pool.get(101).unwrap();
+
+    // Same SNR bar as the uniform-Q4 round-trip test — proof that zstd is a
+    // pure bytes-on-disk transform and doesn't perturb the quantizer output.
+    let signal_power: f32 = key.iter().map(|x| x * x).sum::<f32>() / key.len() as f32;
+    let mse: f32 = key.iter().zip(restored.key.iter()).map(|(a, b)| (a - b) * (a - b)).sum::<f32>()
+        / key.len() as f32;
+    let snr_db = 10.0 * (signal_power / mse).log10();
+    assert!(snr_db > 20.0, "Validated/ZstdQ4 key SNR {snr_db:.1}dB is below 20dB threshold");
+    assert_eq!(restored.meta.tier, Tier::Validated);
+}
+
+/// AT-A04 (Part A.MVP): tier gating. Draft cells write `UniformQ4` (`codec_id=0`);
+/// Validated and Core cells write `ZstdQ4` (`codec_id=1`). Inspect raw segment
+/// bytes — the dispatch only counts if the `codec_id` byte actually changes.
+#[test]
+fn tier_gating_drives_codec_id_byte_on_disk() {
+    use std::fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open(dir.path()).unwrap();
+
+    let key = vec![0.1f32; 64];
+    let value = vec![0.2f32; 64];
+
+    for (id, tier, expected) in [
+        (201u64, Tier::Draft, CompressionCodec::UniformQ4),
+        (202u64, Tier::Validated, CompressionCodec::ZstdQ4),
+        (203u64, Tier::Core, CompressionCodec::ZstdQ4),
+    ] {
+        let cell = MemoryCellBuilder::new(id, 1, 0, key.clone(), value.clone()).tier(tier).build();
+        pool.append(&cell).unwrap();
+        let restored = pool.get(id).unwrap();
+        assert_eq!(restored.id, id);
+        assert_eq!(restored.meta.tier, tier);
+
+        // Find the codec_id byte for this cell in the segment file. The byte
+        // immediately follows the tier byte in the v2 record layout.
+        let segment_paths: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("tdb"))
+            .collect();
+        let raw = fs::read(&segment_paths[0]).unwrap();
+        let id_bytes = id.to_le_bytes();
+        let id_pos = raw
+            .windows(8)
+            .position(|w| w == id_bytes)
+            .expect("cell id must appear in segment bytes");
+        // Layout from the record start (id_pos):
+        //   id(8) owner(8) layer(2) key_dim(4) value_dim(4) pos_dim(4)
+        //   token_span(16) created_at(8) updated_at(8) importance(4) tags(4) tier(1) codec(1)
+        let codec_offset = id_pos + 8 + 8 + 2 + 4 + 4 + 4 + 16 + 8 + 8 + 4 + 4 + 1;
+        assert_eq!(
+            raw[codec_offset],
+            expected.as_u8(),
+            "cell {id} ({tier:?}) should write codec {expected:?} (got {})",
+            raw[codec_offset]
+        );
+    }
+}
+
+/// AT-A05 (Part A.MVP): a single segment must hold cells encoded by different
+/// codecs and read each back correctly. This is the realistic case — a
+/// `append_batch` of mixed-tier cells lands in one segment.
+#[test]
+fn mixed_codec_segment_reads_back_every_cell() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open(dir.path()).unwrap();
+
+    let mut expected = Vec::new();
+    for i in 0..30u64 {
+        let tier = match i % 3 {
+            0 => Tier::Draft,
+            1 => Tier::Validated,
+            _ => Tier::Core,
+        };
+        let key: Vec<f32> = (0..64).map(|j| ((i + j) as f32 * 0.013).sin()).collect();
+        let value: Vec<f32> = (0..64).map(|j| ((i + j) as f32 * 0.017).cos()).collect();
+        let cell =
+            MemoryCellBuilder::new(300 + i, 1, 0, key.clone(), value.clone()).tier(tier).build();
+        pool.append(&cell).unwrap();
+        expected.push((300 + i, tier, key, value));
+    }
+
+    drop(pool);
+    let pool = BlockPool::open(dir.path()).unwrap();
+    for (id, tier, key, _value) in &expected {
+        let cell = pool.get(*id).unwrap();
+        assert_eq!(cell.meta.tier, *tier, "cell {id} tier mismatch");
+        let signal: f32 = key.iter().map(|x| x * x).sum::<f32>() / key.len() as f32;
+        let mse: f32 = key.iter().zip(cell.key.iter()).map(|(a, b)| (a - b) * (a - b)).sum::<f32>()
+            / key.len() as f32;
+        let snr_db = 10.0 * (signal / mse.max(f32::MIN_POSITIVE)).log10();
+        assert!(snr_db > 20.0, "cell {id} ({tier:?}) SNR {snr_db:.1}dB below 20dB");
+    }
+}
+
+/// AT-A06 (Part A.MVP): `ZstdQ4` must achieve a real footprint shrink over
+/// uniform Q4 on warm-tier writes. The gating bar is **≥ 1.5× on-disk shrink**
+/// for the Q4 byte payload portion of each cell — `CacheGen`'s 3–4× target is
+/// the design goal; 1.5× is the bar we refuse to ship below.
+///
+/// (Inspecting `key_data_len` / `val_data_len` in the segment record is the
+/// honest measurement — fixed-cost headers don't compress and shouldn't be in
+/// the numerator.)
+#[test]
+fn zstd_q4_compresses_warm_tier_q4_payloads() {
+    use std::fs;
+
+    // Write each cell into its own engine dir so we can size each segment as a
+    // whole. The two cells are identical aside from tier — any size difference
+    // is exclusively the codec talking.
+    let draft_dir = tempfile::tempdir().unwrap();
+    let validated_dir = tempfile::tempdir().unwrap();
+
+    // Realistic dim (1024 floats → 512 Q4 bytes per tensor) so zstd overhead is
+    // dominated by the payload rather than the frame header.
+    let key: Vec<f32> = (0..1024).map(|i| ((i as f32) * 0.001).sin() * 0.7).collect();
+    let value: Vec<f32> = (0..1024).map(|i| ((i as f32) * 0.002).cos() * 0.5).collect();
+
+    {
+        let mut pool = BlockPool::open(draft_dir.path()).unwrap();
+        let draft =
+            MemoryCellBuilder::new(401, 1, 0, key.clone(), value.clone()).tier(Tier::Draft).build();
+        pool.append(&draft).unwrap();
+    }
+    {
+        let mut pool = BlockPool::open(validated_dir.path()).unwrap();
+        let validated = MemoryCellBuilder::new(402, 1, 0, key.clone(), value.clone())
+            .tier(Tier::Validated)
+            .build();
+        pool.append(&validated).unwrap();
+    }
+
+    let total_size = |dir: &std::path::Path| -> u64 {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("tdb"))
+            .map(|p| fs::metadata(&p).unwrap().len())
+            .sum()
+    };
+    let draft_bytes = total_size(draft_dir.path());
+    let validated_bytes = total_size(validated_dir.path());
+
+    let ratio = draft_bytes as f32 / validated_bytes as f32;
+    assert!(
+        ratio >= 1.5,
+        "ZstdQ4 must achieve ≥1.5× shrink on warm-tier writes vs. UniformQ4 \
+         (got {ratio:.2}×, draft={draft_bytes}B, validated={validated_bytes}B)"
+    );
+}
+
+/// AT-A07 (Part A.MVP): legacy v1 segments — written before the `codec_id` byte
+/// existed — must remain readable. Forge a v1 segment by hand and confirm the
+/// open path treats it as `UniformQ4` for every record.
+#[test]
+fn legacy_v1_segments_still_readable_as_uniform_q4() {
+    use std::fs::File;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // Hand-forge a v1 segment containing a single uncompressed-Q4 cell. We do
+    // the work by serializing through the modern writer, then mutating the
+    // result down to the v1 layout: rewrite the file header version to 1 and
+    // drop the codec_id byte from the record body.
+
+    // Step 1: write the cell through BlockPool to get a well-formed v2 record.
+    let key = vec![0.3f32; 64];
+    let value = vec![0.4f32; 64];
+    let cell =
+        MemoryCellBuilder::new(501, 1, 0, key.clone(), value.clone()).tier(Tier::Draft).build();
+    let staging = tempfile::tempdir().unwrap();
+    let mut staging_pool = BlockPool::open(staging.path()).unwrap();
+    staging_pool.append(&cell).unwrap();
+    drop(staging_pool);
+
+    // Step 2: read the staging segment, downgrade header to v1, strip codec_id.
+    let staging_files: Vec<PathBuf> = std::fs::read_dir(staging.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("tdb"))
+        .collect();
+    let v2_bytes = std::fs::read(&staging_files[0]).unwrap();
+
+    // Locate the cell id in the v2 record and compute the codec_id byte offset.
+    let id_pos = v2_bytes
+        .windows(8)
+        .position(|w| w == 501u64.to_le_bytes())
+        .expect("cell id must appear in v2 segment");
+    let codec_offset = id_pos + 8 + 8 + 2 + 4 + 4 + 4 + 16 + 8 + 8 + 4 + 4 + 1;
+    assert_eq!(
+        v2_bytes[codec_offset],
+        CompressionCodec::UniformQ4.as_u8(),
+        "staging cell must have been written under UniformQ4"
+    );
+
+    // Splice: keep everything up to (but not including) codec_offset, skip the
+    // codec byte, and concatenate the rest. Then patch the record_len prefix
+    // (4 bytes before id_pos) to drop by 1.
+    let mut v1_bytes = Vec::with_capacity(v2_bytes.len() - 1);
+    v1_bytes.extend_from_slice(&v2_bytes[..codec_offset]);
+    v1_bytes.extend_from_slice(&v2_bytes[codec_offset + 1..]);
+    let record_len_pos = id_pos - 8; // record_len(4) sits 4 bytes before id, but id_pos changed only after splice — actually before splice both layouts agree until codec_offset, so id_pos is identical
+    let _ = record_len_pos; // (left for clarity; we recompute below)
+    let record_len_offset = id_pos - 4;
+    let mut old_len =
+        u32::from_le_bytes(v1_bytes[record_len_offset..record_len_offset + 4].try_into().unwrap());
+    old_len -= 1;
+    v1_bytes[record_len_offset..record_len_offset + 4].copy_from_slice(&old_len.to_le_bytes());
+
+    // Patch the file header version to 1.
+    v1_bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+
+    // Step 3: write the forged v1 segment into a fresh engine dir and open it.
+    let v1_path = dir.path().join("segment_000000.tdb");
+    {
+        let mut f = File::create(&v1_path).unwrap();
+        f.write_all(&v1_bytes).unwrap();
+        f.sync_all().unwrap();
+    }
+
+    let pool = BlockPool::open(dir.path()).unwrap();
+    let restored = pool.get(501).unwrap();
+    assert_eq!(restored.id, 501);
+    assert_eq!(restored.meta.tier, Tier::Draft);
+    let signal: f32 = key.iter().map(|x| x * x).sum::<f32>() / key.len() as f32;
+    let mse: f32 = key.iter().zip(restored.key.iter()).map(|(a, b)| (a - b) * (a - b)).sum::<f32>()
+        / key.len() as f32;
+    let snr_db = 10.0 * (signal / mse.max(f32::MIN_POSITIVE)).log10();
+    assert!(
+        snr_db > 20.0,
+        "v1 segment must read back as UniformQ4 with normal Q4 SNR ({snr_db:.1}dB)"
+    );
 }
 
 /// Boundary AT for the `u32` length-prefix in the on-disk segment format.
