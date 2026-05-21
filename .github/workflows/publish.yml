@@ -52,6 +52,12 @@ jobs:
       # built artifact carries the right version on disk. A wheel
       # whose filename version differs from the tag is what PyPI
       # rejects with the 400 File-already-exists shape.
+      #
+      # Wheel filename grammar (PEP 491): {name}-{version}-{python}-
+      # {abi}-{platform}.whl. PyPI normalizes hyphens in the project
+      # name to underscores in the wheel, so the version is always
+      # field 2 when splitting on '-'. cut beats a regex here because
+      # it can't be tricked by a hyphen-containing python tag.
       - name: Verify wheel filenames match tag
         shell: bash
         env:
@@ -61,7 +67,7 @@ jobs:
           EXPECTED="${TAG#v}"
           fail=0
           for whl in dist/*.whl; do
-            VER=$(basename "$whl" | sed -E 's/^[a-z_]+-([0-9]+\.[0-9]+\.[0-9]+([._-][^-]+)?)-.*\.whl$/\1/')
+            VER=$(basename "$whl" | cut -d- -f2)
             if [ "$VER" != "$EXPECTED" ]; then
               echo "::error::Wheel $(basename "$whl") version '$VER' does not match tag '$EXPECTED'"
               fail=1
@@ -108,7 +114,10 @@ jobs:
           TAG="${GH_REF#refs/tags/}"
           EXPECTED="${TAG#v}"
           for tgz in dist/*.tar.gz; do
-            VER=$(basename "$tgz" | sed -E 's/^[a-z_]+-([0-9]+\.[0-9]+\.[0-9]+([._-][^-]+)?)\.tar\.gz$/\1/')
+            # sdist grammar: {name}-{version}.tar.gz. Strip the suffix,
+            # then field 2 on '-' is the version. Same logic as the
+            # wheel check above; same reason for cut over a regex.
+            VER=$(basename "$tgz" .tar.gz | cut -d- -f2)
             if [ "$VER" != "$EXPECTED" ]; then
               echo "::error::sdist $(basename "$tgz") version '$VER' does not match tag '$EXPECTED'"
               exit 1
