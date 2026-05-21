@@ -1,8 +1,12 @@
 # Python API Reference
 
+This is the reference for the Python surface — every class, every method, every parameter. If you arrived here while writing consumer code, you're in the right place. If you're trying to *start* using TardigradeDB, the [Quickstart](quickstart.md) is friendlier; this page assumes you already know what you're looking for and want the signature.
+
+The surface has two main classes. **`TardigradeClient`** is the high-level facade you'll use for most things — it bundles the engine, file ingestion, multi-view consolidation, and the query path behind one object so you don't have to wire those pieces together yourself. **`KnowledgePackStore`** is the lower-level consumer for HuggingFace direct injection — use it when you want zero-token KV cache injection into `model.generate()` rather than the convenience of the facade.
+
 ## TardigradeClient
 
-The recommended high-level entry point. Facade pattern that wraps Engine, FileIngestor, MemoryConsolidator, and the query path behind a unified API.
+The high-level entry point. Bundles `Engine`, `FileIngestor`, `MemoryConsolidator`, and the query path behind a unified API — so you can write `client.store(...)` and `client.query(...)` without instantiating the engine or the ingestion machinery yourself.
 
 ### Constructor
 
@@ -17,11 +21,11 @@ TardigradeClient(
 )
 ```
 
-- `db_path` — `str | Path`. Directory for persistent storage; engine is created internally.
-- `tokenizer` — tokenizer with `.encode()` / `.decode()`. Required for real KV capture.
-- `owner` — owner ID for multi-agent isolation (default: 1).
-- `kv_capture_fn` — `(chunk_text, tokenizer) -> (key, layer_payloads)`. If `None`, uses a random-key stub (testing only).
-- `vamana_threshold` — engine's Vamana ANN activation threshold.
+- `db_path` — `str | Path`. Directory for persistent storage; the engine is created internally and lives here for the client's lifetime.
+- `tokenizer` — a tokenizer with `.encode()` / `.decode()` methods. Required for real KV capture; omit it only for the random-stub testing path below.
+- `owner` — owner id for memory isolation across agents or tenants (default: `1`). One client always operates under one owner; create separate clients for separate owners.
+- `kv_capture_fn` — `(chunk_text, tokenizer) -> (key, layer_payloads)`. The function the client calls to turn a chunk of text into a retrieval key (the vector used for similarity scoring) plus the per-layer KV tensors that get persisted as the pack. If you pass `None`, the client falls back to a random-vector stub — fine for smoke-testing the API shape but produces near-random retrieval. For real use, supply a function that drives a forward pass on your model; see [`knowledge-pack-store.md`](knowledge-pack-store.md) for the canonical HuggingFace bridge.
+- `vamana_threshold` — pack count at which the engine starts using its Vamana ANN graph instead of brute-force search. The default of `9999` keeps brute-force on for small workloads where it's faster anyway.
 
 ### Methods
 
@@ -49,11 +53,11 @@ Full end-to-end injection via HuggingFace models. Use when you need KV cache inj
 KnowledgePackStore(engine, model, tokenizer, owner=1, query_layer=None)
 ```
 
-- `engine` — pre-built `tardigrade_db.Engine` instance
-- `model` — HuggingFace causal LM
-- `tokenizer` — matching tokenizer with chat template
-- `owner` — owner ID (default: 1)
-- `query_layer` — hidden layer index for retrieval keys (default: 67% of model depth)
+- `engine` — pre-built `tardigrade_db.Engine` instance.
+- `model` — HuggingFace causal LM (`AutoModelForCausalLM` or compatible).
+- `tokenizer` — the matching tokenizer, including its chat template — the store path wraps text in `tokenizer.apply_chat_template(...)` before the forward pass.
+- `owner` — owner id for memory isolation (default: `1`).
+- `query_layer` — which transformer layer's hidden states to read for the retrieval key. Defaults to roughly two-thirds of the way through the model (`int(num_hidden_layers × 0.67)`), a heuristic that works well for most uniform-softmax models because the middle-to-late layers carry the most semantic signal — earlier layers are too lexical, the final layers are too output-shaped. For hybrid-attention models the heuristic doesn't apply; use [`CalibrationRegistry`](calibration.md) instead.
 
 ### Storage Methods
 
@@ -144,13 +148,15 @@ ReflectiveLatentSearch(
 )
 ```
 
-The loop: RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE.
+The loop: retrieve, evaluate confidence, and if confidence is low, reformulate the query, re-retrieve for each variant, and fuse the rankings via Reciprocal Rank Fusion (RRF).
 
-Confidence is measured as `score[0] / score[1]`. If the ratio is below `confidence_threshold`, RLS iterates through the configured strategies and fuses results with RRF.
+Confidence is computed as the score of the top-ranked match divided by the score of the second-ranked match — `score[0] / score[1]`. If that ratio is at or above `confidence_threshold` (default `1.10`), the top result is clearly stronger than the alternatives and RLS returns immediately. If it's below, the retrieval is ambiguous and RLS iterates through the configured strategies, fusing the resulting ranked lists with RRF.
+
+See [`concepts.md`](concepts.md#reflective-latent-search) before reaching for this — RLS is documented but does not currently improve over the no-RLS baseline on clean benchmark data.
 
 #### `query(question, top_k=None) → list[MemoryCellHandle]`
 
-Run the full RLS loop. Returns list of `MemoryCellHandle`.
+Run the full RLS loop. Returns a list of `MemoryCellHandle` — each handle is a lightweight reference to a stored memory (analogous to a pack id, but the type used through the RLS API specifically; see the `MemoryCellHandle` entry under `tardigrade_hooks` below).
 
 ```python
 from tardigrade_hooks.rls import ReflectiveLatentSearch, KeywordExpansionStrategy
@@ -399,7 +405,7 @@ engine = tardigrade_db.Engine("/path/to/storage")
 | `trace_ancestors(cell_id)` | Get causal parent chain |
 | `has_vamana()` | Whether ANN index is active |
 | `status()` | Engine health + metrics dict |
-| `compact()` | Trigger segment compaction (mark-sweep GC) |
+| `compact()` | Trigger segment compaction — a mark-sweep GC that walks the segment files, drops cells that have been deleted, and rewrites the live segments to reclaim disk space. Safe to call at any time; runs incrementally and won't block reads. |
 | `refresh()` | Reload WAL + rebuild derived state |
 | `set_refinement_mode(mode, **kwargs)` | Configure query-side refinement. `mode` is `"none"` (raw retrieval), `"centered"` (subtract corpus mean from query/keys before scoring), or `"prf"` (Rocchio-style pseudo-relevance feedback in K-space). See [`docs/experiments/vague_queries/results.md`](../experiments/vague_queries/results.md). |
 

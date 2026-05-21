@@ -1,45 +1,34 @@
 # Concepts
 
+This page is the vocabulary you need to read the rest of the documentation, and the design rationale behind the most important pieces. It assumes you've already skimmed the [README](../../README.md) — you know roughly what TardigradeDB is — and you want the conceptual picture before going deeper into a specific guide.
+
 ## KV Cache Injection
 
-Traditional agent memory systems store text, retrieve text, paste text into the prompt. This consumes prompt tokens.
+A language model's *KV cache* is the running internal state it builds up while processing tokens. Every token the model reads produces a key and value vector at each attention layer; the KV cache is just the stack of all those vectors so far. The model uses the cache to decide what to generate next, and once generation ends the cache is normally thrown away.
 
-TardigradeDB stores the model's own KV cache tensors — the internal state the model computes during a forward pass. When using the Python API, retrieved memories are injected directly into the model's attention as KV cache: the stored facts themselves contribute zero additional prompt tokens (their KV is restored, not re-tokenized). The query text still costs tokens. When using the MCP server, memories are delivered as text for universal LLM compatibility (standard prompt token cost).
+Traditional agent memory systems work around this loss by storing the *text* of past conversations, retrieving the relevant text on each new turn, and pasting it back into the prompt — which means the model re-tokenizes and reprocesses the same facts every time, paying prompt tokens for every recall. TardigradeDB stores the KV cache itself instead. When the Python API retrieves a memory, it reinjects the stored cache directly into the model's attention, contributing zero additional prompt tokens because the cache is restored rather than re-tokenized. (The query text on the new turn still costs tokens; only the recalled facts come for free.) When the MCP server retrieves a memory, it delivers the text back in the tool response because MCP can't carry tensors — that path pays the normal prompt-token cost in exchange for universal LLM compatibility.
 
-**Result (Python API):** Byte-identical output to having the text in the prompt, with 46% fewer total prompt tokens than the equivalent text-RAG call (because retrieved facts don't re-enter the prompt).
-
-**When to use:** Single-fact recall queries. "What's the user's preference?" "What did they say about X?"
+On the Python path, the recall produces byte-identical generation to having the fact in the prompt, while consuming roughly 46% fewer total prompt tokens than the equivalent text-RAG call. This is most useful for single-fact recall queries — *"what's the user's preference?"*, *"what did they say about X?"* — rather than for queries that require reasoning across many facts simultaneously, where text delivery is still more reliable.
 
 ## Reflective Latent Search (RLS)
 
-Latent-space retrieval works well for specific queries, but vague queries ("What outdoor activities does this person enjoy?") often return weak results — the vocabulary in the query doesn't overlap with the vocabulary in the stored memory.
+> ⚠️ **Honest status (2026-05-14):** RLS is documented because the API exists and the design has independent value as a teaching example, but **it does not currently improve retrieval over the no-RLS baseline on clean LoCoMo data**. The 2026-05-14 bench audit found that every RLS mode (keyword, multi-phrasing, embedding, generative, LLM-agent) underperforms the no-RLS baseline; the DeepSeek agent reformulator specifically loses 12.7 percentage points. The earlier 68.2% LoCoMo ceiling against which RLS was being measured was also retracted in the same audit (the runs used the lexical fallback adapter on a corrupted dataset, not the native KV engine). Honest native-engine baseline on clean data: ~36% R@1 at 50-item scale. See [`docs/experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md) for the full record. Read what follows knowing the technique didn't deliver; the design is preserved for future work and because the API surface is still in the codebase.
 
-RLS runs a RETRIEVE → EVALUATE → REFORMULATE → RE-RETRIEVE → FUSE loop to recover from those misses.
+Latent-space retrieval works well for specific queries but tends to weaken on vague queries — *"what outdoor activities does this person enjoy?"* — where the query's vocabulary doesn't overlap with the stored memory's vocabulary. RLS was the attempt to recover from those misses.
 
-```
-1. RETRIEVE  — single forward pass, Top5Avg scoring
-2. EVALUATE  — confidence = score[rank-1] / score[rank-2]
-               if ratio ≥ threshold (1.10): return immediately
-3. REFORMULATE — run configured strategies to generate query variants
-4. RE-RETRIEVE — score each variant independently
-5. FUSE      — Reciprocal Rank Fusion over all result lists
-```
+The loop is **retrieve, evaluate, reformulate, re-retrieve, fuse**. The engine does a single forward pass and scores stored memories with per-token Top5Avg; that's the retrieve step. It then evaluates how confident that retrieval is by computing the ratio of the top score to the second-best score — if rank 1 is much stronger than rank 2 (ratio ≥ 1.10), the retrieval is unambiguous and the loop returns immediately. Otherwise the query is ambiguous, and RLS reformulates: it asks one or more configured strategies to produce query variants, scores each variant independently against the same memory store, and finally merges all the ranked result lists using Reciprocal Rank Fusion (RRF) — a rank-based merge that combines results by their positions in each list rather than by raw score magnitude, so a memory that appears at rank 2 across three different query variants outranks a memory that appears at rank 1 only once.
 
-**Why confidence-ratio gating?** If rank-1 is clearly better than rank-2, the retrieval is unambiguous and reformulation only adds noise. Gating on ratio lets high-confidence queries bypass the overhead entirely.
+The gating on the confidence ratio is what keeps the loop cheap on average: high-confidence queries bypass the reformulation work entirely. The choice of RRF rather than score-based fusion is what lets diverse query forms coexist without one variant's score magnitudes dominating the merge.
 
-**Why Reciprocal Rank Fusion?** Different reformulations may surface different relevant memories. RRF combines ranked lists by position, not by raw score magnitude, so results from diverse query forms can coexist without one dominating.
-
-**Strategy cost ladder** (choose based on latency budget):
+**Strategy cost ladder** (choose by latency budget):
 
 | Strategy | Model needed | Latency |
 |----------|-------------|---------|
-| `KeywordExpansionStrategy` | none | <1ms |
-| `MultiPhrasingStrategy` | none | <1ms |
-| `EmbeddingExpansionStrategy` | embedding table | ~5ms |
-| `GenerativeReformulationStrategy` | local LLM (e.g. Qwen2.5-3B) | ~500ms |
-| `LLMAgentReformulationStrategy` | external API (DeepSeek) | ~1-2s (network) |
-
-**Benchmark result (revised 2026-05-14):** Earlier runs cited a "68.2% LoCoMo ceiling" against which RLS produced 0% lift; those numbers were **retracted** in the 2026-05-14 bench audit (measured on a corrupted dataset using the lexical fallback adapter, not the native KV engine). On clean data, the honest native-engine baseline is ~36% R@1 at 50-item scale, and **all RLS modes underperform the no-RLS baseline** (the DeepSeek agent reformulator loses 12.7pp). RLS as currently designed is not a win. See [`docs/experiments/2026-05-14-bench-audit.md`](../experiments/2026-05-14-bench-audit.md).
+| `KeywordExpansionStrategy` | none | <1 ms |
+| `MultiPhrasingStrategy` | none | <1 ms |
+| `EmbeddingExpansionStrategy` | embedding table | ~5 ms |
+| `GenerativeReformulationStrategy` | local LLM (e.g. Qwen2.5-3B) | ~500 ms |
+| `LLMAgentReformulationStrategy` | external API (DeepSeek) | ~1–2 s (network) |
 
 ## Multi-view Consolidation
 

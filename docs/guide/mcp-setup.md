@@ -1,17 +1,25 @@
 # MCP Setup Guide
 
-TardigradeDB provides an MCP (Model Context Protocol) server that gives any LLM agent persistent memory through 7 tool calls.
+You're running Claude Code, Cursor, or another LLM client that speaks the Model Context Protocol, and you want to give the agent persistent memory it can recall across sessions. TardigradeDB ships an MCP server that wires that up in seven tool calls. This guide walks the setup for Claude Code and Cursor, and explains the one important tradeoff before you start.
 
-**Note:** The MCP server delivers memories as text in tool responses for universal LLM compatibility. This uses normal prompt tokens. For zero-token KV injection, use the [Python API](python-api.md) directly.
+## The tradeoff to know before you wire this up
+
+The MCP server delivers retrieved memories as **text** in the tool's response, because the Model Context Protocol speaks JSON-over-stdio and can't carry KV tensors directly. That makes the MCP path universally compatible (any LLM that can call MCP tools can use it) but means every recalled memory costs prompt tokens in the next turn — exactly the cost embedding RAG has, and exactly the cost the TardigradeDB design is otherwise trying to avoid.
+
+So:
+
+- **Use the MCP server** when you want zero-glue persistent memory inside Claude Code, Cursor, or any MCP-speaking client. The token cost is real but the integration cost is near zero.
+- **Use the [Python API](python-api.md) directly** when you control the model and care about prompt-token cost — that path injects retrieved memories as pre-computed KV cache, skipping the re-tokenization entirely.
+
+The MCP path is the right tradeoff for IDE-level agents. The Python path is the right tradeoff for production model serving.
 
 ## Prerequisites
 
-1. Run `./scripts/setup.sh` to install dependencies and download the model
-2. Note the paths printed by the setup script
+Run `./scripts/setup.sh` from the tardigrade-db repository root. It installs the Python dependencies into a `.venv` and downloads the embedding model (Qwen3-0.6B by default). When the script finishes it prints the three paths you'll paste into your MCP config in the next step — the Python interpreter inside the venv, the `python/` source directory (which becomes `PYTHONPATH`), and a default storage directory. Copy those somewhere; the wiring section below uses them.
 
 ## Claude Code
 
-Add to `~/.claude/claude_desktop_config.json` or your project's `.mcp.json`:
+Claude Code looks for MCP server configuration in two places, and either works for this. `~/.claude/claude_desktop_config.json` is your user-level file and applies to every project you open in Claude Code. A `.mcp.json` at the root of a specific project applies only to that project — useful if you want one TardigradeDB store per project rather than a shared one. Add the following block inside the `mcpServers` object of whichever file you picked:
 
 ```json
 {
@@ -29,14 +37,16 @@ Add to `~/.claude/claude_desktop_config.json` or your project's `.mcp.json`:
 }
 ```
 
+`PYTHONPATH` is set because `tardigrade_mcp` lives in the repo's `python/` directory rather than being pip-installed — pointing Python at the source tree is how the MCP runner finds the module. `TARDIGRADE_DB_PATH` is the directory where persisted memory cells live; pick a stable location outside `/tmp`. `TARDIGRADE_MODEL` is the HuggingFace model used to compute retrieval keys; the default Qwen3-0.6B works well and runs on CPU.
+
 ## Cursor
 
-Add to Cursor's MCP settings (Settings > MCP Servers):
+Cursor exposes MCP wiring through Settings → MCP Servers. The fields map directly to the JSON above:
 
-- **Name:** tardigrade
+- **Name:** `tardigrade`
 - **Command:** `/path/to/tardigrade-db/.venv/bin/python`
 - **Args:** `-m tardigrade_mcp`
-- **Environment:** set PYTHONPATH, TARDIGRADE_DB_PATH, TARDIGRADE_MODEL
+- **Environment:** add `PYTHONPATH`, `TARDIGRADE_DB_PATH`, and `TARDIGRADE_MODEL` with the same values as the Claude Code example.
 
 ## Environment Variables
 

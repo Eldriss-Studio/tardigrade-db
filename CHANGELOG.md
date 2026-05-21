@@ -33,6 +33,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ("Using TardigradeDB from Python", "Building TardigradeDB from source")
   so a reader who wants to *use* it from Rust isn't accidentally routed
   into the contributor path.
+- **All eight `docs/guide/` pages** revised through the same `/write-docs`
+  craft layer, in impact-over-effort order. The recurring fix across
+  the tree was the same one the README went through: opening sentences
+  now name the reader's situation rather than the page's topic, jargon
+  gets defined inline at first use, critical caveats moved up where
+  readers can't miss them, and procedure-as-bullet-list sections that
+  flattened causality became prose. Specifically: `calibration.md` got
+  three inline jargon expansions (mean-pool vs K projection, "flatline"
+  → explicit "produce identical scores", incomplete citation completed).
+  `consumers.md` opening rewrote to reader-situation, owner-scoping
+  explained before Pattern 1 uses it, the cryptic "three pluggable
+  extension points" line moved to a See-Also pointer. `mcp-setup.md`
+  surfaced the text-delivery-token-cost tradeoff at the top instead
+  of hiding it at line 5, and explains `PYTHONPATH` and config-file
+  locations properly. `quickstart.md` rebuilt around the "MCP path
+  vs Python path" decision the reader actually arrives with, the
+  `kv_capture_fn` stub warning moved to a precondition rather than a
+  buried mid-page note, the RLS algorithm prose-ified. `knowledge-pack-store.md`
+  opening rewrote to reader-situation, Q4 quantization and retrieval-key
+  strategy defined inline, the hybrid-attention section reframed by
+  outcome instead of implementation jargon (`_softmax_layer_payloads`,
+  `Griffin 3:1 spacing`). `concepts.md` opens with what a KV cache
+  actually is before using the term, the RLS retraction moved from
+  buried-in-paragraph to a warning callout at the top of the section,
+  the 5-step algorithm became a paragraph. `vllm-setup.md` got the
+  biggest restructure: a "what this integration does and doesn't do
+  today" subsection at the top that honestly names the prefix-cache-vs-
+  cross-prompt-injection distinction (matching the README's Project
+  Status framing rather than the old guide's overpromising), and the
+  status section reorganised into three honest categories (works
+  end-to-end, partial, not supported) instead of a flat feature table.
+  `python-api.md` got an opening that distinguishes it from the
+  quickstart, then surgical inline definitions for `layer_payloads`,
+  `kv_capture_fn`, `query_layer` heuristic, `confidence_threshold`
+  ratio, `MemoryCellHandle`, and `mark-sweep GC`.
 
 ## [0.7.1] — 2026-05-21
 

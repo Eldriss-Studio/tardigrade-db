@@ -1,6 +1,6 @@
 # Calibration Guide
 
-TardigradeDB's retrieval key — the vector used to match a query against stored cells — is computed from the model's hidden states. *Which* layer to read, and *which encoding* to use (mean-pooled hidden state vs raw K projection), depends on the model architecture. Picking the wrong combination silently produces near-random retrieval.
+TardigradeDB's retrieval key — the vector used to match a query against stored cells — is computed from the model's hidden states. *Which* layer to read, and *which encoding* to use, depends on the model architecture. The two encodings are mean-pooled hidden state (averaging the layer's output across all tokens to get one vector) and raw K projection (the raw key vectors that attention heads compute for the input). Picking the wrong combination silently produces near-random retrieval — the engine still returns results, but they're no better than chance.
 
 Calibration is a one-time, ~30 s sweep that picks the right `(strategy, layer)` empirically and caches the result.
 
@@ -11,7 +11,7 @@ TardigradeDB works with two architectural families.
 | Family | Examples | Default strategy | What to know |
 |---|---|---|---|
 | **Uniform softmax attention** | Qwen3, Llama-3, Mistral, Gemma-2, Phi-3.5, TinyLlama, GPT-2 | `HiddenStateKeyStrategy(query_layer)` | Works out of the box. The static `int(num_hidden_layers × 0.67)` heuristic picks a reasonable layer. Optional: run calibration to pick empirically. |
-| **Hybrid attention** (linear / SSM / recurrent layers mixed with softmax) | Qwen3-Next, RecurrentGemma, Jamba, Zamba, Falcon-Mamba, Granite-4, MiniMax, Hunyuan-T1, IBM Bamba, Nemotron-H | `KVectorKeyStrategy(softmax_layer_idx)` — picked automatically by calibration | Mean-pooled hidden states flatline at every layer on these (per Michalak & Abreu 2025, retrieval lives in attention heads). K-vector encoding at a calibrated softmax layer hits 95–100 % top-1. **Calibration is required** — there is no good default layer. |
+| **Hybrid attention** (linear / SSM / recurrent layers mixed with softmax) | Qwen3-Next, RecurrentGemma, Jamba, Zamba, Falcon-Mamba, Granite-4, MiniMax, Hunyuan-T1, IBM Bamba, Nemotron-H | `KVectorKeyStrategy(softmax_layer_idx)` — picked automatically by calibration | Mean-pooled hidden states on these models produce nearly identical scores at every layer — there's no good layer to pick, because the retrieval signal isn't in the pooled hidden state. It lives in the attention heads' raw K projections (Michalak & Abreu, *Latent Retrieval in Mixed Architectures*, 2025). K-vector encoding at a calibrated softmax layer hits 95–100 % top-1. **Calibration is required** — there is no good default layer. |
 
 ## Running calibration
 
@@ -74,11 +74,13 @@ kps = KnowledgePackStore(
 
 ## Empirical baseline — RecurrentGemma-2B-it
 
-| Strategy | Top-1 |
-|----------|-------|
-| `HiddenStateKeyStrategy` (any layer) | 3 / 20 |
-| `KVectorKeyStrategy` @ layer 5 (first softmax attention layer) | 19 / 20 |
-| `KVectorKeyStrategy` @ layer 11 | 20 / 20 |
+The numbers below are recall counts out of 20 test queries against a 20-fact paraphrased corpus. *Top-1* is how often the engine returned the correct fact as the first result.
+
+| Strategy | Top-1 (out of 20) |
+|----------|-------------------|
+| `HiddenStateKeyStrategy` (any layer) | 3 |
+| `KVectorKeyStrategy` @ layer 5 (first softmax attention layer) | 19 |
+| `KVectorKeyStrategy` @ layer 11 | 20 |
 
 Calibration on RecurrentGemma picks `k_vector @ layer 5` (the first attention layer in Griffin's 3:1 layout) at 19/20 top-1 / 20/20 top-5. With this cached choice, the full pipeline (calibrate → store → retrieve → inject → generate) reaches **20/20 retrieval (100 %)** and **18/20 generation-hit (90 %)** on the bundled 20-fact paraphrased corpus.
 
