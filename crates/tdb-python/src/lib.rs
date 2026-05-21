@@ -1054,6 +1054,117 @@ impl Engine {
         Ok(py_results)
     }
 
+    /// Batch read: run N retrievals in one `PyO3` crossing.
+    ///
+    /// `queries` is a list of 1-D float32 ndarrays; the call returns a
+    /// `list[list[dict]]` aligned by input position. `k` and `owner`
+    /// each accept a scalar (broadcast across all queries) or a list of
+    /// length `len(queries)` for per-query specialisation. `owner` list
+    /// entries may be `None` to skip the filter for that one query.
+    ///
+    /// Behaviour is identical to calling [`Engine::mem_read_pack`] N
+    /// times — this method exists to amortise `PyO3` crossing cost and
+    /// to give consumers a single point of entry for multi-agent /
+    /// multi-NPC fanout queries.
+    fn mem_read_pack_batch(
+        &self,
+        py: Python<'_>,
+        queries: Vec<PyReadonlyArray1<'_, f32>>,
+        k: Bound<'_, pyo3::PyAny>,
+        owner: Bound<'_, pyo3::PyAny>,
+    ) -> PyResult<Vec<Vec<pyo3::Py<pyo3::PyAny>>>> {
+        use pyo3::exceptions::PyValueError;
+        let n = queries.len();
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Resolve k: scalar broadcast or per-query list.
+        let ks: Vec<usize> = if let Ok(scalar) = k.extract::<usize>() {
+            vec![scalar; n]
+        } else {
+            let list = k
+                .extract::<Vec<usize>>()
+                .map_err(|_| PyValueError::new_err("k must be an int or a list[int]"))?;
+            if list.len() != n {
+                return Err(PyValueError::new_err(format!(
+                    "k list length {} does not match queries length {n}",
+                    list.len()
+                )));
+            }
+            list
+        };
+
+        // Resolve owner: scalar (int or None) broadcast or per-query list.
+        let owners: Vec<Option<u64>> = if owner.is_none() {
+            vec![None; n]
+        } else if let Ok(scalar) = owner.extract::<u64>() {
+            vec![Some(scalar); n]
+        } else {
+            let list = owner.extract::<Vec<Option<u64>>>().map_err(|_| {
+                PyValueError::new_err("owner must be int | None | list[int | None]")
+            })?;
+            if list.len() != n {
+                return Err(PyValueError::new_err(format!(
+                    "owner list length {} does not match queries length {n}",
+                    list.len()
+                )));
+            }
+            list
+        };
+
+        // Materialise each query as an owned Vec<f32> for the GIL-released loop.
+        let owned_queries: Vec<Vec<f32>> = queries
+            .iter()
+            .map(|q| {
+                q.as_slice()
+                    .map(<[f32]>::to_vec)
+                    .unwrap_or_else(|_| q.as_array().iter().copied().collect())
+            })
+            .collect();
+
+        let engine = Arc::clone(&self.inner);
+        let raw_results =
+            py.detach(move || -> PyResult<Vec<Vec<tdb_core::kv_pack::PackReadResult>>> {
+                let mut eng = lock_engine(&engine)?;
+                let mut out = Vec::with_capacity(n);
+                for ((q, k), owner) in owned_queries.iter().zip(ks.iter()).zip(owners.iter()) {
+                    let rows = eng
+                        .mem_read_pack(q, *k, *owner)
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    out.push(rows);
+                }
+                Ok(out)
+            })?;
+
+        let mut py_results = Vec::with_capacity(n);
+        for rows in raw_results {
+            let mut py_rows = Vec::with_capacity(rows.len());
+            for r in rows {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("pack_id", r.pack.id)?;
+                dict.set_item("owner", r.pack.owner)?;
+                dict.set_item("score", r.score)?;
+                dict.set_item("tier", r.tier as u8)?;
+
+                let layers_list = pyo3::types::PyList::empty(py);
+                for layer in &r.pack.layers {
+                    let layer_dict = pyo3::types::PyDict::new(py);
+                    layer_dict.set_item("layer_idx", layer.layer_idx)?;
+                    let data_arr = numpy::PyArray1::from_slice(py, &layer.data);
+                    layer_dict.set_item("data", data_arr)?;
+                    layers_list.append(layer_dict)?;
+                }
+                dict.set_item("layers", layers_list)?;
+                dict.set_item("text", r.pack.text.as_deref())?;
+                py_rows.push(dict.into_any().unbind());
+            }
+            py_results.push(py_rows);
+        }
+
+        Ok(py_results)
+    }
+
     /// Number of KV Packs stored.
     fn pack_count(&self) -> PyResult<usize> {
         Ok(lock_engine(&self.inner)?.pack_count())
