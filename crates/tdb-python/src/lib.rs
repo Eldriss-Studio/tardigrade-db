@@ -1740,8 +1740,88 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(find_chunk_boundary, m)?)?;
     m.add_function(wrap_pyfunction!(flat_to_paged, m)?)?;
     m.add_function(wrap_pyfunction!(paged_to_flat, m)?)?;
+    m.add_function(wrap_pyfunction!(flat_to_paged_torch, m)?)?;
 
     Ok(())
+}
+
+/// Torch-tensor variant of [`flat_to_paged`]. Reads the tensor's raw
+/// buffer via `data_ptr()` directly — no numpy intermediary, no
+/// libtorch link, no `tch-rs` dependency. The consumer's installed
+/// torch handles all the C++ side; Rust just reads the memory.
+///
+/// Requires the tensor to be a contiguous CPU float32 buffer. CUDA
+/// tensors, non-contiguous views, and non-f32 dtypes get rejected
+/// with a clear error — converting them is a Python-side responsibility
+/// (`tensor.cpu().contiguous().to(torch.float32)`).
+#[pyfunction]
+fn flat_to_paged_torch(
+    py: Python<'_>,
+    flat_kv: Bound<'_, pyo3::PyAny>,
+    num_kv_heads: usize,
+    head_dim: usize,
+    block_size: usize,
+) -> PyResult<(pyo3::Py<pyo3::PyAny>, pyo3::Py<pyo3::PyAny>)> {
+    use pyo3::exceptions::PyValueError;
+
+    // Detach from autograd graph before any data access — a grad-tracking
+    // tensor's data_ptr() still works but we don't want a stray view
+    // into the engine's write path keeping the autograd graph alive.
+    let tensor = flat_kv.call_method0("detach")?;
+
+    // Device check: must be on cpu. torch tensors expose `device.type`
+    // ("cpu", "cuda", "mps", ...). Anything other than "cpu" needs to
+    // round-trip through .cpu() on the Python side.
+    let device_type: String = tensor.getattr("device")?.getattr("type")?.extract()?;
+    if device_type != "cpu" {
+        return Err(PyValueError::new_err(format!(
+            "flat_to_paged_torch requires a cpu tensor; got device='{device_type}'. \
+             Call tensor.cpu() before passing it in."
+        )));
+    }
+
+    // Dtype check: must be float32. We compare against the torch.float32
+    // singleton via repr() to avoid pulling in tch-rs just to inspect dtype.
+    let dtype_repr: String = tensor.getattr("dtype")?.str()?.extract()?;
+    if dtype_repr != "torch.float32" {
+        return Err(PyValueError::new_err(format!(
+            "flat_to_paged_torch requires float32; got dtype={dtype_repr}. \
+             Call tensor.to(torch.float32) before passing it in."
+        )));
+    }
+
+    // Contiguity check: non-contiguous views (transpose, stride != 1
+    // slicing, etc.) have data_ptr pointing at a buffer that isn't the
+    // flat row-major layout we'd read. Reject — don't silently corrupt.
+    let is_contig: bool = tensor.call_method0("is_contiguous")?.extract()?;
+    if !is_contig {
+        return Err(PyValueError::new_err(
+            "flat_to_paged_torch requires a contiguous tensor; \
+             call tensor.contiguous() before passing it in.",
+        ));
+    }
+
+    let numel: usize = tensor.call_method0("numel")?.extract()?;
+    let data_ptr: usize = tensor.call_method0("data_ptr")?.extract()?;
+
+    // SAFETY:
+    // - `data_ptr` is the address of the tensor's contiguous f32
+    //   storage. The dtype check above guarantees f32; the contiguity
+    //   check guarantees the buffer is flat row-major; `numel` is the
+    //   element count.
+    // - The GIL is held for the entire scope of this function, so the
+    //   torch tensor cannot be garbage-collected nor have its storage
+    //   reallocated by another Python thread while we read.
+    // - We only read; never write.
+    let slice: &[f32] = unsafe { std::slice::from_raw_parts(data_ptr as *const f32, numel) };
+
+    let (k, v) =
+        tdb_engine::engine::Engine::flat_to_paged(slice, num_kv_heads, head_dim, block_size)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((
+        numpy::PyArray1::from_vec(py, k).into_any().unbind(),
+        numpy::PyArray1::from_vec(py, v).into_any().unbind(),
+    ))
 }
 
 /// Convert a flat `[K_flat | V_flat]` ndarray into vLLM paged blocks.
