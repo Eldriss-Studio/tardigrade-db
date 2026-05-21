@@ -7,9 +7,9 @@ It is kept in sync with `CLAUDE.md` — if the two files diverge, `CLAUDE.md` is
 
 TardigradeDB is a from-scratch, LLM-native database kernel designed as a persistent memory system for autonomous AI agents. It is **not** a traditional database with tables/indexes, nor a vector DB with embeddings. It operates directly on the model's Key-Value (KV) cache tensors in latent space — memory is stored, retrieved, and organized as quantized neural activations, not text.
 
-**Status:** Phases 0–11 complete. P1–P4 architectural unification complete. 663 tests passing (304 Rust + 359 Python). All CI checks green.
+**Status:** Foundation roadmap complete; Python↔Rust boundary migration complete (`v0.7.0`). Full CI green. See [`CLAUDE.md`](CLAUDE.md) for the canonical status block and shipped-features list; AGENTS.md only mirrors the high-level summary.
 
-> ⚠️ **Audit notice (2026-05-14):** Earlier headline benchmark numbers (68.2% LoCoMo / 90.9% LongMemEval) were **retracted** — they measured the lexical fallback adapter on a corrupted dataset, not the native KV engine. Honest native-engine number on clean LoCoMo: ~36% R@1 at 50-item scale; all RLS modes underperform the no-RLS baseline on clean data. See `docs/experiments/2026-05-14-bench-audit.md`.
+> ⚠️ **Audit notice (2026-05-14):** Earlier headline benchmark numbers (68.2 % LoCoMo / 90.9 % LongMemEval) were **retracted** — they measured the lexical fallback adapter on a corrupted dataset, not the native KV engine. Honest native-engine number on clean LoCoMo: ~36 % R@1 at 50-item scale; all RLS modes underperform the no-RLS baseline on clean data. Full record: [`docs/experiments/2026-05-14-bench-audit.md`](docs/experiments/2026-05-14-bench-audit.md).
 
 ## Build & Test
 

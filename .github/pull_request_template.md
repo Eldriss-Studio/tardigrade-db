@@ -13,6 +13,11 @@
 - [ ] No `#[allow(...)]` annotations added — root causes addressed instead
 - [ ] No `println!` / `eprintln!` / `dbg!` in library code
 
+## Commit hygiene
+
+- [ ] Commit message follows gitmoji + conventional-commits (e.g. `✨ feat(engine): ...`, `🐛 fix(retrieval): ...`)
+- [ ] `CHANGELOG.md` updated under `[Unreleased]` if the change is user-visible
+
 ## Code Quality
 
 - [ ] Refactor pass complete — naming, structure, duplication, SOLID adherence

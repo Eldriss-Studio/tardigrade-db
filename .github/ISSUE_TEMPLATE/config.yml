@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation
+    url: https://eldriss-studio.github.io/tardigrade-db
+    about: Read the Rustdoc, guides, and architecture references before filing an issue.
+  - name: 🔒 Security vulnerability
+    url: https://github.com/Eldriss-Studio/tardigrade-db/security/advisories/new
+    about: For security reports, please use private security advisories — do not file a public issue.

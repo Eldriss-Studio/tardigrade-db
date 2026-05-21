@@ -28,7 +28,6 @@ logger = logging.getLogger("tardigrade_vllm")
 
 LAST_TOKEN_EMBEDDING = "last_token_embedding"
 MEAN_POOL_EMBEDDING = "mean_pool_embedding"
-PROJECTED_EMBEDDING = "projected_embedding"
 
 
 class RetrievalKeyStrategy(ABC):

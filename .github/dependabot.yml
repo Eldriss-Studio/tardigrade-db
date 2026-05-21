@@ -5,6 +5,9 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "⬆️ deps(rust)"
+      include: scope
     groups:
       dev-tools:
         patterns:
@@ -17,5 +20,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "⬆️ deps(ci)"
+      include: scope
     ignore:
       - dependency-name: "dtolnay/rust-toolchain"

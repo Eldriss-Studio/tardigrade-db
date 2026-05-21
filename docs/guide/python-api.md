@@ -115,6 +115,16 @@ Retrieve k packs and compose them. No trace link following.
 
 ## Reflective Latent Search (RLS)
 
+> ⚠️ **Validation status.** The 2026-05-14 bench audit found that
+> every RLS mode (keyword / multiphrasing / embedding / generative /
+> agent) **underperforms** the no-RLS baseline on clean LoCoMo; the
+> DeepSeek agent reformulator loses 12.7pp. The API is documented
+> below for completeness, but RLS is not the recommended retrieval
+> path today. See [`docs/guide/concepts.md` § Reflective Latent
+> Search](concepts.md#reflective-latent-search) and the
+> [bench audit](../experiments/2026-05-14-bench-audit.md) before
+> reaching for it.
+
 Agentic retrieval loop that reformulates queries when the initial retrieval is not confident.
 
 ### ReflectiveLatentSearch

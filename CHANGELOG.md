@@ -8,7 +8,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_no changes yet_
+### Documentation
+
+- **README**: restructured from 756 lines to ~229 lines following the
+  modern OSS landing-page pattern (SpacetimeDB / Tokio / RocksDB /
+  Qdrant). Above-the-fold content is now title + badges + status +
+  pitch + hero example. Honest LoCoMo retraction lives in the
+  Project Status section with a one-sentence link to the audit doc,
+  not as a top-of-page wall. FAQ added at the end (name origin,
+  "isn't this just a KV cache?", compact comparison table, design
+  principles).
+- **New `docs/` tree**: `architecture.md`, `positioning.md`,
+  `research-log.md`, `roadmap.md`, `guide/calibration.md`,
+  `guide/knowledge-pack-store.md`, `docs/README.md` (index).
+  Detailed content moved out of the README so it stops scaling
+  with the project's history.
+- **CONTRIBUTING.md**: expanded with Requirements, full
+  Rust + Python test recipes, Bench V1 harness commands, CI gates
+  table, Reliability & Consistency Contracts, and a "Working with
+  Claude" section pointing at `CLAUDE.md`.
+
+### Community Standards
+
+- **`CODE_OF_CONDUCT.md`** (new): Contributor Covenant 2.1, contact
+  via the repo's GitHub private security advisory flow.
+- **`SECURITY.md`** (new): supported versions (0.7.x), private
+  reporting flow, scope (memory safety / persistence / owner
+  isolation / PyO3 boundaries), 30-day disclosure timeline.
+- **`CITATION.cff`** (new): CFF v1.2.0 — GitHub renders a "Cite this
+  repository" button.
+- **`.github/ISSUE_TEMPLATE/config.yml`** (new): blank issues
+  disabled; security reports routed to private advisories.
+- **`.github/pull_request_template.md`**: added Commit-hygiene
+  section (gitmoji + CHANGELOG entry checklist).
+
+### Public API
+
+- **`tardigrade_hooks.KnowledgePackStore`**: now in the public
+  package namespace via lazy `__getattr__` (matches the same
+  pattern used by `TardigradeClient`). Previously only reachable
+  via `from tardigrade_hooks.kp_injector import KnowledgePackStore`.
+- **`tardigrade_vllm.retrieval_key.PROJECTED_EMBEDDING`**: removed
+  (was orphaned after the v0.7.0 deprecation sweep deleted
+  `get_strategy` and `_STRATEGIES`).
+
+### Internal
+
+- **AGENTS.md**: status block refreshed to v0.7.0 reality; old
+  "Phases 0–11 complete. 663 tests passing" line removed in favour
+  of a pointer to `CLAUDE.md` as the canonical source.
+- **`.github/dependabot.yml`**: commit-message template updated to
+  match the project's gitmoji + conventional-commits convention.
 
 ## [0.7.0] — 2026-05-20
 

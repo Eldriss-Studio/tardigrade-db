@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use TardigradeDB in academic or industry research, please cite it as below."
+title: "TardigradeDB: A KV-cache-native persistent memory engine for large language models"
+abstract: >-
+  TardigradeDB is a from-scratch Rust + PyO3 memory engine that stores
+  the Key-Value cache tensors of large language models directly,
+  retrieves them via attention-native scoring in latent space, and
+  injects them back into the model without consuming prompt tokens.
+  It treats memory as a managed OS resource via a four-layer
+  architecture (Storage, Retrieval, Organization, Governance) with
+  adaptive lifecycle policies, crash-safe persistence, and per-owner
+  isolation.
+type: software
+version: "0.7.0"
+date-released: "2026-05-20"
+license: MIT
+repository-code: "https://github.com/Eldriss-Studio/tardigrade-db"
+url: "https://eldriss-studio.github.io/tardigrade-db"
+keywords:
+  - large-language-models
+  - kv-cache
+  - memory-engine
+  - latent-space-retrieval
+  - vector-search
+  - llm-infrastructure
+authors:
+  - name: "Eldriss Studio"
+    website: "https://github.com/Eldriss-Studio"
