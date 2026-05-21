@@ -94,6 +94,11 @@ impl CheckpointRepository {
     /// The next sequence number is computed by listing existing
     /// `<seq>.tar` files in the label's directory; the highest
     /// observed value + 1 is used. Empty label directory ⇒ seq 1.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if the label directory cannot be
+    /// created or scanned, or any [`TardigradeError`] variant surfaced by
+    /// [`Engine::snapshot`] during archive writing.
     pub fn save_from(&self, engine: &mut Engine, label: &str) -> Result<CheckpointEntry> {
         let label_dir = self.label_dir(label);
         std::fs::create_dir_all(&label_dir).map_err(|e| TardigradeError::Io { source: e })?;
@@ -109,6 +114,11 @@ impl CheckpointRepository {
     /// Results are sorted by `(label, seq)` ascending so consumers
     /// can pattern-match on the head/last for the latest under a
     /// specific label without re-sorting.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] on directory enumeration failure,
+    /// or [`TardigradeError::SnapshotIntegrity`] if a label directory name
+    /// is non-UTF8 or a checkpoint manifest cannot be parsed.
     pub fn list(&self, label: Option<&str>) -> Result<Vec<CheckpointEntry>> {
         if !self.root.exists() {
             return Ok(Vec::new());
@@ -137,17 +147,18 @@ impl CheckpointRepository {
     }
 
     /// Latest checkpoint for `label`, or `None` if none exist.
+    ///
+    /// # Errors
+    /// Same as [`Self::list`].
     pub fn latest(&self, label: &str) -> Result<Option<CheckpointEntry>> {
         Ok(self.list(Some(label))?.pop())
     }
 
     /// Restore the latest checkpoint for `label` into `target_dir`.
     ///
-    /// Errors:
-    /// - `TardigradeError::SnapshotIntegrity` if no checkpoint
-    ///   matches `label`.
-    /// - Whatever [`Engine::restore_from`] returns for tar/manifest
-    ///   corruption.
+    /// # Errors
+    /// - [`TardigradeError::SnapshotIntegrity`] if no checkpoint matches `label`.
+    /// - Whatever [`Engine::restore_from`] returns for tar/manifest corruption.
     pub fn restore_latest(&self, label: &str, target_dir: &Path) -> Result<Engine> {
         let entry = self.latest(label)?.ok_or_else(|| {
             TardigradeError::SnapshotIntegrity(format!("no checkpoint found for label {label:?}"))

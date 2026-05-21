@@ -73,6 +73,11 @@ impl MaintenanceWorker {
         }
     }
 
+    /// Spawn the maintenance worker thread, if enabled and not already running.
+    ///
+    /// # Panics
+    /// Panics if the OS rejects the `thread::spawn` call (e.g. process
+    /// thread-limit exhausted) — this is treated as unrecoverable.
     pub fn start(&mut self, engine: Arc<Mutex<Engine>>) {
         if !self.config.enabled || self.handle.is_some() {
             return;

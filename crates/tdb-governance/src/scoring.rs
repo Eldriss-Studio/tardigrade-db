@@ -53,6 +53,11 @@ impl ImportanceScorer {
     /// Apply `n` days of decay (ι × 0.995^n).
     ///
     /// Days beyond 10,000 are clamped (the result is effectively 0 after ~4600 days).
+    ///
+    /// # Panics
+    /// Cannot panic in practice: the `i32::try_from` is on the clamped value
+    /// (≤ 10,000), which always fits in `i32`. The `.expect()` is a defensive
+    /// guard against future refactors that change the clamp constant.
     pub fn apply_daily_decay(&mut self, days: u32) {
         let clamped = days.min(10_000);
         // Safe: clamped ≤ 10_000, which always fits in i32.

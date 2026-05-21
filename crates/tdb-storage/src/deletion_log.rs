@@ -49,6 +49,10 @@ impl DeletionLog {
     ///
     /// Scans the file to rebuild the deleted set. Truncated trailing
     /// bytes are silently discarded.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the deletion log file exists but cannot
+    /// be opened or read.
     pub fn open(dir: &Path) -> io::Result<Self> {
         let path = dir.join(DELETION_LOG_FILENAME);
         let deleted = if path.exists() { Self::replay(&path)? } else { HashSet::new() };
@@ -60,12 +64,19 @@ impl DeletionLog {
     /// Used by `Engine::refresh` (in `tdb-engine`) to pick up deletions performed by another
     /// `Engine` handle at the same path. Idempotent: repeated calls with no
     /// on-disk changes leave the set unchanged.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the log file exists but cannot be read.
     pub fn refresh(&mut self) -> io::Result<()> {
         self.deleted = if self.path.exists() { Self::replay(&self.path)? } else { HashSet::new() };
         Ok(())
     }
 
     /// Mark a pack as deleted. Appends to the file and fsyncs.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the log file cannot be opened in append
+    /// mode, the 8-byte record cannot be written, or fsync fails.
     pub fn mark_deleted(&mut self, pack_id: PackId) -> io::Result<()> {
         let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;
         file.write_all(&pack_id.to_le_bytes())?;

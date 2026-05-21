@@ -345,16 +345,29 @@ struct PackInfo {
 
 impl Engine {
     /// Open or create an engine at the given directory path.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if the engine directory cannot be created or
+    /// existing segment / WAL / text-store files cannot be opened, and
+    /// [`TardigradeError::WalRecovery`] if replaying the WAL on open detects corruption.
     pub fn open(dir: &Path) -> Result<Self> {
         Self::open_with_options(dir, DEFAULT_VAMANA_THRESHOLD, None)
     }
 
     /// Open with a custom segment size threshold (for testing segment rollover).
+    ///
+    /// # Errors
+    /// Same as [`Engine::open`] — propagates [`TardigradeError::Io`] /
+    /// [`TardigradeError::WalRecovery`] from the underlying open path.
     pub fn open_with_segment_size(dir: &Path, segment_size: u64) -> Result<Self> {
         Self::open_with_options(dir, DEFAULT_VAMANA_THRESHOLD, Some(segment_size))
     }
 
     /// Open with a custom Vamana activation threshold.
+    ///
+    /// # Errors
+    /// Same as [`Engine::open`] — propagates [`TardigradeError::Io`] /
+    /// [`TardigradeError::WalRecovery`] from the underlying open path.
     pub fn open_with_vamana_threshold(dir: &Path, threshold: usize) -> Result<Self> {
         Self::open_with_options(dir, threshold, None)
     }
@@ -406,6 +419,10 @@ impl Engine {
 
     /// Install a projection matrix for the `"projected"` retrieval-key
     /// strategy. `matrix` is row-major `kv_dim × hidden_size`.
+    ///
+    /// # Panics
+    /// Panics if `matrix.len() != kv_dim * hidden_size` — the shape contract is
+    /// asserted on entry because every downstream operation assumes it.
     pub fn set_projection_matrix(&mut self, matrix: Vec<f32>, kv_dim: usize, hidden_size: usize) {
         assert_eq!(matrix.len(), kv_dim * hidden_size);
         self.projection_matrix = Some((matrix, kv_dim, hidden_size));
@@ -417,6 +434,11 @@ impl Engine {
     /// `token_ids` is empty, or when every token id is out of vocabulary
     /// range. Returns `Err(InvalidArgument)` when `strategy` is not one
     /// of `"last_token"`, `"mean_pool"`, `"projected"`.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::InvalidArgument`] if `strategy` is not one of
+    /// the three supported names, or if `"projected"` is requested without a
+    /// prior call to [`Engine::set_projection_matrix`].
     pub fn compute_retrieval_key(
         &self,
         token_ids: &[i64],
@@ -461,6 +483,11 @@ impl Engine {
     ///
     /// Returns `(k_blocks, v_blocks)` as flat row-major buffers each of
     /// length `num_blocks * block_size * num_kv_heads * head_dim`.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::InvalidArgument`] if any of `num_kv_heads`,
+    /// `head_dim`, or `block_size` is zero, or if `flat_kv.len()` is not a
+    /// multiple of `2 * num_kv_heads * head_dim`.
     pub fn flat_to_paged(
         flat_kv: &[f32],
         num_kv_heads: usize,
@@ -504,6 +531,11 @@ impl Engine {
     ///
     /// Returns `InvalidArgument` when `seq_len * num_kv_heads * head_dim`
     /// exceeds either block buffer.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::InvalidArgument`] if `num_kv_heads` or
+    /// `head_dim` is zero, or if `seq_len * num_kv_heads * head_dim` exceeds
+    /// the length of either `k_blocks` or `v_blocks`.
     pub fn paged_to_flat(
         k_blocks: &[f32],
         v_blocks: &[f32],
@@ -538,6 +570,11 @@ impl Engine {
     /// `max_num_seqs` in practice — matches vLLM's per-engine slot
     /// bound, guaranteeing a finished request's fingerprint is
     /// evicted before its block id can be reused by a new one.
+    ///
+    /// # Panics
+    /// Will not panic in practice: `capacity == 0` disables the cache and
+    /// returns early before the `NonZeroUsize::new(...).expect("capacity > 0")`
+    /// site is reached, so the `expect` is unreachable.
     pub fn set_fingerprint_capacity(&mut self, capacity: usize) {
         if capacity == 0 {
             self.fingerprint_cache = None;
@@ -697,6 +734,10 @@ impl Engine {
     /// - Unbuffered writes: confirmed-immediately at fsync.
     /// - Buffered writes: confirmed-on-flush. A crash before flush
     ///   loses the buffered packs by design.
+    ///
+    /// # Errors
+    /// Same as [`Engine::open`] — propagates [`TardigradeError::Io`] /
+    /// [`TardigradeError::WalRecovery`] from the underlying open path.
     pub fn open_with_write_buffer(dir: &Path, config: BufferConfig) -> Result<Self> {
         let mut engine = Self::open(dir)?;
         engine.write_buffer = Some(WriteBuffer::new(config));
@@ -719,6 +760,12 @@ impl Engine {
     ///
     /// **Concurrency:** takes `&mut self`. Caller must ensure no other
     /// reader holds a borrow.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if the segment / text-store / deletion-log
+    /// rescans fail, [`TardigradeError::WalRecovery`] if WAL replay or checkpoint
+    /// rejects the on-disk log, or [`TardigradeError::CellNotFound`] /
+    /// quantization errors propagated from the pool when re-decoding cells.
     pub fn refresh(&mut self) -> Result<()> {
         // 1. Rescan segments — picks up new cells written by another handle.
         self.pool.refresh_index()?;
@@ -865,6 +912,11 @@ impl Engine {
     /// Write key/value vectors to the engine. Returns the assigned cell ID.
     ///
     /// `parent_cell_id`: optional causal parent for Trace graph edges.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] / [`TardigradeError::SegmentFull`] if the
+    /// pool cannot append, [`TardigradeError::WalRecovery`] if the trace-edge WAL
+    /// append fails, or [`TardigradeError::Index`] if lazy Vamana activation fails.
     pub fn mem_write(
         &mut self,
         owner: OwnerId,
@@ -941,6 +993,12 @@ impl Engine {
     /// are written to the WAL after the batch is persisted.
     ///
     /// Throughput: ~80us/cell amortized vs ~8ms/cell for individual writes.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] / [`TardigradeError::SegmentFull`] if the
+    /// batch append to the block pool fails, [`TardigradeError::WalRecovery`] if
+    /// causal-edge WAL appends fail, or [`TardigradeError::Index`] if lazy
+    /// Vamana activation fails.
     pub fn mem_write_batch(&mut self, requests: &[WriteRequest]) -> Result<Vec<CellId>> {
         if requests.is_empty() {
             return Ok(Vec::new());
@@ -1033,6 +1091,11 @@ impl Engine {
     /// mean-pooled summaries only as a fallback/hot cache because it requires
     /// fixed-size vectors. Results are merged, deduplicated, scored with
     /// recency decay, and filtered by owner.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError`] propagated from the block pool when
+    /// hydrating a candidate cell fails for any reason other than a
+    /// concurrent deletion (which is silently skipped).
     pub fn mem_read(
         &mut self,
         query_key: &[f32],
@@ -1161,6 +1224,11 @@ impl Engine {
     /// `query_tokens` length must equal `n_tokens * dim`. An empty or malformed
     /// matrix returns an empty result rather than raising — query callers
     /// commonly tolerate "no signal" gracefully.
+    ///
+    /// # Errors
+    /// Returns whatever [`Engine::mem_read`] returns after the encoded query
+    /// is built — typically [`TardigradeError`] from the underlying pool /
+    /// retriever during candidate hydration.
     pub fn mem_read_tokens(
         &mut self,
         query_tokens: &[f32],
@@ -1188,6 +1256,13 @@ impl Engine {
     /// `query_tokens` length must equal `n_tokens * dim`. An empty or malformed
     /// matrix returns [`TardigradeError::EmptyTokenMatrix`] — silent no-op on
     /// a write would create an unqueryable pack.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::EmptyTokenMatrix`] when `n_tokens == 0`,
+    /// `dim == 0`, or `query_tokens.len() != n_tokens * dim`. Otherwise
+    /// propagates whatever [`Engine::mem_write_pack`] returns
+    /// ([`TardigradeError::Io`] / [`TardigradeError::SegmentFull`] on
+    /// persistence failures).
     pub fn mem_write_pack_tokens(
         &mut self,
         owner: OwnerId,
@@ -1282,6 +1357,11 @@ impl Engine {
     /// Auto-drains the streaming write buffer if one is
     /// configured, so consumers using `flush()` as their durability
     /// barrier don't have to track the buffer separately.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::FlushFailed`] if the buffered packs cannot be
+    /// persisted, or [`TardigradeError::Io`] / [`TardigradeError::WalRecovery`]
+    /// from the WAL checkpoint step.
     pub fn flush(&mut self) -> Result<()> {
         self.flush_buffer()?;
         self.wal.checkpoint()?;
@@ -1301,6 +1381,13 @@ impl Engine {
     /// See [`crate::snapshot`] for the on-disk layout and
     /// reliability contract. Pair with [`Engine::restore_from`] for
     /// the read side.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::FlushFailed`] /
+    /// [`TardigradeError::WalRecovery`] from the pre-snapshot flush, or
+    /// [`TardigradeError::Io`] / [`TardigradeError::InvalidArgument`] from
+    /// the snapshot writer when `out_path` lives inside `engine_dir` or
+    /// the archive cannot be written.
     pub fn snapshot(
         &mut self,
         out_path: &std::path::Path,
@@ -1322,6 +1409,14 @@ impl Engine {
     /// [`TardigradeError::UnsupportedFormatVersion`],
     /// [`TardigradeError::SnapshotCodecMismatch`],
     /// [`TardigradeError::SnapshotIntegrity`].
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::NotATardigradeSnapshot`],
+    /// [`TardigradeError::UnsupportedFormatVersion`],
+    /// [`TardigradeError::SnapshotCodecMismatch`], or
+    /// [`TardigradeError::SnapshotIntegrity`] when the manifest fails
+    /// validation, [`TardigradeError::Io`] when the archive cannot be
+    /// extracted, and any [`Engine::open`] error after the restore.
     pub fn restore_from(in_path: &std::path::Path, target_dir: &std::path::Path) -> Result<Self> {
         let _manifest = crate::snapshot::read_snapshot(in_path, target_dir)?;
         Self::open(target_dir)
@@ -1347,6 +1442,11 @@ impl Engine {
     /// packs are never evicted regardless of importance. When `owner_filter`
     /// is `Some`, only that owner's packs are considered. Returns the number
     /// of packs evicted.
+    ///
+    /// # Errors
+    /// Returns whatever [`Engine::delete_pack`] returns for each eviction
+    /// candidate — typically [`TardigradeError::Io`] when the deletion log
+    /// cannot be persisted.
     pub fn evict_draft_packs(
         &mut self,
         importance_threshold: f32,
@@ -1373,6 +1473,10 @@ impl Engine {
     /// returns, so the action survives engine reopen. Returns the
     /// assigned id; pass it to [`Engine::cancel_scheduled`] to
     /// remove the entry before it fires.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if the durable schedule file cannot
+    /// be rewritten before this call returns.
     pub fn schedule(
         &mut self,
         fires_at: std::time::SystemTime,
@@ -1383,6 +1487,10 @@ impl Engine {
 
     /// Cancel a previously-scheduled action. Returns `true` if a
     /// matching entry was found and removed, `false` if not.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if rewriting the durable schedule file
+    /// after removal fails.
     pub fn cancel_scheduled(&mut self, id: crate::scheduler::ScheduledId) -> Result<bool> {
         self.scheduler.cancel(id)
     }
@@ -1411,6 +1519,12 @@ impl Engine {
     /// ones are batched into a single persist). The failure is
     /// surfaced to the caller. The maintenance worker logs and
     /// moves on; consumers calling this directly can retry.
+    ///
+    /// # Errors
+    /// Returns whatever the executed action returns (currently
+    /// [`Engine::evict_draft_packs`] errors propagate as
+    /// [`TardigradeError::Io`]), or [`TardigradeError::Io`] from
+    /// persisting the post-fire schedule update.
     pub fn fire_due_scheduled(&mut self, now: std::time::SystemTime) -> Result<usize> {
         let due = self.scheduler.peek_due(now);
         let mut completed: Vec<crate::scheduler::ScheduledId> = Vec::with_capacity(due.len());
@@ -1449,6 +1563,10 @@ impl Engine {
     /// curve fires once per integral day, so a value below 24 advances
     /// the clock without applying decay this call. Pass `0.0` to skip
     /// decay and just run the eviction pass.
+    ///
+    /// # Errors
+    /// Returns whatever [`Engine::evict_draft_packs`] returns — typically
+    /// [`TardigradeError::Io`] when the deletion log cannot be persisted.
     pub fn sweep_now(&mut self, hours: f32, eviction_threshold: f32) -> Result<usize> {
         if hours > 0.0 {
             self.advance_days(hours / HOURS_PER_DAY);
@@ -1460,6 +1578,10 @@ impl Engine {
     ///
     /// Computes the live cell set from the current `PackDirectory`, then
     /// delegates to `BlockPool::compact`. Returns compaction statistics.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] / [`TardigradeError::SegmentFull`] from
+    /// the underlying `BlockPool::compact` when rewriting live cells fails.
     pub fn compact(&mut self) -> Result<tdb_storage::block_pool::CompactionResult> {
         let live_cell_ids: std::collections::HashSet<CellId> =
             self.pack_directory.all_cell_ids().collect();
@@ -1467,11 +1589,19 @@ impl Engine {
     }
 
     /// Store a `SynapticBankEntry` (`LoRA` adapter) for an agent/user.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if the synaptic-store append fails to
+    /// persist the entry.
     pub fn store_synapsis(&mut self, entry: &SynapticBankEntry) -> Result<()> {
         self.synaptic_store.append(entry).map_err(|e| TardigradeError::Io { source: e })
     }
 
     /// Load all `SynapticBankEntry` records for a given owner.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if the synaptic-store file cannot be
+    /// read or parsed.
     pub fn load_synapsis(&self, owner: OwnerId) -> Result<Vec<SynapticBankEntry>> {
         self.synaptic_store.load_by_owner(owner).map_err(|e| TardigradeError::Io { source: e })
     }
@@ -1488,6 +1618,11 @@ impl Engine {
     /// appends the pack to the buffer, returns its pre-assigned
     /// pack id, and defers the fsync until the buffer reaches
     /// `max_batch_size` or [`Engine::flush_buffer`] is called.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] / [`TardigradeError::SegmentFull`] from
+    /// the pool append, [`TardigradeError::FlushFailed`] from a buffered flush,
+    /// or [`TardigradeError::Index`] from lazy Vamana activation.
     pub fn mem_write_pack(&mut self, pack: &KVPack) -> Result<PackId> {
         if self.write_buffer.is_some() {
             return self.enqueue_buffered_pack(pack);
@@ -1616,6 +1751,10 @@ impl Engine {
     /// No-op when the buffer is empty or when the engine was opened
     /// without a buffer. Idempotent — calling repeatedly with an
     /// empty buffer is safe and free.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::FlushFailed`] / [`TardigradeError::Io`] if the
+    /// coalesced `pool.append_batch` or text-store commit fails.
     pub fn flush_buffer(&mut self) -> Result<()> {
         let drained: Vec<(PackId, KVPack)> = match self.write_buffer.as_mut() {
             Some(buf) if !buf.pending.is_empty() => std::mem::take(&mut buf.pending),
@@ -1637,6 +1776,12 @@ impl Engine {
     /// itself is not pushed into the buffer; it bypasses to its own fsync.
     ///
     /// An empty input is a no-op returning an empty vec.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::FlushFailed`] / [`TardigradeError::Io`] from
+    /// the pre-flush of any buffered packs, and [`TardigradeError::Io`] /
+    /// [`TardigradeError::SegmentFull`] from the coalesced pool append. Lazy
+    /// Vamana activation can surface as [`TardigradeError::Index`].
     pub fn mem_write_batch_packs(&mut self, packs: &[KVPack]) -> Result<Vec<PackId>> {
         if packs.is_empty() {
             return Ok(Vec::new());
@@ -1863,6 +2008,12 @@ impl Engine {
     /// whose retrieval score meets or exceeds `auto_link_threshold` is linked to
     /// the new pack via a trace edge. This moves the Python-side auto-link logic
     /// into Rust for transactional safety and eliminates a Python-Rust round-trip.
+    ///
+    /// # Errors
+    /// Returns whatever [`Engine::mem_read_pack`], [`Engine::mem_write_pack`],
+    /// or [`Engine::add_pack_link`] surface — typically [`TardigradeError::Io`],
+    /// [`TardigradeError::SegmentFull`], [`TardigradeError::FlushFailed`], or
+    /// [`TardigradeError::WalRecovery`] from the WAL-logged link edges.
     pub fn mem_write_pack_with_auto_link(
         &mut self,
         pack: &KVPack,
@@ -1891,6 +2042,12 @@ impl Engine {
     /// Retrieve the top-k KV Packs matching a query key.
     ///
     /// Returns complete packs with all layer payloads reconstructed.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError`] propagated from the block pool when
+    /// hydrating per-layer cell payloads fails (e.g. [`TardigradeError::Io`]
+    /// or [`TardigradeError::CellNotFound`] for a candidate that disappeared
+    /// between scoring and hydration).
     pub fn mem_read_pack(
         &mut self,
         query_key: &[f32],
@@ -1926,6 +2083,17 @@ impl Engine {
     /// the same inputs. The per-layer candidate set is `k * 2` so the
     /// fusion has something to work with — single-layer queries
     /// degenerate to ordinary [`Engine::mem_read_pack`] semantics.
+    ///
+    /// # Errors
+    /// Returns whatever [`Engine::mem_read_pack`] returns for any per-layer
+    /// query — typically [`TardigradeError::Io`] / [`TardigradeError::CellNotFound`]
+    /// from candidate hydration.
+    ///
+    /// # Panics
+    /// Panics if internal bookkeeping is inconsistent — specifically if a
+    /// `pack_id` accumulates a score but is missing from `first_seen`, which
+    /// is a class-invariant of the fusion loop and indicates a bug, not a
+    /// runtime condition.
     pub fn mem_read_multi_layer(
         &mut self,
         query_keys: &[Vec<f32>],
@@ -1980,6 +2148,11 @@ impl Engine {
     ///
     /// Retrieves an expanded candidate set, boosts scores by trace link
     /// count (discovery hubs rank higher), then returns the top k.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError`] propagated from per-candidate layer
+    /// hydration (e.g. [`TardigradeError::Io`] or
+    /// [`TardigradeError::CellNotFound`]).
     pub fn mem_read_pack_with_trace_boost(
         &mut self,
         query_key: &[f32],
@@ -2014,6 +2187,12 @@ impl Engine {
     ///
     /// Returns top-k packs with trace boost, plus all transitively
     /// linked packs not already in the result set.
+    ///
+    /// # Errors
+    /// Returns whatever [`Engine::mem_read_pack_with_trace_boost`] returns —
+    /// typically [`TardigradeError::Io`] / [`TardigradeError::CellNotFound`]
+    /// from candidate hydration. Linked packs that fail to load are skipped
+    /// silently rather than surfaced.
     pub fn mem_read_pack_with_trace_boost_and_follow(
         &mut self,
         query_key: &[f32],
@@ -2302,6 +2481,11 @@ impl Engine {
     /// crash-safe with the existing recovery contract.
     ///
     /// Returns `Ok(0)` and is a no-op when `owner` has no packs.
+    ///
+    /// # Errors
+    /// Returns whatever [`Engine::delete_pack`] surfaces for any individual
+    /// pack — typically [`TardigradeError::Io`] when the deletion log cannot
+    /// be persisted.
     pub fn delete_owner(&mut self, owner: OwnerId) -> Result<usize> {
         let to_delete: Vec<PackId> =
             self.list_packs(Some(owner)).into_iter().map(|(pack_id, _, _, _)| pack_id).collect();
@@ -2354,6 +2538,11 @@ impl Engine {
     ///
     /// Returns the complete pack with all layer payloads. Applies access
     /// governance (importance boost + recency decay).
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::CellNotFound`] (wrapping the pack id) if the
+    /// pack id is not in the pack directory, or [`TardigradeError`] propagated
+    /// from the pool when hydrating layer cells fails.
     pub fn load_pack_by_id(&mut self, pack_id: PackId) -> Result<PackReadResult> {
         let cell_ids = self
             .pack_directory
@@ -2379,6 +2568,11 @@ impl Engine {
     /// Bidirectional: creates edges in both directions. WAL-logged for
     /// crash recovery. This is the generalized form — `add_pack_link`
     /// delegates here with `EdgeType::Follows`.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::CellNotFound`] (wrapping the offending pack
+    /// id) if either pack is missing from the directory, or
+    /// [`TardigradeError::WalRecovery`] if either WAL edge append fails.
     pub fn add_pack_edge(
         &mut self,
         pack_id_1: PackId,
@@ -2425,6 +2619,11 @@ impl Engine {
     /// Create a durable `Follows` link between two packs.
     ///
     /// Convenience alias for `add_pack_edge(..., EdgeType::Follows)`.
+    ///
+    /// # Errors
+    /// Same as [`Engine::add_pack_edge`] —
+    /// [`TardigradeError::CellNotFound`] for missing packs or
+    /// [`TardigradeError::WalRecovery`] from WAL append failure.
     pub fn add_pack_link(&mut self, pack_id_1: PackId, pack_id_2: PackId) -> Result<()> {
         self.add_pack_edge(pack_id_1, pack_id_2, EdgeType::Follows)
     }

@@ -33,6 +33,10 @@ pub enum BoundaryStrategy {
 
 impl BoundaryStrategy {
     /// Parse the string form callers pass through the `PyO3` layer.
+    ///
+    /// # Errors
+    /// Returns [`UnknownBoundaryStrategy`] if `name` is not one of
+    /// `"whitespace"`, `"sentence"`, or `"paragraph"`.
     pub fn parse(name: &str) -> Result<Self, UnknownBoundaryStrategy> {
         match name {
             "whitespace" => Ok(Self::Whitespace),

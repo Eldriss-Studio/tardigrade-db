@@ -153,6 +153,11 @@ impl Scheduler {
     /// Open the scheduler rooted at `engine_dir`. Loads any
     /// existing schedule sidecar; missing file = empty
     /// schedule.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if the sidecar file exists but
+    /// cannot be read, or [`TardigradeError::SnapshotIntegrity`] if its
+    /// JSON contents cannot be parsed.
     pub fn open(engine_dir: &Path) -> Result<Self> {
         let path = engine_dir.join(SCHEDULE_FILENAME);
         if !path.exists() {
@@ -169,6 +174,10 @@ impl Scheduler {
 
     /// Enqueue `action` to fire at `fires_at`. Returns the
     /// assigned id.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] or [`TardigradeError::SnapshotIntegrity`]
+    /// if persisting the updated schedule sidecar fails.
     pub fn schedule(
         &mut self,
         fires_at: SystemTime,
@@ -183,6 +192,10 @@ impl Scheduler {
 
     /// Cancel a scheduled action by id. Returns `true` if a
     /// matching entry was removed, `false` if none was found.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] or [`TardigradeError::SnapshotIntegrity`]
+    /// if persisting the updated schedule sidecar fails.
     pub fn cancel(&mut self, id: ScheduledId) -> Result<bool> {
         let before = self.entries.len();
         self.entries.retain(|e| e.id != id);
@@ -222,6 +235,10 @@ impl Scheduler {
     /// Unknown ids are silently ignored (the caller might be
     /// reporting a batch where some entries were already
     /// removed — e.g. cancelled mid-flight).
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] or [`TardigradeError::SnapshotIntegrity`]
+    /// if persisting the updated schedule sidecar fails.
     pub fn commit_fired(&mut self, ids: &[ScheduledId]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());

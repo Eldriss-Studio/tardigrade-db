@@ -52,6 +52,10 @@ impl TextStore {
     ///
     /// Scans the file to rebuild the in-memory index. Truncated trailing
     /// records are silently discarded.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the text-store file exists but cannot
+    /// be opened or read.
     pub fn open(dir: &Path) -> io::Result<Self> {
         let path = dir.join(TEXT_STORE_FILENAME);
         let texts = if path.exists() { Self::replay(&path)? } else { HashMap::new() };
@@ -63,6 +67,9 @@ impl TextStore {
     /// Used by `Engine::refresh` (in `tdb-engine`) to pick up writes from another `Engine`
     /// handle at the same path. Idempotent: repeated calls with no on-disk
     /// changes leave the index unchanged.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the text-store file exists but cannot be read.
     pub fn refresh(&mut self) -> io::Result<()> {
         self.texts = if self.path.exists() { Self::replay(&self.path)? } else { HashMap::new() };
         Ok(())
@@ -72,6 +79,9 @@ impl TextStore {
     ///
     /// Thin wrapper over [`store_batch`](Self::store_batch) for the single-entry
     /// case — the batch path is the canonical implementation.
+    ///
+    /// # Errors
+    /// Same as [`Self::store_batch`].
     pub fn store(&mut self, pack_id: PackId, text: &str) -> io::Result<()> {
         self.store_batch(&[(pack_id, text)])
     }
@@ -92,6 +102,10 @@ impl TextStore {
     /// partial trailing record. [`Self::open`]'s replay discards trailing
     /// records whose declared length exceeds the remaining bytes — durable
     /// state is always a valid record prefix.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the text-store file cannot be opened in
+    /// append mode, the buffered records cannot be written, or fsync fails.
     pub fn store_batch(&mut self, entries: &[(PackId, &str)]) -> io::Result<()> {
         if entries.is_empty() {
             return Ok(());

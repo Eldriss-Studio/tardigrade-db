@@ -38,6 +38,10 @@ pub struct SynapticStore {
 
 impl SynapticStore {
     /// Open or create a synaptic store at the given directory.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the directory cannot be created, the
+    /// store file cannot be touched, or scanning existing entries fails.
     pub fn open(dir: &Path) -> io::Result<Self> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join(SYNAPTIC_FILE_NAME);
@@ -52,6 +56,11 @@ impl SynapticStore {
     }
 
     /// Append a `SynapticBankEntry` to the store.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the file cannot be opened in append mode,
+    /// the record length exceeds [`u32::MAX`] ([`io::ErrorKind::InvalidInput`]),
+    /// any write fails, or fsync fails.
     pub fn append(&mut self, entry: &SynapticBankEntry) -> io::Result<()> {
         let file = OpenOptions::new().append(true).open(&self.path)?;
         let offset = file.metadata()?.len();
@@ -83,6 +92,10 @@ impl SynapticStore {
     }
 
     /// Load all entries belonging to a specific owner.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the store file cannot be opened or any
+    /// of the owner's records cannot be read from their indexed offsets.
     pub fn load_by_owner(&self, owner: OwnerId) -> io::Result<Vec<SynapticBankEntry>> {
         let offsets: Vec<u64> = self
             .index

@@ -65,6 +65,10 @@ pub struct Segment {
 
 impl Segment {
     /// Create a new empty segment file.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the segment file cannot be created or
+    /// the magic/version header cannot be written.
     pub fn create(dir: &Path, id: u32) -> io::Result<Self> {
         let path = segment_path(dir, id);
         let mut file = File::create(&path)?;
@@ -75,6 +79,10 @@ impl Segment {
     }
 
     /// Open an existing segment file.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the segment file does not exist or its
+    /// metadata cannot be read.
     pub fn open(dir: &Path, id: u32) -> io::Result<Self> {
         let path = segment_path(dir, id);
         let meta = fs::metadata(&path)?;
@@ -92,6 +100,10 @@ impl Segment {
     }
 
     /// Append a `MemoryCell` (quantized to Q4) and return its byte offset.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the segment file cannot be opened in
+    /// append mode, the record cannot be written, or fsync fails.
     pub fn append(&mut self, cell: &MemoryCell) -> io::Result<u64> {
         let file = OpenOptions::new().append(true).open(&self.path)?;
         let mut w = BufWriter::new(file);
@@ -109,6 +121,9 @@ impl Segment {
     ///
     /// Returns a `Vec` of (`byte_offset`, `record_size`) for each cell written.
     /// All cells are durably committed after the single `sync_data()` call.
+    ///
+    /// # Errors
+    /// Same as [`Self::append`]: open/write/fsync failures are surfaced as [`io::Error`].
     pub fn append_batch(&mut self, cells: &[MemoryCell]) -> io::Result<Vec<u64>> {
         if cells.is_empty() {
             return Ok(Vec::new());
@@ -132,6 +147,11 @@ impl Segment {
     }
 
     /// Read a `MemoryCell` from a specific byte offset.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the segment cannot be opened, the seek
+    /// fails, any field-by-field read short-reads, or the tier byte is not
+    /// one of `0`/`1`/`2` ([`io::ErrorKind::InvalidData`]).
     pub fn read_at(&self, byte_offset: u64) -> io::Result<MemoryCell> {
         let mut file = File::open(&self.path)?;
         file.seek(SeekFrom::Start(byte_offset))?;
@@ -196,6 +216,12 @@ impl Segment {
 }
 
 /// Scan a segment to rebuild the index (used on recovery).
+///
+/// # Errors
+/// Returns an [`io::Error`] if the segment file cannot be opened or its
+/// magic header does not match the expected `SEGMENT_MAGIC`
+/// ([`io::ErrorKind::InvalidData`]). Truncated trailing records are
+/// silently discarded.
 pub fn scan_segment(dir: &Path, segment_id: u32) -> io::Result<Vec<(CellId, u64)>> {
     let path = segment_path(dir, segment_id);
     let mut file = File::open(&path)?;
@@ -254,6 +280,9 @@ pub(crate) fn segment_path(dir: &Path, id: u32) -> PathBuf {
 }
 
 /// List segment IDs found in a directory, sorted.
+///
+/// # Errors
+/// Returns an [`io::Error`] if the directory cannot be read.
 pub fn list_segments(dir: &Path) -> io::Result<Vec<u32>> {
     let mut ids = Vec::new();
     for entry in fs::read_dir(dir)? {

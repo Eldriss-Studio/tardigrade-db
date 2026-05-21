@@ -88,7 +88,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "lora_a length")]
     fn test_new_rejects_wrong_dimensions() {
-        SynapticBankEntry::new(
+        let _ = SynapticBankEntry::new(
             1,
             42,
             vec![f16::from_f32(1.0); 5], // wrong size

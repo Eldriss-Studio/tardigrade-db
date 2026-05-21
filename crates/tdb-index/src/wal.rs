@@ -36,6 +36,10 @@ pub struct Wal {
 
 impl Wal {
     /// Open or create a WAL at the given directory.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the directory cannot be created or the
+    /// WAL file cannot be touched.
     pub fn open(dir: &Path) -> io::Result<Self> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join("trace.wal");
@@ -45,6 +49,10 @@ impl Wal {
     }
 
     /// Append an entry to the WAL. Fsyncs for durability.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the WAL file cannot be opened in append
+    /// mode, the record cannot be written, or fsync fails.
     pub fn append(&mut self, entry: &WalEntry) -> io::Result<()> {
         let file = OpenOptions::new().append(true).open(&self.path)?;
         let mut w = BufWriter::new(file);
@@ -65,6 +73,13 @@ impl Wal {
     }
 
     /// Replay all entries from the WAL (for recovery).
+    ///
+    /// Lenient: a partial record at EOF or an unknown entry type stops
+    /// replay without erroring — the records already returned are durable.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] only if the WAL file cannot be opened or
+    /// the initial seek fails.
     pub fn replay(&self) -> io::Result<Vec<WalEntry>> {
         let mut file = File::open(&self.path)?;
         let file_len = file.metadata()?.len();
@@ -122,6 +137,10 @@ impl Wal {
     }
 
     /// Checkpoint: truncate the WAL (all mutations have been applied to durable state).
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the WAL file cannot be re-opened for
+    /// truncation or fsync fails.
     pub fn checkpoint(&mut self) -> io::Result<()> {
         let file = OpenOptions::new().write(true).truncate(true).open(&self.path)?;
         file.sync_all()?;

@@ -280,6 +280,10 @@ impl VamanaIndex {
 
     /// Save the graph topology to disk. Only adjacency lists and medoid are
     /// persisted — vectors live in `BlockPool` and are re-attached on load.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the index file cannot be created, any
+    /// header or adjacency record cannot be written, or fsync fails.
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         let path = dir.join("vamana.idx");
         let file = std::fs::File::create(&path)?;
@@ -308,6 +312,11 @@ impl VamanaIndex {
     ///
     /// `vectors` maps `CellId → Vec<f32>` (mean-pooled keys from `BlockPool`).
     /// Returns `None` if the index file doesn't exist (first open).
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] if the index file exists but cannot be read,
+    /// or [`io::ErrorKind::InvalidData`] if the magic header does not match
+    /// the expected `VAMANA_MAGIC` constant.
     pub fn load(dir: &Path, vectors: &HashMap<CellId, Vec<f32>>) -> io::Result<Option<Self>> {
         let path = dir.join("vamana.idx");
         if !path.exists() {

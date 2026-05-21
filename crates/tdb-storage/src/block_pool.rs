@@ -49,11 +49,19 @@ pub struct BlockPool {
 impl BlockPool {
     /// Open or create a block pool at the given directory path.
     /// Rebuilds the in-memory index by scanning existing segments.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if the directory cannot be created,
+    /// segment files cannot be opened, or an existing segment's header
+    /// fails the magic/version check during recovery.
     pub fn open(dir: &Path) -> Result<Self> {
         Self::open_with_segment_size(dir, DEFAULT_SEGMENT_SIZE)
     }
 
     /// Open with a custom segment size threshold (useful for testing).
+    ///
+    /// # Errors
+    /// Same conditions as [`Self::open`].
     pub fn open_with_segment_size(dir: &Path, segment_size_threshold: u64) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
 
@@ -86,6 +94,10 @@ impl BlockPool {
     /// index unchanged. New segment files (if another writer rolled over)
     /// are opened and added to `self.segments`. Existing segment file
     /// handles are not re-opened.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] if directory enumeration fails or
+    /// a newly-discovered segment cannot be opened or scanned.
     pub fn refresh_index(&mut self) -> Result<()> {
         let segment_ids = list_segments(&self.dir)?;
 
@@ -112,6 +124,10 @@ impl BlockPool {
     }
 
     /// Append a memory cell to the pool. Returns the cell ID on success.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] on segment rollover or write failure,
+    /// or [`TardigradeError::SegmentFull`] if the active segment cannot be located.
     pub fn append(&mut self, cell: &MemoryCell) -> Result<CellId> {
         self.ensure_active_segment_has_capacity()?;
 
@@ -128,6 +144,10 @@ impl BlockPool {
     ///
     /// All cells are written to the active segment and durably committed with
     /// one `sync_data()` call. Returns the cell IDs.
+    ///
+    /// # Errors
+    /// Same as [`Self::append`]; on partial-batch failure the segment may be
+    /// rolled over but the index is not updated with the failed slice.
     pub fn append_batch(&mut self, cells: &[MemoryCell]) -> Result<Vec<CellId>> {
         if cells.is_empty() {
             return Ok(Vec::new());
@@ -149,6 +169,11 @@ impl BlockPool {
     }
 
     /// Retrieve a memory cell by its ID.
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::CellNotFound`] if the cell is unknown
+    /// to the in-memory index or its segment is missing, or
+    /// [`TardigradeError::Io`] if the underlying segment read fails.
     pub fn get(&self, cell_id: CellId) -> Result<MemoryCell> {
         let loc = self.index.get(&cell_id).ok_or(TardigradeError::CellNotFound(cell_id))?;
 
@@ -179,6 +204,7 @@ impl BlockPool {
     /// the active segment plus all sealed segments; does not subtract
     /// space reclaimable by compaction (call `compact()` first if you
     /// want a tight figure).
+    #[must_use]
     pub fn arena_bytes(&self) -> u64 {
         self.segments.iter().map(Segment::size).sum()
     }
@@ -215,6 +241,10 @@ impl BlockPool {
     /// Crash-safe: new cells are fsynced before old segment deletion. If a
     /// crash occurs between write and delete, the next `open()` rebuilds
     /// from all segments — duplicates are harmless (index deduplicates).
+    ///
+    /// # Errors
+    /// Returns [`TardigradeError::Io`] on segment scan, read, append, or
+    /// fsync failure.
     pub fn compact(&mut self, live_cell_ids: &HashSet<CellId>) -> Result<CompactionResult> {
         let mut result = CompactionResult::default();
 
