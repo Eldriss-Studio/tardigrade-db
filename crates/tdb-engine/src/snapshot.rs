@@ -435,6 +435,11 @@ fn read_entry_bounded<R: Read>(r: &mut R, max_bytes: u64) -> Result<Vec<u8>> {
     const CHUNK: usize = 64 * 1024;
     let mut buf: Vec<u8> = Vec::new();
     let mut scratch = vec![0u8; CHUNK];
+    // Reason: callers pass `max_bytes` as a hard cap from snapshot constants
+    // (≤ 16 GiB). On 64-bit usize the cast is lossless; on 32-bit a value
+    // above usize::MAX clamps to usize::MAX, which still upholds the cap
+    // semantics (the bound just becomes the platform's address space limit).
+    #[allow(clippy::cast_possible_truncation)]
     let max = max_bytes as usize;
     loop {
         let n = r.read(&mut scratch).map_err(|e| TardigradeError::Io { source: e })?;

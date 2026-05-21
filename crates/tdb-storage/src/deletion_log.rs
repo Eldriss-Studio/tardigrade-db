@@ -99,7 +99,9 @@ impl DeletionLog {
 
     /// Replay the deletion log file, rebuilding the deleted set.
     fn replay(path: &Path) -> io::Result<HashSet<PackId>> {
-        let file_len = std::fs::metadata(path)?.len() as usize;
+        let file_len = usize::try_from(std::fs::metadata(path)?.len()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "deletion log larger than usize::MAX")
+        })?;
         let mut data = vec![0u8; file_len];
         let mut file = File::open(path)?;
         file.read_exact(&mut data)?;

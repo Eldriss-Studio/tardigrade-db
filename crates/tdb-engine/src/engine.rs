@@ -48,6 +48,21 @@ use crate::pack_materialization::{
 /// Default SLB capacity.
 const DEFAULT_SLB_CAPACITY: usize = 4096;
 
+/// Returns the current Unix timestamp in nanoseconds.
+///
+/// The u128 nanos returned by [`std::time::Duration::as_nanos`] saturates to
+/// u64 only after year ~2554 — within any realistic engine lifetime the cast
+/// is lossless. Returns 0 if the system clock is before the Unix epoch.
+fn now_nanos_u64() -> u64 {
+    // Reason: `Duration::as_nanos()` returns a u128 that exceeds u64::MAX only
+    // after Unix epoch + ~584 years (year 2554). The engine's runtime lifetime
+    // is bounded well below this — the cast cannot truncate in practice.
+    #[allow(clippy::cast_possible_truncation)]
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64)
+}
+
 /// Compute a mean-pooled key from a potentially per-token encoded key.
 ///
 /// If the key is per-token encoded (has header), averages all token vectors.
@@ -936,9 +951,7 @@ impl Engine {
             self.slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, mean_dim);
         }
 
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64);
+        let now_nanos = now_nanos_u64();
 
         // Compute governance before persisting (Memento rebuild requirement).
         let mut scorer = ImportanceScorer::new(salience);
@@ -1011,9 +1024,7 @@ impl Engine {
             self.slb = SemanticLookasideBuffer::new(DEFAULT_SLB_CAPACITY, mean_dim);
         }
 
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64);
+        let now_nanos = now_nanos_u64();
 
         // Phase 1: Build all cells and compute governance (in memory, no I/O).
         let mut cells = Vec::with_capacity(requests.len());
@@ -1425,8 +1436,15 @@ impl Engine {
     /// Simulate passage of time for governance decay.
     pub fn advance_days(&mut self, days: f32) {
         for gov in self.governance.values_mut() {
+            // Reason: `days_since_update` is a non-negative accumulator (seeded
+            // at 0, only ever added to with non-negative `days`). Decay sweep
+            // only cares about whole-day deltas, so floor-to-u32 via `as` is
+            // the intended semantic. Values exceeding u32::MAX days (~11M
+            // years) are not a realistic engine lifetime.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let old_whole = gov.days_since_update as u32;
             gov.days_since_update += days;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let new_whole = gov.days_since_update as u32;
             let elapsed = new_whole.saturating_sub(old_whole);
             if elapsed > 0 {
@@ -1630,9 +1648,7 @@ impl Engine {
         let pack_id = self.next_pack_id;
         self.next_pack_id += 1;
 
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64);
+        let now_nanos = now_nanos_u64();
 
         // Detect key dimension from retrieval key.
         let retrieval_key_pooled = mean_pool_key(&pack.retrieval_key);
@@ -1810,9 +1826,7 @@ impl Engine {
         if packs.is_empty() {
             return Ok(());
         }
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64);
+        let now_nanos = now_nanos_u64();
 
         // Detect key dimension from the first pack if not already
         // pinned (mirrors the single-pack path).
@@ -1953,9 +1967,7 @@ impl Engine {
         let canonical = self.pool.get(canonical_cell_id)?;
         let owner = canonical.owner;
 
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64);
+        let now_nanos = now_nanos_u64();
 
         let mut count = 0;
         for vk in view_keys {
@@ -2591,9 +2603,7 @@ impl Engine {
             .and_then(|ids| ids.first().copied())
             .ok_or(TardigradeError::CellNotFound(pack_id_2))?;
 
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64);
+        let now_nanos = now_nanos_u64();
 
         let wal_fwd = WalEntry::AddEdge {
             src: cell_1,

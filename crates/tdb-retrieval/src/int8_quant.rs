@@ -25,8 +25,18 @@ impl Int8Quantizer {
         let scale = if abs_max == 0.0 { 1.0 } else { abs_max / 127.0 };
         let inv_scale = 1.0 / scale;
 
-        let quantized: Vec<i8> =
-            values.iter().map(|&v| (v * inv_scale).round().clamp(-127.0, 127.0) as i8).collect();
+        let quantized: Vec<i8> = values
+            .iter()
+            .map(|&v| {
+                // Reason: `.clamp(-127.0, 127.0)` guarantees the value is in
+                // i8 range before the cast. Q8 quantization is lossy by design
+                // — this is the bit-quantum selection step, identical to the
+                // Q4 pattern in `tdb-storage/src/quantization.rs`.
+                #[allow(clippy::cast_possible_truncation)]
+                let q = (v * inv_scale).round().clamp(-127.0, 127.0) as i8;
+                q
+            })
+            .collect();
 
         QuantizedInt8Vec { values: quantized, scale }
     }

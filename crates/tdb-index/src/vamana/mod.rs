@@ -291,14 +291,25 @@ impl VamanaIndex {
 
         w.write_all(VAMANA_MAGIC)?;
         w.write_all(&VAMANA_VERSION.to_le_bytes())?;
-        w.write_all(&(self.dim as u32).to_le_bytes())?;
-        w.write_all(&(self.max_degree as u32).to_le_bytes())?;
+        // Reason: `dim` and `max_degree` are graph-build parameters bounded by
+        // model embedding dim (typically ≤ 8192) and `max_degree` config
+        // (typically ≤ 256). Both fit comfortably in u32.
+        #[allow(clippy::cast_possible_truncation)]
+        let dim_u32 = self.dim as u32;
+        #[allow(clippy::cast_possible_truncation)]
+        let max_degree_u32 = self.max_degree as u32;
+        w.write_all(&dim_u32.to_le_bytes())?;
+        w.write_all(&max_degree_u32.to_le_bytes())?;
         w.write_all(&self.medoid_idx.map_or(u64::MAX, |i| self.nodes[i].id).to_le_bytes())?;
         w.write_all(&(self.nodes.len() as u64).to_le_bytes())?;
 
         for node in &self.nodes {
             w.write_all(&node.id.to_le_bytes())?;
-            w.write_all(&(node.neighbors.len() as u32).to_le_bytes())?;
+            // Reason: neighbor count is bounded by `max_degree` (≤ 256 in all
+            // current configs); cannot exceed u32.
+            #[allow(clippy::cast_possible_truncation)]
+            let neighbor_count_u32 = node.neighbors.len() as u32;
+            w.write_all(&neighbor_count_u32.to_le_bytes())?;
             for &neighbor_idx in &node.neighbors {
                 w.write_all(&self.nodes[neighbor_idx].id.to_le_bytes())?;
             }
@@ -348,7 +359,9 @@ impl VamanaIndex {
         let medoid_cell_id = u64::from_le_bytes(buf8);
 
         file.read_exact(&mut buf8)?;
-        let node_count = u64::from_le_bytes(buf8) as usize;
+        let node_count = usize::try_from(u64::from_le_bytes(buf8)).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "vamana node count exceeds usize::MAX")
+        })?;
 
         let mut nodes = Vec::with_capacity(node_count);
         let mut id_to_idx = HashMap::with_capacity(node_count);

@@ -68,10 +68,11 @@ impl EmbeddingTable {
     #[inline]
     #[must_use]
     pub fn row(&self, token_id: i64) -> Option<&[f32]> {
-        if token_id < 0 {
-            return None;
-        }
-        let tid = token_id as usize;
+        // `token_id` arrives from Python via PyO3 as i64; negative IDs are
+        // nonsense (tokenizer outputs are non-negative). `usize::try_from`
+        // rejects negatives and on 32-bit targets also rejects values above
+        // usize::MAX (vocab sizes are well below that bound on any model).
+        let tid = usize::try_from(token_id).ok()?;
         if tid >= self.vocab_size {
             return None;
         }

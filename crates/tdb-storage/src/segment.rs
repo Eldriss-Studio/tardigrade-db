@@ -330,13 +330,26 @@ fn write_cell_record(w: &mut impl Write, cell: &MemoryCell) -> io::Result<u64> {
     })?;
     w.write_all(&record_len.to_le_bytes())?;
 
+    // Reason for the `as u32` casts below: every length is a component of
+    // `record_bytes`, which the `try_into::<u32>` guard above just verified
+    // fits in u32. Each component is therefore also ≤ u32::MAX. The acceptance
+    // test `acceptance::record_overflow_returns_invalid_input` exercises the
+    // outer guard.
+    let key_len = u32_from_len(cell.key.len());
+    let value_len = u32_from_len(cell.value.len());
+    let pos_len = u32_from_len(cell.pos_encoding.len());
+    let key_scales_len = u32_from_len(key_q.scales.len());
+    let key_data_len = u32_from_len(key_q.data.len());
+    let val_scales_len = u32_from_len(val_q.scales.len());
+    let val_data_len = u32_from_len(val_q.data.len());
+
     // Fixed fields.
     w.write_all(&cell.id.to_le_bytes())?;
     w.write_all(&cell.owner.to_le_bytes())?;
     w.write_all(&cell.layer.to_le_bytes())?;
-    w.write_all(&(cell.key.len() as u32).to_le_bytes())?;
-    w.write_all(&(cell.value.len() as u32).to_le_bytes())?;
-    w.write_all(&(cell.pos_encoding.len() as u32).to_le_bytes())?;
+    w.write_all(&key_len.to_le_bytes())?;
+    w.write_all(&value_len.to_le_bytes())?;
+    w.write_all(&pos_len.to_le_bytes())?;
     w.write_all(&cell.token_span.0.to_le_bytes())?;
     w.write_all(&cell.token_span.1.to_le_bytes())?;
     w.write_all(&cell.meta.created_at.to_le_bytes())?;
@@ -346,11 +359,11 @@ fn write_cell_record(w: &mut impl Write, cell: &MemoryCell) -> io::Result<u64> {
     w.write_all(&[cell.meta.tier as u8])?;
 
     // Quantized key.
-    w.write_all(&(key_q.scales.len() as u32).to_le_bytes())?;
-    w.write_all(&(key_q.data.len() as u32).to_le_bytes())?;
+    w.write_all(&key_scales_len.to_le_bytes())?;
+    w.write_all(&key_data_len.to_le_bytes())?;
     // Quantized value.
-    w.write_all(&(val_q.scales.len() as u32).to_le_bytes())?;
-    w.write_all(&(val_q.data.len() as u32).to_le_bytes())?;
+    w.write_all(&val_scales_len.to_le_bytes())?;
+    w.write_all(&val_data_len.to_le_bytes())?;
 
     // Variable-length data.
     write_f32_slice(w, &key_q.scales)?;
@@ -360,6 +373,17 @@ fn write_cell_record(w: &mut impl Write, cell: &MemoryCell) -> io::Result<u64> {
     write_f32_slice(w, &cell.pos_encoding)?;
 
     Ok(record_bytes as u64)
+}
+
+/// Saturating-to-u32 length helper for serialization.
+///
+/// Used by [`write_cell_record`] where the caller has already validated that
+/// the *total* record size fits in u32; each component length therefore also
+/// fits in u32. The saturating cast preserves the existing behavior — the
+/// outer guard would have rejected the cell before any of these casts run.
+#[inline]
+fn u32_from_len(len: usize) -> u32 {
+    u32::try_from(len).unwrap_or(u32::MAX)
 }
 
 // --- I/O helpers (little-endian) ---

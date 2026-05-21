@@ -1,3 +1,7 @@
+// Test fixtures use small bounded values (cell counts < 10K, dims < 1024) —
+// these casts cannot truncate at the scales exercised here.
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
 use tdb_core::Tier;
 use tdb_governance::decay::recency_decay;
 use tdb_governance::scoring::ImportanceScorer;

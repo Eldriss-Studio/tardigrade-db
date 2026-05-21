@@ -1,3 +1,7 @@
+// Bench fixtures use small bounded values (cell counts < 10K, dims < 1024) —
+// these casts cannot truncate at the scales exercised here.
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use tdb_core::memory_cell::MemoryCellBuilder;

@@ -108,8 +108,17 @@ impl DequantizeStrategy for Q4 {
 /// Map a single f32 value to a 4-bit unsigned integer [0, 15] with zero-point at 8.
 #[inline]
 fn quantize_value(value: f32, scale: f32) -> u8 {
+    // Reason: `(value / scale).round()` is the quantizer's bit-quantum
+    // selection — values outside `[-8, 7]` are intentionally truncated to the
+    // i8 range and the `clamp(0, 15)` below saturates anything that survived.
+    // Q4 quantization is lossy by design; this is the lossy step.
+    #[allow(clippy::cast_possible_truncation)]
     let q = (value / scale).round() as i8;
-    (q + 8).clamp(0, 15) as u8
+    // Reason: `clamp(0, 15)` guarantees the value is in `[0, 15]`, well within
+    // u8's range — the cast is a type change, not a numeric change.
+    #[allow(clippy::cast_sign_loss)]
+    let out = (q + 8).clamp(0, 15) as u8;
+    out
 }
 
 #[cfg(test)]

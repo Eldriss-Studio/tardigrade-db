@@ -61,7 +61,7 @@ fn test_append_and_read_by_id() {
             vec![(i as f32) * 2.0; 64],
         )
         .importance(i as f32)
-        .tags(i as u32)
+        .tags(u32::try_from(i).expect("loop index <100 fits u32"))
         .build();
 
         pool.append(&cell).unwrap();
@@ -72,7 +72,7 @@ fn test_append_and_read_by_id() {
         assert_eq!(cell.id, i);
         assert_eq!(cell.owner, i % 5);
         assert_eq!(cell.layer, (i % 3) as u16);
-        assert_eq!(cell.meta.tags, i as u32);
+        assert_eq!(cell.meta.tags, u32::try_from(i).expect("loop index <100 fits u32"));
     }
 }
 
@@ -528,4 +528,45 @@ fn test_compact_with_no_deletions() {
     let result = pool.compact(&all_live).unwrap();
 
     assert_eq!(result.segments_compacted, 0, "all cells live → no compaction needed");
+}
+
+/// Boundary AT for the `u32` length-prefix in the on-disk segment format.
+///
+/// `write_cell_record` (in `crates/tdb-storage/src/segment.rs`) computes the
+/// total record size in `usize` and rejects anything that doesn't fit in `u32`
+/// via `try_into::<u32>`. This AT pins the guard's behavior so refactors
+/// can't silently downgrade it to a truncating `as u32`.
+///
+/// Allocating a real `> u32::MAX`-byte cell in CI is infeasible (4 GiB+).
+/// We approximate by:
+///   1. Verifying a normal cell round-trips (the guard does *not* fire on
+///      sane inputs — a regression where the guard always errored would be
+///      caught here).
+///   2. Asserting the guard's source-of-truth is `try_into::<u32>` and not
+///      a `saturating_cast` / `as u32` (the dangerous regression). A static
+///      grep at compile time is the closest we can get to "production-scale
+///      proof" without an allocator that lies about its limits.
+#[test]
+fn segment_record_size_guard_uses_checked_conversion() {
+    // 1. Sane cell round-trips.
+    let dir = tempfile::tempdir().unwrap();
+    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let cell = MemoryCellBuilder::new(1, 1, 1, vec![1.0f32; 8], vec![1.0f32; 8]).build();
+    pool.append(&cell).expect("normal cell must serialize");
+
+    // 2. Guard is the checked variant. If someone refactors to
+    //    `record_bytes as u32`, this assertion fails — the silent-truncation
+    //    regression cannot land without also editing this test.
+    let segment_src = include_str!("../src/segment.rs");
+    assert!(
+        segment_src.contains("record_bytes.try_into()"),
+        "write_cell_record must use checked conversion for the u32 length \
+         prefix; saturating/truncating casts would silently corrupt the \
+         on-disk record framing at 4 GiB+ records",
+    );
+    assert!(
+        !segment_src.contains("record_bytes as u32"),
+        "record_bytes must never be cast to u32 with `as`; the on-disk \
+         record-length prefix can only honestly fail closed",
+    );
 }

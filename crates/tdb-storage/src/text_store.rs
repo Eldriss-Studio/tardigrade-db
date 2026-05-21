@@ -117,7 +117,10 @@ impl TextStore {
         for (pack_id, text) in entries {
             let text_bytes = text.as_bytes();
             buffer.extend_from_slice(&pack_id.to_le_bytes());
-            buffer.extend_from_slice(&(text_bytes.len() as u32).to_le_bytes());
+            let text_len_u32 = u32::try_from(text_bytes.len()).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "text record exceeds u32::MAX bytes")
+            })?;
+            buffer.extend_from_slice(&text_len_u32.to_le_bytes());
             buffer.extend_from_slice(text_bytes);
         }
 
@@ -162,7 +165,9 @@ impl TextStore {
     /// Duplicate `PackId`s are last-writer-wins (same as re-storing text).
     /// Truncated trailing records are silently skipped.
     fn replay(path: &Path) -> io::Result<HashMap<PackId, String>> {
-        let file_len = std::fs::metadata(path)?.len() as usize;
+        let file_len = usize::try_from(std::fs::metadata(path)?.len()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "text store larger than usize::MAX")
+        })?;
         let mut data = vec![0u8; file_len];
         let mut file = File::open(path)?;
         file.read_exact(&mut data)?;

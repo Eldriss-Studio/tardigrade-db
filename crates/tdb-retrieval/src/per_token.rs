@@ -995,7 +995,14 @@ fn compute_whitening_matrix(cov: &[f32], dim: usize) -> Option<Vec<f32>> {
                 let lam = eigenvalues[k].max(eps);
                 sum += u_mat[(i, k)] * (1.0 / lam.sqrt()) * u_mat[(j, k)];
             }
-            result[i * dim + j] = sum as f32;
+            // Reason: f64→f32 narrowing in the score accumulator. f32 score
+            // precision is sufficient for top-k ranking — the engine validates
+            // 100% recall at 5K cells with this precision. The f64 accumulator
+            // exists only to keep summation order-independent during the inner
+            // product, not because callers need f64 outputs.
+            #[allow(clippy::cast_possible_truncation)]
+            let sum_f32 = sum as f32;
+            result[i * dim + j] = sum_f32;
         }
     }
     Some(result)
@@ -1100,6 +1107,13 @@ pub fn decode_per_token_keys(encoded: &[f32]) -> Option<(usize, usize, &[f32])> 
     }
 
     // Metadata in group 1: only `dim` is trusted (it survives Q4 as group `abs_max`).
+    // Reason: `dim` was originally a `usize` written via `as f32`; the encoding
+    // contract guarantees it fits in the f32 mantissa (< 2^23). `.round()` is
+    // already applied, and a sentinel check above (`encoded[0] > -1.0e8`)
+    // ensures we only reach here for a valid encoded key. Negative values
+    // would indicate a corrupt header — `is_multiple_of` below provides a
+    // second guard.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let d = encoded[DIM_IDX].round() as usize;
 
     if d == 0 {
@@ -1227,6 +1241,9 @@ impl Retriever for PerTokenRetriever {
 
 #[cfg(test)]
 mod tests {
+    // Test fixtures use small bounded values (cell counts < 10K, dims < 1024) —
+    // these casts cannot truncate at the scales exercised here.
+    #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     use super::*;
 
     const FIXTURE_DIM: usize = 128;

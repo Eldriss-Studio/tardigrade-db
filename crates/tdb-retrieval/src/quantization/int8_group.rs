@@ -71,7 +71,12 @@ impl RetrievalQuantStrategy for Int8Group32 {
             group_scales.push(scale);
             for value in chunk {
                 let scaled = (value / scale).round().clamp(-INT8_LEVELS, INT8_LEVELS);
-                packed_values.push(scaled as i8);
+                // Reason: `.clamp(-INT8_LEVELS, INT8_LEVELS)` (≈ ±127.0)
+                // guarantees the value is in i8 range. This is the lossy
+                // quantization step by design.
+                #[allow(clippy::cast_possible_truncation)]
+                let q = scaled as i8;
+                packed_values.push(q);
             }
             // Pad to group boundary so dequant length matches dim only
             // after truncation. (Original length tracked via dim().)

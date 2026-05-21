@@ -1,3 +1,7 @@
+// Test fixtures use small bounded values (cell counts < 10K, dims < 1024) —
+// these casts cannot truncate at the scales exercised here.
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
 use std::time::{Duration, Instant};
 
 use tdb_retrieval::attention::BruteForceRetriever;
