@@ -22,11 +22,52 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      # Fail-fast guard: catch the GitHub-Release-vs-tag-commit drift
+      # that caused the silent v0.6.0 / v0.7.0 PyPI publish failures.
+      # If the release was created against a stale commit, Cargo.toml
+      # here won't match the tag — bail before paying for a full build.
+      - name: Verify Cargo.toml version matches tag
+        shell: bash
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          TAG="${GH_REF#refs/tags/}"
+          EXPECTED="${TAG#v}"
+          ACTUAL=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Cargo.toml workspace version '$ACTUAL' does not match release tag '$EXPECTED'"
+            echo "::error::The GitHub Release's target commit is likely a stale main, not the version-bumped commit."
+            echo "::error::Recreate the release with: gh release create '$TAG' --target <correct-commit-sha>"
+            exit 1
+          fi
+          echo "Cargo.toml version $ACTUAL matches tag $EXPECTED"
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           args: --release --out dist --find-interpreter
           manylinux: auto
+
+      # Belt-and-braces: even if Cargo.toml was right, confirm the
+      # built artifact carries the right version on disk. A wheel
+      # whose filename version differs from the tag is what PyPI
+      # rejects with the 400 File-already-exists shape.
+      - name: Verify wheel filenames match tag
+        shell: bash
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          TAG="${GH_REF#refs/tags/}"
+          EXPECTED="${TAG#v}"
+          fail=0
+          for whl in dist/*.whl; do
+            VER=$(basename "$whl" | sed -E 's/^[a-z_]+-([0-9]+\.[0-9]+\.[0-9]+([._-][^-]+)?)-.*\.whl$/\1/')
+            if [ "$VER" != "$EXPECTED" ]; then
+              echo "::error::Wheel $(basename "$whl") version '$VER' does not match tag '$EXPECTED'"
+              fail=1
+            fi
+          done
+          [ "$fail" = "0" ] || exit 1
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -40,11 +81,39 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Verify Cargo.toml version matches tag
+        shell: bash
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          TAG="${GH_REF#refs/tags/}"
+          EXPECTED="${TAG#v}"
+          ACTUAL=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Cargo.toml workspace version '$ACTUAL' does not match release tag '$EXPECTED'"
+            exit 1
+          fi
+
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist
+
+      - name: Verify sdist filename matches tag
+        shell: bash
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          TAG="${GH_REF#refs/tags/}"
+          EXPECTED="${TAG#v}"
+          for tgz in dist/*.tar.gz; do
+            VER=$(basename "$tgz" | sed -E 's/^[a-z_]+-([0-9]+\.[0-9]+\.[0-9]+([._-][^-]+)?)\.tar\.gz$/\1/')
+            if [ "$VER" != "$EXPECTED" ]; then
+              echo "::error::sdist $(basename "$tgz") version '$VER' does not match tag '$EXPECTED'"
+              exit 1
+            fi
+          done
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
