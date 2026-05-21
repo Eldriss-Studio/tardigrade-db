@@ -1165,6 +1165,67 @@ impl Engine {
         Ok(py_results)
     }
 
+    /// Multi-layer query fusion via Reciprocal Rank Fusion.
+    ///
+    /// One engine call hides the N-query fanout + RRF merge that the
+    /// Python `multi_layer_query` helper previously implemented in
+    /// `tardigrade_hooks`. Each query key typically comes from a
+    /// different transformer layer's hidden state; the engine fetches
+    /// `k * 2` candidates per layer and fuses them.
+    #[pyo3(signature = (query_keys, k, owner=None, rrf_k=60))]
+    fn mem_read_multi_layer(
+        &self,
+        py: Python<'_>,
+        query_keys: Vec<PyReadonlyArray1<'_, f32>>,
+        k: usize,
+        owner: Option<u64>,
+        rrf_k: u32,
+    ) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
+        if query_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let owned_queries: Vec<Vec<f32>> = query_keys
+            .iter()
+            .map(|q| {
+                q.as_slice()
+                    .map(<[f32]>::to_vec)
+                    .unwrap_or_else(|_| q.as_array().iter().copied().collect())
+            })
+            .collect();
+
+        let engine = Arc::clone(&self.inner);
+        let raw = py.detach(move || -> PyResult<Vec<tdb_engine::engine::MultiLayerRow>> {
+            let mut eng = lock_engine(&engine)?;
+            eng.mem_read_multi_layer(&owned_queries, k, rrf_k, owner)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })?;
+
+        let mut py_rows = Vec::with_capacity(raw.len());
+        for row in raw {
+            let r = &row.pack_read;
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("pack_id", r.pack.id)?;
+            dict.set_item("owner", r.pack.owner)?;
+            dict.set_item("score", r.score)?;
+            dict.set_item("rrf_score", row.rrf_score)?;
+            dict.set_item("tier", r.tier as u8)?;
+
+            let layers_list = pyo3::types::PyList::empty(py);
+            for layer in &r.pack.layers {
+                let layer_dict = pyo3::types::PyDict::new(py);
+                layer_dict.set_item("layer_idx", layer.layer_idx)?;
+                let data_arr = numpy::PyArray1::from_slice(py, &layer.data);
+                layer_dict.set_item("data", data_arr)?;
+                layers_list.append(layer_dict)?;
+            }
+            dict.set_item("layers", layers_list)?;
+            dict.set_item("text", r.pack.text.as_deref())?;
+            py_rows.push(dict.into_any().unbind());
+        }
+        Ok(py_rows)
+    }
+
     /// Number of KV Packs stored.
     fn pack_count(&self) -> PyResult<usize> {
         Ok(lock_engine(&self.inner)?.pack_count())

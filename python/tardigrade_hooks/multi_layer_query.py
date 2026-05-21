@@ -71,7 +71,13 @@ class MultiLayerQuery:
         k: int = 5,
         owner: int | None = None,
     ) -> list[dict]:
-        """Run retrieval at each layer, fuse via RRF."""
+        """Run retrieval at each layer, fuse via RRF.
+
+        The model forward + per-layer hidden-state extraction stays
+        here (PyTorch). The N-query fanout + RRF merge moved into the
+        Rust engine via ``engine.mem_read_multi_layer`` — same
+        ranking, single engine call, single mutex acquisition.
+        """
         import torch
 
         inputs = tokenizer(query_text, return_tensors="pt").to(model.device)
@@ -84,14 +90,13 @@ class MultiLayerQuery:
         n_layers = cfg.num_hidden_layers
         hidden_size = cfg.hidden_size
 
-        ranked_lists = []
+        query_keys = []
         for ratio in self._layer_ratios:
             layer_idx = int(n_layers * ratio)
             hidden = out.hidden_states[layer_idx][0][1:]
             h_np = hidden.cpu().numpy().astype(np.float32)
-            query_key = encode_per_token(h_np, hidden_size)
-            results = self._engine.mem_read_pack(query_key, k * 2, owner)
-            ranked_lists.append(results)
+            query_keys.append(encode_per_token(h_np, hidden_size))
 
-        fused = rrf_fuse(ranked_lists, k=self._rrf_k)
-        return fused[:k]
+        return self._engine.mem_read_multi_layer(
+            query_keys, k=k, owner=owner, rrf_k=self._rrf_k,
+        )

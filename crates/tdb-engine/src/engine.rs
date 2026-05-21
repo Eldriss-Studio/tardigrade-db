@@ -321,6 +321,18 @@ impl WriteBuffer {
 /// Per-pack metadata stitched together during a coalesced flush so
 /// all in-memory bookkeeping (pipeline, slb, governance,
 /// `pack_directory`) can run in one pass after the single fsync.
+/// One row of a multi-layer fused query result.
+///
+/// Wraps the underlying [`PackReadResult`] with the RRF score that put
+/// it in the fused top-k. The pack contents (layers, text, tier,
+/// per-layer score) come from the first ranking where this pack
+/// appeared.
+#[derive(Debug)]
+pub struct MultiLayerRow {
+    pub pack_read: PackReadResult,
+    pub rrf_score: f64,
+}
+
 struct PackInfo {
     pack_id: PackId,
     owner: tdb_core::OwnerId,
@@ -1887,6 +1899,69 @@ impl Engine {
 
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         Ok(results)
+    }
+
+    /// Multi-layer query fusion via Reciprocal Rank Fusion.
+    ///
+    /// Run one [`Engine::mem_read_pack`] per query key (each query key
+    /// is typically the hidden state from a different transformer
+    /// layer), then fuse rankings via RRF — each pack's fused score is
+    /// `sum(1.0 / (rrf_k + rank + 1))` across the per-layer rankings.
+    /// Returns up to `k` packs ordered by fused score descending; on
+    /// score ties, lower `pack_id` wins.
+    ///
+    /// Matches the previous Python `rrf_fuse` helper byte-for-byte on
+    /// the same inputs. The per-layer candidate set is `k * 2` so the
+    /// fusion has something to work with — single-layer queries
+    /// degenerate to ordinary [`Engine::mem_read_pack`] semantics.
+    pub fn mem_read_multi_layer(
+        &mut self,
+        query_keys: &[Vec<f32>],
+        k: usize,
+        rrf_k: u32,
+        owner_filter: Option<OwnerId>,
+    ) -> Result<Vec<MultiLayerRow>> {
+        if query_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let fetch_per_query = k.saturating_mul(2).max(1);
+        let rrf_offset = f64::from(rrf_k);
+
+        // Accumulate fused scores keyed by pack_id; remember the first
+        // PackReadResult seen for each pack so we can return its layers
+        // alongside the fused score.
+        let mut scores: HashMap<u64, f64> = HashMap::new();
+        let mut first_seen: HashMap<u64, PackReadResult> = HashMap::new();
+
+        for q in query_keys {
+            let ranked = self.mem_read_pack(q, fetch_per_query, owner_filter)?;
+            for (rank, row) in ranked.into_iter().enumerate() {
+                let pid = row.pack.id;
+                let contribution = 1.0 / (rrf_offset + rank as f64 + 1.0);
+                *scores.entry(pid).or_insert(0.0) += contribution;
+                first_seen.entry(pid).or_insert(row);
+            }
+        }
+
+        let mut fused: Vec<(u64, f64, PackReadResult)> = scores
+            .into_iter()
+            .map(|(pid, score)| {
+                let row = first_seen.remove(&pid).expect("first_seen populated alongside scores");
+                (pid, score, row)
+            })
+            .collect();
+
+        // Order: score DESC, then pack_id ASC for a stable, predictable tie-break.
+        fused.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0))
+        });
+
+        Ok(fused
+            .into_iter()
+            .take(k)
+            .map(|(_pid, score, row)| MultiLayerRow { pack_read: row, rrf_score: score })
+            .collect())
     }
 
     /// Retrieve packs with trace-boosted scoring.
