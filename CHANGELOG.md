@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-05-21
+
+Warm-tier writes now take 2.66× less disk space; README + all eight `docs/guide/` pages rewritten through the `/write-docs` craft layer; publish workflow guarded against version/tag drift.
+
 ### Storage
 
 - **Warm-tier compression**: Validated/Core cells now take **2.66× less disk space**. Measured at 1024-dim KV: 1372 B/cell → 516 B/cell, 62 % saved on the warm tail. Method and caveats: [`docs/experiments/2026-05-21-warm-tier-codec.md`](docs/experiments/2026-05-21-warm-tier-codec.md).
@@ -76,6 +80,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   quickstart, then surgical inline definitions for `layer_payloads`,
   `kv_capture_fn`, `query_layer` heuristic, `confidence_threshold`
   ratio, `MemoryCellHandle`, and `mark-sweep GC`.
+
+### Internal
+
+- **`publish.yml` guarded against version/tag drift.** Three new
+  asserts in the publish workflow that catch the silent failures
+  that lost v0.6.0 and v0.7.0 from PyPI: Cargo.toml version must
+  match the release tag (fail-fast, before the matrix build),
+  every built wheel filename's version must match the tag, and
+  the sdist filename's version must match the tag. The previous
+  failure mode (workflow reports success but PyPI returns 400
+  File-already-exists against the previous version) is now a
+  loud build-stage error with an actionable hint.
+
+### Notes
+
+- **v0.6.0, v0.7.0, v0.7.1 backfilled to PyPI.** Those releases
+  were tagged but never installable — the original publish
+  workflows uploaded wheels carrying the previous version's
+  name (a pyproject.toml-vs-Cargo.toml drift on v0.6.0, a
+  GitHub-Release-vs-tag-commit drift on v0.7.0 and v0.7.1).
+  All three are now live (`pip install tardigrade-db==0.7.0`
+  works; same for 0.6.0 and 0.7.1). The v0.6.0 tag was
+  force-pushed to a fix-up commit that corrects pyproject.toml;
+  the original v0.6.0 commit (`1e78d691`) remains in history
+  via main's branch lineage.
 
 ## [0.7.1] — 2026-05-21
 
