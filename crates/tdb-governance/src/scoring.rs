@@ -121,31 +121,30 @@ mod tests {
     ///
     /// Guards the policy decision (workspace `Cargo.toml` `[lints]`) to allow
     /// `cast_precision_loss` workspace-wide: the f32 decay accumulator must
-    /// track the analytical formula `ι₀ × 0.995^n` to within tier-relevant
-    /// precision (the smallest hysteresis band is 5 importance points). If a
-    /// future refactor switches to a numerically-unstable formulation, this
-    /// AT fails before any production deployment regression.
+    /// track the analytical formula `ι₀ × DAILY_DECAY_FACTOR^n` to within
+    /// tier-relevant precision (the smallest hysteresis band is 5 importance
+    /// points). If a future refactor switches to a numerically-unstable
+    /// formulation, this AT fails before any production deployment regression.
     ///
-    /// Sampled across the full lifetime of an importance score (1 day to the
-    /// 10 000-day clamp). At 10 000 days the score is effectively zero, so
-    /// the absolute-tolerance bar relaxes but the relative bar still holds.
+    /// The reference value is the formula itself, computed in f64 — the
+    /// production path is f32, so any divergence beyond rounding is a real
+    /// numerical regression. Sampled across the full lifetime of an
+    /// importance score (day 0 to the 10 000-day clamp).
     #[test]
     fn daily_decay_tracks_analytical_formula() {
-        // (days, analytical_value). Reference values computed independently
-        // in Python: `100.0 * (0.995 ** days)`.
-        let cases: &[(u32, f64)] = &[
-            (0, 1.000_000e2),
-            (1, 9.950_000e1),
-            (7, 9.655_206e1),
-            (30, 8.603_842e1),
-            (90, 6.369_088e1),
-            (365, 1.604_813e1),
-            (1_000, 6.653_969e-1),
-            (5_000, 1.304_379e-9),
-        ];
+        /// Reference: the spec for `apply_daily_decay` is exactly
+        /// `ι₀ × DAILY_DECAY_FACTOR^n`. Compute in f64 so the test
+        /// captures the analytical truth, not a transcribed snapshot.
+        fn analytical_decay(initial: f64, days: u32) -> f64 {
+            initial * f64::from(DAILY_DECAY_FACTOR).powi(i32::try_from(days).unwrap())
+        }
 
-        for &(days, expected) in cases {
-            let mut s = ImportanceScorer::new(100.0);
+        let initial = f64::from(MAX_IMPORTANCE);
+        let days_to_check: &[u32] = &[0, 1, 7, 30, 90, 365, 1_000, 5_000];
+
+        for &days in days_to_check {
+            let expected = analytical_decay(initial, days);
+            let mut s = ImportanceScorer::new(MAX_IMPORTANCE);
             s.apply_daily_decay(days);
             let got = f64::from(s.importance());
             // Tier hysteresis bands are ≥ 5 points; we hold a tighter
@@ -153,8 +152,8 @@ mod tests {
             let tolerance = (expected.abs() * 1e-3).max(1e-6);
             assert!(
                 (got - expected).abs() < tolerance,
-                "decay at day {days}: expected {expected:.6}, got {got:.6} \
-                 (tolerance {tolerance:.6})",
+                "decay at day {days}: expected {expected:.6e}, got {got:.6e} \
+                 (tolerance {tolerance:.6e})",
             );
         }
 
