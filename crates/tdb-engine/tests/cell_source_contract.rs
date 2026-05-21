@@ -43,7 +43,7 @@ fn returns_buffer_with_correct_length_for_each_written_cell() {
     // tests/per_token_q4_roundtrip.rs; here we only assert presence and
     // shape — exactly what callers depend on.
     let dir = TempDir::new().expect("tempdir");
-    let mut pool = BlockPool::open(dir.path()).expect("open pool");
+    let pool = BlockPool::open(dir.path()).expect("open pool");
 
     let keys = fixture_keys();
     let ids: Vec<_> = keys

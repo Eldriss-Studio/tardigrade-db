@@ -17,6 +17,7 @@ memmap2 = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
 zstd = { workspace = true }
+arc-swap = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

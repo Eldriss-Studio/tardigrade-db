@@ -93,7 +93,12 @@ pub struct RecordLocation {
 }
 
 /// A single segment file — append-only storage for serialized memory cells.
-#[derive(Debug)]
+///
+/// `Clone` is required because `BlockPool` lives behind [`arc_swap::ArcSwap`]
+/// and writers clone the `Vec<Segment>` before mutating their copy. The
+/// clone is cheap (path + a few u32/u64 fields, no file handle held) and
+/// every cloned handle refers to the same underlying file.
+#[derive(Debug, Clone)]
 pub struct Segment {
     id: u32,
     path: PathBuf,

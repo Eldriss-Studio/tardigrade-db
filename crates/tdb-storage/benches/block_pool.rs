@@ -34,7 +34,7 @@ impl StorageHydrationLabel {
 
 fn bench_append(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
     let mut id = 0u64;
 
     c.bench_function(
@@ -58,7 +58,7 @@ fn bench_append(c: &mut Criterion) {
 
 fn bench_random_read(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
 
     // Pre-populate with 10K cells.
     for i in 0..RANDOM_READ_CELL_COUNT {
@@ -91,7 +91,7 @@ fn bench_block_pool_get_hydration(c: &mut Criterion) {
     for cell_count in HYDRATION_CELL_COUNTS {
         for payload_dim in HYDRATION_PAYLOAD_DIMS {
             let dir = tempfile::tempdir().unwrap();
-            let mut pool = BlockPool::open(dir.path()).unwrap();
+            let pool = BlockPool::open(dir.path()).unwrap();
 
             for id in 0..cell_count {
                 let cell = MemoryCellBuilder::new(

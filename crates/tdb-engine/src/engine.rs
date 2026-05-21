@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tdb_core::error::{Result, TardigradeError};
 use tdb_core::kv_pack::{KVLayerPayload, KVPack, PackId, PackReadResult};
@@ -256,7 +257,7 @@ pub struct Engine {
     /// Optional vague-query refinement applied after first-stage retrieval (Strategy pattern).
     refinement_strategy: Box<dyn tdb_retrieval::refinement::RefinementStrategy>,
     /// Durable text store for KV pack fact text.
-    text_store: TextStore,
+    text_store: Arc<TextStore>,
     /// Durable deletion log for pack deletions.
     deletion_log: DeletionLog,
     /// Enable corpus-mean distance reweighting of per-token scores (Decorator pattern).
@@ -692,7 +693,8 @@ impl Engine {
         let synaptic_store =
             SynapticStore::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
         let wal = Wal::open(dir).map_err(|e| TardigradeError::WalRecovery(e.to_string()))?;
-        let text_store = TextStore::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
+        let text_store =
+            Arc::new(TextStore::open(dir).map_err(|e| TardigradeError::Io { source: e })?);
         let deletion_log = DeletionLog::open(dir).map_err(|e| TardigradeError::Io { source: e })?;
 
         let per_token_config = PerTokenConfig::default();
@@ -2074,7 +2076,7 @@ impl Engine {
             let layers = self.hydrate_pack_layers(&candidate.cell_ids)?;
             let access = self.apply_pack_access_governance(candidate.retrieval_cell_id);
             let mut result = build_pack_read_result(candidate, layers, access);
-            result.pack.text = self.text_store.get(candidate.pack_id).map(str::to_owned);
+            result.pack.text = self.text_store.get(candidate.pack_id);
             results.push(result);
         }
 
@@ -2186,7 +2188,7 @@ impl Engine {
             let layers = self.hydrate_pack_layers(&candidate.cell_ids)?;
             let access = self.apply_pack_access_governance(candidate.retrieval_cell_id);
             let mut result = build_pack_read_result(&candidate, layers, access);
-            result.pack.text = self.text_store.get(candidate.pack_id).map(str::to_owned);
+            result.pack.text = self.text_store.get(candidate.pack_id);
             results.push(result);
         }
 
@@ -2346,9 +2348,25 @@ impl Engine {
     }
 
     /// Get the stored text for a pack, if any.
+    ///
+    /// Returns an owned `String` because the underlying text store hands out
+    /// atomic snapshots — a borrowed `&str` could outlive the snapshot if a
+    /// concurrent writer installed a new index between load and use.
     #[must_use]
-    pub fn pack_text(&self, pack_id: PackId) -> Option<&str> {
+    pub fn pack_text(&self, pack_id: PackId) -> Option<String> {
         self.text_store.get(pack_id)
+    }
+
+    /// Hand out a cloned [`Arc`] handle to the engine's text store.
+    ///
+    /// Lets a caller (currently the `PyO3` wrapper) cache a stable handle
+    /// outside the engine's mutex so text lookups can serve without
+    /// acquiring it. The handle observes the same store the engine
+    /// writes through — every store / `store_batch` / remove call is
+    /// instantly visible through the cached handle's next `get()`.
+    #[must_use]
+    pub fn text_store_handle(&self) -> Arc<TextStore> {
+        Arc::clone(&self.text_store)
     }
 
     /// Whether a pack with the given ID exists (and has not been deleted).
@@ -2571,7 +2589,7 @@ impl Engine {
 
         let candidate = PackCandidate::new(pack_id, retrieval_cell_id, owner, 0.0, cell_ids);
         let mut result = build_pack_read_result(&candidate, layers, access);
-        result.pack.text = self.text_store.get(pack_id).map(str::to_owned);
+        result.pack.text = self.text_store.get(pack_id);
         Ok(result)
     }
 

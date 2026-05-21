@@ -39,6 +39,10 @@ memmap2 = "0.9"
 # encode/ratio sweet spot for byte-oriented payloads (level 19 buys ~5%
 # more compression for 10× the encode time — not worth it on a write path).
 zstd = { version = "0.13", default-features = false }
+# Atomic snapshot reads against a value that writers replace wholesale.
+# Backs the substores (TextStore, BlockPool index, Vamana graph) that
+# concurrent retrieval paths read without blocking writers.
+arc-swap = "1"
 crossbeam-epoch = "0.9"
 crossbeam-utils = "0.8"
 half = { version = "2", features = ["num-traits"] }

@@ -64,10 +64,18 @@ impl ReadResult {
 ///
 /// Thread-safe: wrapped in `Arc<Mutex<>>` so the GIL can be released
 /// during engine operations and multiple Python threads can share one
-/// instance.
+/// instance. A few read-only handles to internal substores are cached
+/// outside the mutex (currently the text store) so the corresponding
+/// fast-path methods can serve without serializing on the engine lock.
 #[pyclass]
 struct Engine {
     inner: Arc<Mutex<RustEngine>>,
+    /// Cached lock-free handle to the engine's text store. The handle
+    /// observes every `store` / `store_batch` / `remove` call the
+    /// engine performs because both this clone and the engine's clone
+    /// point at the same `ArcSwap`-backed store; reads served from
+    /// here never touch the engine mutex.
+    text_store: Arc<tdb_storage::text_store::TextStore>,
     maintenance_worker: Option<tdb_engine::maintenance::MaintenanceWorker>,
 }
 
@@ -115,7 +123,8 @@ impl Engine {
             (None, None) => RustEngine::open(dir),
         }
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(Self { inner: Arc::new(Mutex::new(inner)), maintenance_worker: None })
+        let text_store = inner.text_store_handle();
+        Ok(Self { inner: Arc::new(Mutex::new(inner)), text_store, maintenance_worker: None })
     }
 
     /// Write key/value vectors to the engine (cell-level API).
@@ -513,8 +522,10 @@ impl Engine {
             std::path::Path::new(target_dir),
         )
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let text_store = engine.text_store_handle();
         Ok(Self {
             inner: std::sync::Arc::new(std::sync::Mutex::new(engine)),
+            text_store,
             maintenance_worker: None,
         })
     }
@@ -538,8 +549,10 @@ impl Engine {
             tdb_engine::engine::BufferConfig { max_batch_size, max_idle_ms },
         )
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let text_store = engine.text_store_handle();
         Ok(Self {
             inner: std::sync::Arc::new(std::sync::Mutex::new(engine)),
+            text_store,
             maintenance_worker: None,
         })
     }
@@ -1590,8 +1603,13 @@ impl Engine {
     }
 
     /// Get the stored text for a pack, if any.
+    ///
+    /// Lock-free: served directly from the cached `Arc<TextStore>` handle
+    /// without acquiring the engine mutex. Multiple Python threads can
+    /// call `pack_text` simultaneously even while another thread holds
+    /// the engine lock for an unrelated operation.
     fn pack_text(&self, pack_id: u64) -> PyResult<Option<String>> {
-        Ok(lock_engine(&self.inner)?.pack_text(pack_id).map(str::to_owned))
+        Ok(self.text_store.get(pack_id))
     }
 
     /// Set or update the stored text for an existing pack.
@@ -1714,8 +1732,10 @@ impl CheckpointRepository {
             .inner
             .restore_latest(label, std::path::Path::new(target_dir))
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let text_store = engine.text_store_handle();
         Ok(Engine {
             inner: std::sync::Arc::new(std::sync::Mutex::new(engine)),
+            text_store,
             maintenance_worker: None,
         })
     }

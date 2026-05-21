@@ -24,6 +24,10 @@ crate-type = ["cdylib"]
 tdb-core = { workspace = true }
 tdb-engine = { workspace = true }
 tdb-retrieval = { workspace = true }
+# Need direct access to `TextStore` (the engine hands out an
+# `Arc<TextStore>` handle that the Python wrapper caches outside the
+# engine mutex for lock-free `pack_text` lookups).
+tdb-storage = { workspace = true }
 half = { workspace = true }
 pyo3 = "0.28"
 numpy = "0.28"

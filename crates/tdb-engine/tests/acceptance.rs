@@ -2089,7 +2089,7 @@ fn test_set_pack_text_updates_existing_pack() {
 
     assert_eq!(engine.pack_text(pack_id), None);
     engine.set_pack_text(pack_id, "Backfilled text").unwrap();
-    assert_eq!(engine.pack_text(pack_id), Some("Backfilled text"));
+    assert_eq!(engine.pack_text(pack_id).as_deref(), Some("Backfilled text"));
 }
 
 #[test]
@@ -2119,7 +2119,7 @@ fn test_set_pack_text_survives_reopen() {
         id
     };
     let engine = Engine::open(dir.path()).unwrap();
-    assert_eq!(engine.pack_text(pack_id), Some("Migrated text"));
+    assert_eq!(engine.pack_text(pack_id).as_deref(), Some("Migrated text"));
 }
 
 // -- Batch text + pack_exists acceptance tests --
@@ -2149,9 +2149,9 @@ fn test_set_pack_texts_batch_round_trip() {
 
     engine.set_pack_texts(&[(id_a, "alpha"), (id_b, "beta"), (id_c, "gamma")]).unwrap();
 
-    assert_eq!(engine.pack_text(id_a), Some("alpha"));
-    assert_eq!(engine.pack_text(id_b), Some("beta"));
-    assert_eq!(engine.pack_text(id_c), Some("gamma"));
+    assert_eq!(engine.pack_text(id_a).as_deref(), Some("alpha"));
+    assert_eq!(engine.pack_text(id_b).as_deref(), Some("beta"));
+    assert_eq!(engine.pack_text(id_c).as_deref(), Some("gamma"));
 }
 
 #[test]

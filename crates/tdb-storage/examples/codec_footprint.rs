@@ -24,7 +24,7 @@ const HIDDEN_DIM: usize = 1024;
 const NUM_CELLS: u64 = 100;
 
 fn write_corpus(dir: &Path, tier: Tier) -> u64 {
-    let mut pool = BlockPool::open(dir).unwrap();
+    let pool = BlockPool::open(dir).unwrap();
     for i in 0..NUM_CELLS {
         // A real-ish KV shape: sin/cos with small jitter so zstd sees
         // typical activation entropy, not all-zero pathological input.

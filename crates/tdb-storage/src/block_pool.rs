@@ -3,10 +3,26 @@
 //! Provides `append` and `get` operations over a collection of segment files,
 //! with an in-memory index mapping `CellId` → (`segment_id`, `byte_offset`).
 //! The index is rebuilt from segment files on open (recovery).
+//!
+//! # Concurrency
+//!
+//! Every public method takes `&self`. The segment list and the cell index
+//! both live behind [`arc_swap::ArcSwap`], so readers ([`BlockPool::get`],
+//! [`BlockPool::cell_count`], [`BlockPool::iter_cell_ids`]) take cheap
+//! atomic snapshots that never block writers. Writers ([`BlockPool::append`],
+//! [`BlockPool::append_batch`], [`BlockPool::compact`], [`BlockPool::refresh_index`])
+//! serialize behind a single internal `Mutex<()>` that protects the file
+//! I/O *and* the index/segments swap so two writers can't interleave
+//! records on disk or race the snapshot replacement. Readers holding an
+//! older snapshot keep returning the state they saw at acquisition time
+//! even while a writer installs a newer one — the snapshot is what makes
+//! pack hydration able to drop the engine mutex.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+use arc_swap::ArcSwap;
 use tdb_core::CellId;
 use tdb_core::error::{Result, TardigradeError};
 use tdb_core::memory_cell::MemoryCell;
@@ -38,12 +54,19 @@ struct CompactJob {
 /// The index is held in memory (`BTreeMap`) and rebuilt from segment files on open.
 /// Segments are append-only; when the active segment exceeds the size threshold,
 /// a new segment is created.
+///
+/// See the module docs for the concurrency contract — every method is
+/// `&self`-safe; writers serialize behind an internal mutex while readers
+/// take lock-free snapshots.
 #[derive(Debug)]
 pub struct BlockPool {
     dir: PathBuf,
-    segments: Vec<Segment>,
-    index: BTreeMap<CellId, RecordLocation>,
+    segments: ArcSwap<Vec<Segment>>,
+    index: ArcSwap<BTreeMap<CellId, RecordLocation>>,
     segment_size_threshold: u64,
+    /// Serializes file appends and snapshot installation so concurrent
+    /// writers can't interleave records or race the segments/index swap.
+    write_lock: Mutex<()>,
 }
 
 impl BlockPool {
@@ -83,7 +106,13 @@ impl BlockPool {
             segments.push(Segment::create(dir, 0)?);
         }
 
-        Ok(Self { dir: dir.to_path_buf(), segments, index, segment_size_threshold })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            segments: ArcSwap::from_pointee(segments),
+            index: ArcSwap::from_pointee(index),
+            segment_size_threshold,
+            write_lock: Mutex::new(()),
+        })
     }
 
     /// Re-scan segment files on disk and merge any new entries into the
@@ -98,27 +127,37 @@ impl BlockPool {
     /// # Errors
     /// Returns [`TardigradeError::Io`] if directory enumeration fails or
     /// a newly-discovered segment cannot be opened or scanned.
-    pub fn refresh_index(&mut self) -> Result<()> {
+    ///
+    /// # Panics
+    /// Panics if the internal write mutex is poisoned — only possible if
+    /// a previous writer panicked while holding it.
+    pub fn refresh_index(&self) -> Result<()> {
         let segment_ids = list_segments(&self.dir)?;
+        let _guard = self.write_lock.lock().expect("block-pool write_lock poisoned");
 
-        // Pick up any newly-created segments (other writer rolled over).
-        let known: std::collections::HashSet<u32> = self.segments.iter().map(Segment::id).collect();
+        // Stage a new segments list and a new index built atop the current
+        // snapshots; install them atomically at the end so readers never
+        // see a partially-applied refresh.
+        let mut new_segments: Vec<Segment> = (**self.segments.load()).clone();
+        let known: std::collections::HashSet<u32> = new_segments.iter().map(Segment::id).collect();
         for &seg_id in &segment_ids {
             if !known.contains(&seg_id) {
-                self.segments.push(Segment::open(&self.dir, seg_id)?);
+                new_segments.push(Segment::open(&self.dir, seg_id)?);
             }
         }
 
-        // Re-scan every segment (cheap — header reads only) and merge into
-        // the index. `scan_segment` is idempotent on append-only files.
+        let mut new_index: BTreeMap<CellId, RecordLocation> = (**self.index.load()).clone();
         for &seg_id in &segment_ids {
             let entries = scan_segment(&self.dir, seg_id)?;
             for (cell_id, byte_offset) in entries {
-                self.index
+                new_index
                     .entry(cell_id)
                     .or_insert(RecordLocation { segment_id: seg_id, byte_offset });
             }
         }
+
+        self.segments.store(Arc::new(new_segments));
+        self.index.store(Arc::new(new_index));
 
         Ok(())
     }
@@ -128,14 +167,29 @@ impl BlockPool {
     /// # Errors
     /// Returns [`TardigradeError::Io`] on segment rollover or write failure,
     /// or [`TardigradeError::SegmentFull`] if the active segment cannot be located.
-    pub fn append(&mut self, cell: &MemoryCell) -> Result<CellId> {
-        self.ensure_active_segment_has_capacity()?;
+    ///
+    /// # Panics
+    /// Panics if the internal write mutex is poisoned — see [`Self::refresh_index`].
+    pub fn append(&self, cell: &MemoryCell) -> Result<CellId> {
+        let _guard = self.write_lock.lock().expect("block-pool write_lock poisoned");
+        let mut segs = (**self.segments.load()).clone();
+        Self::ensure_active_segment_has_capacity(
+            &mut segs,
+            &self.dir,
+            self.segment_size_threshold,
+        )?;
 
-        let active = self.active_segment_mut()?;
+        let active = segs
+            .last_mut()
+            .ok_or_else(|| TardigradeError::SegmentFull { path: self.dir.display().to_string() })?;
         let seg_id = active.id();
         let byte_offset = active.append(cell)?;
 
-        self.index.insert(cell.id, RecordLocation { segment_id: seg_id, byte_offset });
+        let mut idx = (**self.index.load()).clone();
+        idx.insert(cell.id, RecordLocation { segment_id: seg_id, byte_offset });
+
+        self.segments.store(Arc::new(segs));
+        self.index.store(Arc::new(idx));
 
         Ok(cell.id)
     }
@@ -148,37 +202,55 @@ impl BlockPool {
     /// # Errors
     /// Same as [`Self::append`]; on partial-batch failure the segment may be
     /// rolled over but the index is not updated with the failed slice.
-    pub fn append_batch(&mut self, cells: &[MemoryCell]) -> Result<Vec<CellId>> {
+    ///
+    /// # Panics
+    /// Panics if the internal write mutex is poisoned — see [`Self::refresh_index`].
+    pub fn append_batch(&self, cells: &[MemoryCell]) -> Result<Vec<CellId>> {
         if cells.is_empty() {
             return Ok(Vec::new());
         }
 
-        self.ensure_active_segment_has_capacity()?;
+        let _guard = self.write_lock.lock().expect("block-pool write_lock poisoned");
+        let mut segs = (**self.segments.load()).clone();
+        Self::ensure_active_segment_has_capacity(
+            &mut segs,
+            &self.dir,
+            self.segment_size_threshold,
+        )?;
 
-        let active = self.active_segment_mut()?;
+        let active = segs
+            .last_mut()
+            .ok_or_else(|| TardigradeError::SegmentFull { path: self.dir.display().to_string() })?;
         let seg_id = active.id();
         let offsets = active.append_batch(cells)?;
 
+        let mut idx = (**self.index.load()).clone();
         let mut ids = Vec::with_capacity(cells.len());
         for (cell, byte_offset) in cells.iter().zip(offsets) {
-            self.index.insert(cell.id, RecordLocation { segment_id: seg_id, byte_offset });
+            idx.insert(cell.id, RecordLocation { segment_id: seg_id, byte_offset });
             ids.push(cell.id);
         }
+
+        self.segments.store(Arc::new(segs));
+        self.index.store(Arc::new(idx));
 
         Ok(ids)
     }
 
     /// Retrieve a memory cell by its ID.
     ///
+    /// Takes atomic snapshots of the index and segments list; a concurrent
+    /// writer installing a newer state doesn't affect the read in progress.
+    ///
     /// # Errors
     /// Returns [`TardigradeError::CellNotFound`] if the cell is unknown
     /// to the in-memory index or its segment is missing, or
     /// [`TardigradeError::Io`] if the underlying segment read fails.
     pub fn get(&self, cell_id: CellId) -> Result<MemoryCell> {
-        let loc = self.index.get(&cell_id).ok_or(TardigradeError::CellNotFound(cell_id))?;
-
-        let segment = self
-            .segments
+        let index = self.index.load();
+        let loc = index.get(&cell_id).ok_or(TardigradeError::CellNotFound(cell_id))?;
+        let segments = self.segments.load();
+        let segment = segments
             .iter()
             .find(|s| s.id() == loc.segment_id)
             .ok_or(TardigradeError::CellNotFound(cell_id))?;
@@ -189,13 +261,13 @@ impl BlockPool {
     /// Number of segment files in this pool.
     #[must_use]
     pub fn segment_count(&self) -> usize {
-        self.segments.len()
+        self.segments.load().len()
     }
 
     /// Number of cells tracked in the index.
     #[must_use]
     pub fn cell_count(&self) -> usize {
-        self.index.len()
+        self.index.load().len()
     }
 
     /// Total on-disk bytes across every segment file in this pool.
@@ -206,28 +278,40 @@ impl BlockPool {
     /// want a tight figure).
     #[must_use]
     pub fn arena_bytes(&self) -> u64 {
-        self.segments.iter().map(Segment::size).sum()
+        self.segments.load().iter().map(Segment::size).sum()
     }
 
-    /// Iterate over all persisted cell IDs (sorted, from the in-memory index).
-    /// Used by `Engine::open()` to rebuild derived state from disk (Memento pattern).
-    pub fn iter_cell_ids(&self) -> impl Iterator<Item = CellId> + '_ {
-        self.index.keys().copied()
+    /// All persisted cell IDs in a freshly-snapshotted owned `Vec`, sorted.
+    ///
+    /// Used by `Engine::open()` to rebuild derived state from disk (Memento
+    /// pattern). Returns owned data because the snapshot's lifetime ends
+    /// with the load; an iterator borrowing from the snapshot would dangle.
+    #[must_use]
+    pub fn iter_cell_ids(&self) -> std::vec::IntoIter<CellId> {
+        let snapshot = self.index.load();
+        let ids: Vec<CellId> = snapshot.keys().copied().collect();
+        ids.into_iter()
     }
 
     /// If the active segment exceeds the threshold, create a new one.
-    fn ensure_active_segment_has_capacity(&mut self) -> Result<()> {
-        let needs_rollover =
-            self.segments.last().is_some_and(|s| s.size() >= self.segment_size_threshold);
+    ///
+    /// Operates on a caller-owned `Vec<Segment>` (the writer's staged
+    /// clone) rather than `&mut self` so the rollover composes with the
+    /// `CoW` write path.
+    fn ensure_active_segment_has_capacity(
+        segs: &mut Vec<Segment>,
+        dir: &Path,
+        segment_size_threshold: u64,
+    ) -> Result<()> {
+        let needs_rollover = segs.last().is_some_and(|s| s.size() >= segment_size_threshold);
 
         if needs_rollover {
-            let last = self
-                .segments
+            let last = segs
                 .last()
-                .ok_or(TardigradeError::SegmentFull { path: self.dir.display().to_string() })?;
+                .ok_or_else(|| TardigradeError::SegmentFull { path: dir.display().to_string() })?;
             let new_id = last.id() + 1;
-            let new_segment = Segment::create(&self.dir, new_id)?;
-            self.segments.push(new_segment);
+            let new_segment = Segment::create(dir, new_id)?;
+            segs.push(new_segment);
         }
         Ok(())
     }
@@ -245,19 +329,25 @@ impl BlockPool {
     /// # Errors
     /// Returns [`TardigradeError::Io`] on segment scan, read, append, or
     /// fsync failure.
-    pub fn compact(&mut self, live_cell_ids: &HashSet<CellId>) -> Result<CompactionResult> {
+    ///
+    /// # Panics
+    /// Panics if the internal write mutex is poisoned — see [`Self::refresh_index`].
+    pub fn compact(&self, live_cell_ids: &HashSet<CellId>) -> Result<CompactionResult> {
         let mut result = CompactionResult::default();
 
-        if self.segments.len() <= 1 {
+        let _guard = self.write_lock.lock().expect("block-pool write_lock poisoned");
+        let mut segs: Vec<Segment> = (**self.segments.load()).clone();
+
+        if segs.len() <= 1 {
             return Ok(result);
         }
 
-        let active_seg_id = self.segments.last().map_or(0, Segment::id);
+        let active_seg_id = segs.last().map_or(0, Segment::id);
 
         let mut jobs: Vec<CompactJob> = Vec::new();
 
-        for seg_idx in 0..self.segments.len() {
-            let seg_id = self.segments[seg_idx].id();
+        for seg in &segs {
+            let seg_id = seg.id();
             if seg_id == active_seg_id {
                 continue;
             }
@@ -279,9 +369,8 @@ impl BlockPool {
             let mut cells = Vec::with_capacity(live_count);
             for (cell_id, byte_offset) in &entries {
                 if live_cell_ids.contains(cell_id) {
-                    let cell = self.segments[seg_idx]
-                        .read_at(*byte_offset)
-                        .map_err(|e| TardigradeError::Io { source: e })?;
+                    let cell =
+                        seg.read_at(*byte_offset).map_err(|e| TardigradeError::Io { source: e })?;
                     cells.push(cell);
                 }
             }
@@ -296,17 +385,25 @@ impl BlockPool {
             return Ok(result);
         }
 
+        let mut idx: BTreeMap<CellId, RecordLocation> = (**self.index.load()).clone();
+
         for job in &jobs {
             if !job.cells.is_empty() {
-                self.ensure_active_segment_has_capacity()?;
-                let active = self.active_segment_mut()?;
+                Self::ensure_active_segment_has_capacity(
+                    &mut segs,
+                    &self.dir,
+                    self.segment_size_threshold,
+                )?;
+                let active = segs.last_mut().ok_or_else(|| TardigradeError::SegmentFull {
+                    path: self.dir.display().to_string(),
+                })?;
                 let new_seg_id = active.id();
                 let offsets = active
                     .append_batch(&job.cells)
                     .map_err(|e| TardigradeError::Io { source: e })?;
 
                 for (cell, offset) in job.cells.iter().zip(offsets) {
-                    self.index.insert(
+                    idx.insert(
                         cell.id,
                         RecordLocation { segment_id: new_seg_id, byte_offset: offset },
                     );
@@ -318,22 +415,19 @@ impl BlockPool {
         }
 
         let compacted_ids: HashSet<u32> = jobs.iter().map(|j| j.seg_id).collect();
-        self.index.retain(|_, loc| !compacted_ids.contains(&loc.segment_id));
+        idx.retain(|_, loc| !compacted_ids.contains(&loc.segment_id));
 
         for seg_id in &compacted_ids {
             let path = segment_path(&self.dir, *seg_id);
             std::fs::remove_file(&path).map_err(|e| TardigradeError::Io { source: e })?;
         }
 
-        self.segments.retain(|s| !compacted_ids.contains(&s.id()));
+        segs.retain(|s| !compacted_ids.contains(&s.id()));
         result.segments_compacted = compacted_ids.len();
 
-        Ok(result)
-    }
+        self.segments.store(Arc::new(segs));
+        self.index.store(Arc::new(idx));
 
-    fn active_segment_mut(&mut self) -> Result<&mut Segment> {
-        self.segments
-            .last_mut()
-            .ok_or(TardigradeError::SegmentFull { path: self.dir.display().to_string() })
+        Ok(result)
     }
 }

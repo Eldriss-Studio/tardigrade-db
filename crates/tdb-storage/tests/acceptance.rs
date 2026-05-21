@@ -18,7 +18,7 @@ const HYDRATION_VALUE_BASE: f32 = 0.75;
 #[test]
 fn test_round_trip_memory_cell_q4() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
 
     let key: Vec<f32> = (0..128).map(|i| (i as f32 * 0.01).sin()).collect();
     let value: Vec<f32> = (0..128).map(|i| (i as f32 * 0.02).cos()).collect();
@@ -51,7 +51,7 @@ fn test_round_trip_memory_cell_q4() {
 #[test]
 fn test_append_and_read_by_id() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
 
     for i in 0..100u64 {
         let cell = MemoryCellBuilder::new(
@@ -83,7 +83,7 @@ fn test_append_and_read_by_id() {
 fn test_segment_rollover() {
     let dir = tempfile::tempdir().unwrap();
     // Use a tiny segment size to force rollover quickly.
-    let mut pool = BlockPool::open_with_segment_size(dir.path(), 4096).unwrap();
+    let pool = BlockPool::open_with_segment_size(dir.path(), 4096).unwrap();
 
     let mut ids = Vec::new();
     for i in 0..200u64 {
@@ -110,7 +110,7 @@ fn test_persistence_across_restart() {
 
     // Write phase.
     {
-        let mut pool = BlockPool::open(dir.path()).unwrap();
+        let pool = BlockPool::open(dir.path()).unwrap();
         for i in 0..50u64 {
             let cell = MemoryCellBuilder::new(i, 1, 0, vec![i as f32; 32], vec![0.0; 32])
                 .importance(i as f32)
@@ -279,7 +279,7 @@ fn eval_spec_q4_compression_ratio() {
 #[test]
 fn test_batch_write_100_cells() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
 
     let cells: Vec<MemoryCell> = (0..100)
         .map(|i| {
@@ -306,7 +306,7 @@ fn test_batch_write_persistence() {
     let dir = tempfile::tempdir().unwrap();
 
     {
-        let mut pool = BlockPool::open(dir.path()).unwrap();
+        let pool = BlockPool::open(dir.path()).unwrap();
         let cells: Vec<MemoryCell> = (0..50)
             .map(|i| {
                 MemoryCellBuilder::new(i, 1, 0, vec![i as f32; 16], vec![0.0; 16])
@@ -341,7 +341,7 @@ fn test_batch_faster_than_individual() {
     // Individual writes.
     let start_ind = std::time::Instant::now();
     {
-        let mut pool = BlockPool::open(dir_individual.path()).unwrap();
+        let pool = BlockPool::open(dir_individual.path()).unwrap();
         for cell in &cells {
             pool.append(cell).unwrap();
         }
@@ -351,7 +351,7 @@ fn test_batch_faster_than_individual() {
     // Batch write.
     let start_batch = std::time::Instant::now();
     {
-        let mut pool = BlockPool::open(dir_batch.path()).unwrap();
+        let pool = BlockPool::open(dir_batch.path()).unwrap();
         pool.append_batch(&cells).unwrap();
     }
     let time_batch = start_batch.elapsed();
@@ -367,7 +367,7 @@ fn test_batch_faster_than_individual() {
 #[test]
 fn test_direct_block_pool_hydration_fixture_round_trips() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
 
     let cells: Vec<MemoryCell> = (0..HYDRATION_FIXTURE_CELL_COUNT)
         .map(|id| {
@@ -408,7 +408,7 @@ fn compact_cell(id: u64) -> MemoryCell {
 #[test]
 fn test_compact_reclaims_space() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+    let pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
 
     // Fill two segments with cells.
     for i in 0..20u64 {
@@ -430,7 +430,7 @@ fn test_compact_reclaims_space() {
 #[test]
 fn test_compact_preserves_live_cells() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+    let pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
 
     for i in 0..20u64 {
         pool.append(&compact_cell(i)).unwrap();
@@ -450,7 +450,7 @@ fn test_compact_preserves_live_cells() {
 #[test]
 fn test_compact_skips_active_segment() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+    let pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
 
     // Write just enough to stay in one segment.
     pool.append(&compact_cell(0)).unwrap();
@@ -465,7 +465,7 @@ fn test_compact_skips_active_segment() {
 #[test]
 fn test_compact_idempotent() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+    let pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
 
     for i in 0..20u64 {
         pool.append(&compact_cell(i)).unwrap();
@@ -502,7 +502,7 @@ fn test_compact_survives_reopen() {
     let live: HashSet<u64> = (0..20u64).filter(|i| i % 2 == 0).collect();
 
     {
-        let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+        let pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
         for i in 0..20u64 {
             pool.append(&compact_cell(i)).unwrap();
         }
@@ -519,7 +519,7 @@ fn test_compact_survives_reopen() {
 #[test]
 fn test_compact_with_no_deletions() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
+    let pool = BlockPool::open_with_segment_size(dir.path(), COMPACT_SEGMENT_SIZE).unwrap();
 
     for i in 0..20u64 {
         pool.append(&compact_cell(i)).unwrap();
@@ -537,7 +537,7 @@ fn test_compact_with_no_deletions() {
 #[test]
 fn zstd_q4_validated_cell_round_trips_within_q4_tolerance() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
 
     let key: Vec<f32> = (0..128).map(|i| (i as f32 * 0.01).sin()).collect();
     let value: Vec<f32> = (0..128).map(|i| (i as f32 * 0.02).cos()).collect();
@@ -572,7 +572,7 @@ fn tier_gating_drives_codec_id_byte_on_disk() {
     use std::fs;
 
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
 
     let key = vec![0.1f32; 64];
     let value = vec![0.2f32; 64];
@@ -621,7 +621,7 @@ fn tier_gating_drives_codec_id_byte_on_disk() {
 #[test]
 fn mixed_codec_segment_reads_back_every_cell() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
 
     let mut expected = Vec::new();
     for i in 0..30u64 {
@@ -675,13 +675,13 @@ fn zstd_q4_compresses_warm_tier_q4_payloads() {
     let value: Vec<f32> = (0..1024).map(|i| ((i as f32) * 0.002).cos() * 0.5).collect();
 
     {
-        let mut pool = BlockPool::open(draft_dir.path()).unwrap();
+        let pool = BlockPool::open(draft_dir.path()).unwrap();
         let draft =
             MemoryCellBuilder::new(401, 1, 0, key.clone(), value.clone()).tier(Tier::Draft).build();
         pool.append(&draft).unwrap();
     }
     {
-        let mut pool = BlockPool::open(validated_dir.path()).unwrap();
+        let pool = BlockPool::open(validated_dir.path()).unwrap();
         let validated = MemoryCellBuilder::new(402, 1, 0, key.clone(), value.clone())
             .tier(Tier::Validated)
             .build();
@@ -730,7 +730,7 @@ fn legacy_v1_segments_still_readable_as_uniform_q4() {
     let cell =
         MemoryCellBuilder::new(501, 1, 0, key.clone(), value.clone()).tier(Tier::Draft).build();
     let staging = tempfile::tempdir().unwrap();
-    let mut staging_pool = BlockPool::open(staging.path()).unwrap();
+    let staging_pool = BlockPool::open(staging.path()).unwrap();
     staging_pool.append(&cell).unwrap();
     drop(staging_pool);
 
@@ -814,7 +814,7 @@ fn legacy_v1_segments_still_readable_as_uniform_q4() {
 fn segment_record_size_guard_uses_checked_conversion() {
     // 1. Sane cell round-trips.
     let dir = tempfile::tempdir().unwrap();
-    let mut pool = BlockPool::open(dir.path()).unwrap();
+    let pool = BlockPool::open(dir.path()).unwrap();
     let cell = MemoryCellBuilder::new(1, 1, 1, vec![1.0f32; 8], vec![1.0f32; 8]).build();
     pool.append(&cell).expect("normal cell must serialize");
 
