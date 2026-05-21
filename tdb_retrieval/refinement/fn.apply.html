@@ -39,7 +39,7 @@
     query_key: &amp;[<a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.f32.html">f32</a>],
     first_stage: <a class="struct" href="https://doc.rust-lang.org/1.95.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="../attention/struct.RetrievalResult.html" title="struct tdb_retrieval::attention::RetrievalResult">RetrievalResult</a>&gt;,
     k: <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.usize.html">usize</a>,
-    owner_filter: <a class="enum" href="https://doc.rust-lang.org/1.95.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="type" href="../../tdb_core/types/type.OwnerId.html" title="type tdb_core::types::OwnerId">OwnerId</a>&gt;,
+    owner_filter: <a class="enum" href="https://doc.rust-lang.org/1.95.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;OwnerId&gt;,
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.95.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="../attention/struct.RetrievalResult.html" title="struct tdb_retrieval::attention::RetrievalResult">RetrievalResult</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Apply a refinement strategy to first-stage results.</p>
 <p><code>query_key</code> is the original encoded per-token query (<code>encode_per_token_keys</code>
 format). <code>first_stage</code> is the output of the existing pipeline. The

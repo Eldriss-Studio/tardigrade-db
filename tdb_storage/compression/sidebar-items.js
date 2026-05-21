@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ZSTD_LEVEL"],"enum":["CompressionCodec"]};
