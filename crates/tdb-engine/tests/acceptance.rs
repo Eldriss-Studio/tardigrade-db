@@ -1159,7 +1159,7 @@ fn test_pack_survives_reopen() {
     }
 
     // Reopen.
-    let mut engine = Engine::open(dir.path()).unwrap();
+    let engine = Engine::open(dir.path()).unwrap();
     assert_eq!(engine.pack_count(), 1);
 
     let results = engine.mem_read_pack(&key_vec, 1, None).unwrap();
@@ -1283,7 +1283,7 @@ fn test_mem_read_pack_preserves_pack_deduplication_after_adapter_rebuild() {
         engine.mem_write_pack(&test_pack(&[30.0, 31.0, 32.0, 33.0], broad_key)).unwrap();
     }
 
-    let mut reopened = Engine::open(dir.path()).unwrap();
+    let reopened = Engine::open(dir.path()).unwrap();
     let results = reopened.mem_read_pack(&query, 5, Some(1)).unwrap();
 
     assert_eq!(results.len(), 1, "Rebuilt pack index should still deduplicate by pack");
@@ -1345,7 +1345,7 @@ fn test_engine_reopen_rebuilds_pack_reverse_index() {
         engine.mem_write_pack(&test_pack(&[30.0, 31.0, 32.0, 33.0], broad_key)).unwrap();
     }
 
-    let mut reopened = Engine::open(dir.path()).unwrap();
+    let reopened = Engine::open(dir.path()).unwrap();
     let results =
         reopened.mem_read_pack(&query, CANDIDATE_FIXTURE_TOP_K, Some(TEST_PACK_OWNER_ONE)).unwrap();
 
@@ -1835,7 +1835,7 @@ fn test_load_pack_by_id_returns_complete_pack() {
 #[test]
 fn test_load_pack_by_id_not_found() {
     let dir = tempfile::tempdir().unwrap();
-    let mut engine = Engine::open(dir.path()).unwrap();
+    let engine = Engine::open(dir.path()).unwrap();
 
     assert!(engine.load_pack_by_id(999).is_err());
 }
@@ -2044,7 +2044,7 @@ fn test_pack_text_survives_reopen() {
             .unwrap()
     };
 
-    let mut engine = Engine::open(dir.path()).unwrap();
+    let engine = Engine::open(dir.path()).unwrap();
     let result = engine.load_pack_by_id(pack_id).unwrap();
     assert_eq!(result.pack.text.as_deref(), Some("Persisted across restarts"),);
 }
@@ -2265,7 +2265,7 @@ fn test_delete_pack_survives_reopen() {
         engine.delete_pack(id).unwrap();
         id
     };
-    let mut engine = Engine::open(dir.path()).unwrap();
+    let engine = Engine::open(dir.path()).unwrap();
     assert_eq!(engine.pack_count(), 0);
     assert!(engine.load_pack_by_id(pack_id).is_err());
 }
@@ -3186,7 +3186,7 @@ fn test_multi_agent_delete_isolation() {
 #[test]
 fn test_multi_agent_retrieval_returns_only_owner_packs() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut engine, _, _, _) = multi_agent_fixture(dir.path());
+    let (engine, _, _, _) = multi_agent_fixture(dir.path());
 
     let query = encode_per_token_keys(&[&[1.0f32, 0.0, 0.0, 0.0]]);
     let results = engine.mem_read_pack(&query, 10, Some(AGENT_ALPHA)).unwrap();
@@ -3383,7 +3383,7 @@ fn test_pack_text_round_trip_after_reopen() {
         pack_ids = ids;
     }
 
-    let mut engine = Engine::open(dir.path()).unwrap();
+    let engine = Engine::open(dir.path()).unwrap();
     assert_eq!(engine.pack_count(), 3);
     for (i, &pid) in pack_ids.iter().enumerate() {
         let pack = engine.load_pack_by_id(pid).unwrap();
@@ -3429,7 +3429,7 @@ fn test_crash_truncated_text_store_pack_survives() {
     }
 
     // Recovery: engine should open without panic
-    let mut engine = Engine::open(dir.path()).unwrap();
+    let engine = Engine::open(dir.path()).unwrap();
     assert_eq!(engine.pack_count(), 1, "pack cells must survive (pool is authoritative)");
 
     // Text may be missing — that's acceptable after text store crash
@@ -4116,7 +4116,7 @@ fn test_view_keys_survive_refresh() {
     }; // engine dropped here
 
     // Reopen from same directory.
-    let mut engine = Engine::open(dir.path()).unwrap();
+    let engine = Engine::open(dir.path()).unwrap();
 
     assert_eq!(engine.view_count(pack_id).unwrap(), 1, "View count should be 1 after reopen");
 

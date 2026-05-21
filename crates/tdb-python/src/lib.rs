@@ -1139,7 +1139,7 @@ impl Engine {
         let engine = Arc::clone(&self.inner);
         let raw_results =
             py.detach(move || -> PyResult<Vec<Vec<tdb_core::kv_pack::PackReadResult>>> {
-                let mut eng = lock_engine(&engine)?;
+                let eng = lock_engine(&engine)?;
                 let mut out = Vec::with_capacity(n);
                 for ((q, k), owner) in owned_queries.iter().zip(ks.iter()).zip(owners.iter()) {
                     let rows = eng
@@ -1209,7 +1209,7 @@ impl Engine {
 
         let engine = Arc::clone(&self.inner);
         let raw = py.detach(move || -> PyResult<Vec<tdb_engine::engine::MultiLayerRow>> {
-            let mut eng = lock_engine(&engine)?;
+            let eng = lock_engine(&engine)?;
             eng.mem_read_multi_layer(&owned_queries, k, rrf_k, owner)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })?;

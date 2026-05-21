@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tdb_core::error::{Result, TardigradeError};
 use tdb_core::kv_pack::{KVLayerPayload, KVPack, PackId, PackReadResult};
@@ -146,6 +146,23 @@ impl Retriever for VamanaAdapter {
 }
 
 /// Per-cell governance state tracked by the engine.
+///
+/// Stored in the engine as `HashMap<CellId, Mutex<CellGovernance>>` so
+/// concurrent readers can mutate a cell's importance / tier state without
+/// taking an outer writer lock on the whole engine. Map structure (which
+/// cells exist) is stable during any read because every insert/remove
+/// runs under the engine's outer `RwLock::write()` guard; only the
+/// per-cell access bookkeeping is contended, and contention is rare
+/// because concurrent reads typically retrieve different cells.
+///
+/// Picked over `DashMap` deliberately: `DashMap` pays for the ability to
+/// grow concurrently, which we do not need under the outer writer lock.
+/// Picked over an explicit `GovernanceRepository` trait deliberately:
+/// there is one impl, the storage is tightly coupled with the hot path,
+/// and a trait would just be premature abstraction. The codebase's
+/// existing Repository pattern (`CheckpointRepository`) earned its
+/// abstraction by serving multiple slot-storage strategies; governance
+/// does not.
 #[derive(Debug)]
 struct CellGovernance {
     scorer: ImportanceScorer,
@@ -243,7 +260,7 @@ pub struct Engine {
     trace: TraceGraph,
     wal: Wal,
     synaptic_store: SynapticStore,
-    governance: HashMap<CellId, CellGovernance>,
+    governance: HashMap<CellId, Mutex<CellGovernance>>,
     next_id: CellId,
     dir: PathBuf,
     vamana_threshold: usize,
@@ -923,7 +940,10 @@ impl Engine {
         }
         let scorer = ImportanceScorer::new(cell.meta.importance);
         let tier_sm = TierStateMachine::with_tier(cell.meta.tier);
-        self.governance.insert(cell.id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
+        self.governance.insert(
+            cell.id,
+            Mutex::new(CellGovernance { scorer, tier_sm, days_since_update: 0.0 }),
+        );
     }
 
     /// Write key/value vectors to the engine. Returns the assigned cell ID.
@@ -979,7 +999,8 @@ impl Engine {
         let slb_key = mean_pool_key(key);
         self.slb.insert(id, owner, &slb_key);
 
-        self.governance.insert(id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
+        self.governance
+            .insert(id, Mutex::new(CellGovernance { scorer, tier_sm, days_since_update: 0.0 }));
 
         // Trace graph: log causal edge via WAL (Observer pattern).
         if let Some(parent_id) = parent_cell_id {
@@ -1072,7 +1093,7 @@ impl Engine {
             self.pipeline.insert(id, owner, &key);
             let slb_key = mean_pool_key(&key);
             self.slb.insert(id, owner, &slb_key);
-            self.governance.insert(id, gov);
+            self.governance.insert(id, Mutex::new(gov));
 
             // Causal edges via WAL.
             if let Some(parent_id) = parent_cell_id {
@@ -1105,10 +1126,22 @@ impl Engine {
     /// fixed-size vectors. Results are merged, deduplicated, scored with
     /// recency decay, and filtered by owner.
     ///
+    /// Unlike [`Self::mem_read_pack`], this method takes `&mut self` because
+    /// it performs SLB warm-promotion: every returned cell is inserted into
+    /// the LRU on its way out the door. SLB insert is a structural mutation
+    /// (push onto `slots`, possible eviction) and stays under the writer
+    /// lock. Consumers that need lock-free concurrent reads should use
+    /// [`Self::mem_read_pack`] instead.
+    ///
     /// # Errors
     /// Returns [`TardigradeError`] propagated from the block pool when
     /// hydrating a candidate cell fails for any reason other than a
     /// concurrent deletion (which is silently skipped).
+    ///
+    /// # Panics
+    /// Panics if any per-cell governance `Mutex` is poisoned, which only
+    /// happens if a prior governance access panicked mid-update — a
+    /// programmer error, not a runtime condition.
     pub fn mem_read(
         &mut self,
         query_key: &[f32],
@@ -1191,6 +1224,7 @@ impl Engine {
         for rr in &candidates {
             let (decay_factor, tier) =
                 self.governance.get(&rr.cell_id).map_or((1.0, Tier::Draft), |g| {
+                    let g = g.lock().expect("governance mutex poisoned");
                     (recency_decay(g.days_since_update), g.tier_sm.current())
                 });
 
@@ -1216,9 +1250,11 @@ impl Engine {
         results.truncate(k);
 
         for result in &results {
-            if let Some(gov) = self.governance.get_mut(&result.cell.id) {
+            if let Some(gov) = self.governance.get(&result.cell.id) {
+                let mut gov = gov.lock().expect("governance mutex poisoned");
                 gov.scorer.on_access();
-                gov.tier_sm.evaluate(gov.scorer.importance());
+                let importance = gov.scorer.importance();
+                gov.tier_sm.evaluate(importance);
             }
             let slb_key = mean_pool_key(&result.cell.key);
             self.slb.insert(result.cell.id, result.cell.owner, &slb_key);
@@ -1317,15 +1353,25 @@ impl Engine {
     }
 
     /// Get the current tier of a cell.
+    ///
+    /// # Panics
+    /// Panics if the cell's governance `Mutex` is poisoned.
     #[must_use]
     pub fn cell_tier(&self, cell_id: CellId) -> Option<Tier> {
-        self.governance.get(&cell_id).map(|g| g.tier_sm.current())
+        self.governance
+            .get(&cell_id)
+            .map(|g| g.lock().expect("governance mutex poisoned").tier_sm.current())
     }
 
     /// Get the current importance score of a cell.
+    ///
+    /// # Panics
+    /// Panics if the cell's governance `Mutex` is poisoned.
     #[must_use]
     pub fn cell_importance(&self, cell_id: CellId) -> Option<f32> {
-        self.governance.get(&cell_id).map(|g| g.scorer.importance())
+        self.governance
+            .get(&cell_id)
+            .map(|g| g.lock().expect("governance mutex poisoned").scorer.importance())
     }
 
     /// Total number of cells in the engine.
@@ -1436,8 +1482,12 @@ impl Engine {
     }
 
     /// Simulate passage of time for governance decay.
+    ///
+    /// # Panics
+    /// Panics if any per-cell governance `Mutex` is poisoned.
     pub fn advance_days(&mut self, days: f32) {
-        for gov in self.governance.values_mut() {
+        for gov in self.governance.values() {
+            let mut gov = gov.lock().expect("governance mutex poisoned");
             // Reason: `days_since_update` is a non-negative accumulator (seeded
             // at 0, only ever added to with non-negative `days`). Decay sweep
             // only cares about whole-day deltas, so floor-to-u32 via `as` is
@@ -1451,7 +1501,8 @@ impl Engine {
             let elapsed = new_whole.saturating_sub(old_whole);
             if elapsed > 0 {
                 gov.scorer.apply_daily_decay(elapsed);
-                gov.tier_sm.evaluate(gov.scorer.importance());
+                let importance = gov.scorer.importance();
+                gov.tier_sm.evaluate(importance);
             }
         }
     }
@@ -1729,8 +1780,10 @@ impl Engine {
         self.slb.insert(retrieval_cell_id, pack.owner, &slb_key);
 
         // Governance for the pack (tracked on retrieval cell).
-        self.governance
-            .insert(retrieval_cell_id, CellGovernance { scorer, tier_sm, days_since_update: 0.0 });
+        self.governance.insert(
+            retrieval_cell_id,
+            Mutex::new(CellGovernance { scorer, tier_sm, days_since_update: 0.0 }),
+        );
 
         // Pack index.
         self.pack_directory.insert_pack(pack_id, cell_ids, pack.owner);
@@ -1853,11 +1906,11 @@ impl Engine {
             self.slb.insert(info.retrieval_cell_id, info.owner, &slb_key);
             self.governance.insert(
                 info.retrieval_cell_id,
-                CellGovernance {
+                Mutex::new(CellGovernance {
                     scorer: info.scorer,
                     tier_sm: info.tier_sm,
                     days_since_update: 0.0,
-                },
+                }),
             );
             self.pack_directory.insert_pack(info.pack_id, info.cell_ids, info.owner);
         }
@@ -2063,7 +2116,7 @@ impl Engine {
     /// or [`TardigradeError::CellNotFound`] for a candidate that disappeared
     /// between scoring and hydration).
     pub fn mem_read_pack(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -2109,7 +2162,7 @@ impl Engine {
     /// is a class-invariant of the fusion loop and indicates a bug, not a
     /// runtime condition.
     pub fn mem_read_multi_layer(
-        &mut self,
+        &self,
         query_keys: &[Vec<f32>],
         k: usize,
         rrf_k: u32,
@@ -2168,7 +2221,7 @@ impl Engine {
     /// hydration (e.g. [`TardigradeError::Io`] or
     /// [`TardigradeError::CellNotFound`]).
     pub fn mem_read_pack_with_trace_boost(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -2208,7 +2261,7 @@ impl Engine {
     /// from candidate hydration. Linked packs that fail to load are skipped
     /// silently rather than surfaced.
     pub fn mem_read_pack_with_trace_boost_and_follow(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -2239,7 +2292,7 @@ impl Engine {
     }
 
     fn collect_pack_candidates(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -2325,13 +2378,23 @@ impl Engine {
         Ok(layers)
     }
 
-    fn apply_pack_access_governance(&mut self, retrieval_cell_id: CellId) -> PackAccessSnapshot {
-        let Some(gov) = self.governance.get_mut(&retrieval_cell_id) else {
+    /// Records an access against the retrieval cell's governance and returns
+    /// the tier-boost snapshot to apply to its score.
+    ///
+    /// Takes `&self`: the per-cell `Mutex` inside the governance map
+    /// serializes the bookkeeping update across concurrent readers. The
+    /// outer `RwLock::read()` guard on the engine wrapper keeps the map
+    /// structure stable, so the `HashMap::get` lookup is safe under
+    /// concurrent reads.
+    fn apply_pack_access_governance(&self, retrieval_cell_id: CellId) -> PackAccessSnapshot {
+        let Some(gov) = self.governance.get(&retrieval_cell_id) else {
             return PackAccessSnapshot { tier: Tier::Draft, decay_factor: 1.0, tier_boost: 1.0 };
         };
 
+        let mut gov = gov.lock().expect("governance mutex poisoned");
         gov.scorer.on_access();
-        gov.tier_sm.evaluate(gov.scorer.importance());
+        let importance = gov.scorer.importance();
+        gov.tier_sm.evaluate(importance);
 
         let tier = gov.tier_sm.current();
         PackAccessSnapshot {
@@ -2456,11 +2519,16 @@ impl Engine {
     }
 
     /// Get the importance score of a pack.
+    ///
+    /// # Panics
+    /// Panics if the retrieval cell's governance `Mutex` is poisoned.
     #[must_use]
     pub fn pack_importance(&self, pack_id: PackId) -> Option<f32> {
         let cell_ids = self.pack_directory.cell_ids(pack_id)?;
         let retrieval_cell_id = *cell_ids.first()?;
-        self.governance.get(&retrieval_cell_id).map(|g| g.scorer.importance())
+        self.governance
+            .get(&retrieval_cell_id)
+            .map(|g| g.lock().expect("governance mutex poisoned").scorer.importance())
     }
 
     /// Enumerate every owner that has at least one pack stored.
@@ -2536,6 +2604,9 @@ impl Engine {
     /// reads, no Q4 cell decompression. At 10K packs the median wall time
     /// is in single-digit milliseconds (see
     /// `experiments/list_packs_microbench.py`).
+    ///
+    /// # Panics
+    /// Panics if any retrieval-cell governance `Mutex` is poisoned.
     #[must_use]
     pub fn list_packs(&self, owner_filter: Option<OwnerId>) -> Vec<(PackId, OwnerId, Tier, f32)> {
         let mut results = Vec::new();
@@ -2554,10 +2625,11 @@ impl Engine {
             let Some(&retrieval_cell_id) = cell_ids.first() else {
                 continue;
             };
-            let (tier, importance) = self
-                .governance
-                .get(&retrieval_cell_id)
-                .map_or((Tier::Draft, 0.0), |g| (g.tier_sm.current(), g.scorer.importance()));
+            let (tier, importance) =
+                self.governance.get(&retrieval_cell_id).map_or((Tier::Draft, 0.0), |g| {
+                    let g = g.lock().expect("governance mutex poisoned");
+                    (g.tier_sm.current(), g.scorer.importance())
+                });
             results.push((pack_id, owner, tier, importance));
         }
         results.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
@@ -2573,7 +2645,7 @@ impl Engine {
     /// Returns [`TardigradeError::CellNotFound`] (wrapping the pack id) if the
     /// pack id is not in the pack directory, or [`TardigradeError`] propagated
     /// from the pool when hydrating layer cells fails.
-    pub fn load_pack_by_id(&mut self, pack_id: PackId) -> Result<PackReadResult> {
+    pub fn load_pack_by_id(&self, pack_id: PackId) -> Result<PackReadResult> {
         let cell_ids = self
             .pack_directory
             .cell_ids(pack_id)
