@@ -18,6 +18,7 @@ pub enum EdgeType {
 }
 
 impl EdgeType {
+    #[must_use]
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0 => Some(Self::CausedBy),
@@ -53,6 +54,7 @@ pub struct TraceGraph {
 }
 
 impl TraceGraph {
+    #[must_use]
     pub fn new() -> Self {
         Self { outgoing: HashMap::new(), incoming: HashMap::new(), count: 0 }
     }
@@ -67,6 +69,7 @@ impl TraceGraph {
     }
 
     /// Get outgoing edges from a node, optionally filtered by edge type.
+    #[must_use]
     pub fn outgoing(&self, src: CellId, edge_type_filter: Option<EdgeType>) -> Vec<&TraceEdge> {
         self.outgoing
             .get(&src)
@@ -77,6 +80,7 @@ impl TraceGraph {
     }
 
     /// Get incoming edges to a node, optionally filtered by edge type.
+    #[must_use]
     pub fn incoming(&self, dst: CellId, edge_type_filter: Option<EdgeType>) -> Vec<&TraceEdge> {
         self.incoming
             .get(&dst)
@@ -93,6 +97,7 @@ impl TraceGraph {
     ///
     /// Uses BFS on the `outgoing` edges from the target node
     /// (since `CausedBy` edges point from child → parent, outgoing from C finds B, etc.)
+    #[must_use]
     pub fn ancestors(&self, node: CellId, edge_type: EdgeType) -> Vec<CellId> {
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
@@ -117,11 +122,13 @@ impl TraceGraph {
     }
 
     /// Total number of edges in the graph.
+    #[must_use]
     pub fn edge_count(&self) -> usize {
         self.count
     }
 
     /// Number of distinct nodes (that have at least one edge).
+    #[must_use]
     pub fn node_count(&self) -> usize {
         let mut nodes = HashSet::new();
         for &src in self.outgoing.keys() {

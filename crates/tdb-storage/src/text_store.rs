@@ -132,11 +132,13 @@ impl TextStore {
     }
 
     /// Number of text entries.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.texts.len()
     }
 
     /// Whether the store has no entries.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.texts.is_empty()
     }

@@ -28,6 +28,7 @@
 /// - `all_vectors`: all vectors in the graph, indexed by candidate index
 /// - `alpha`: diversity parameter (typically 1.2)
 /// - `max_degree`: maximum number of neighbors to select (R)
+#[must_use]
 pub fn robust_prune(
     node_vector: &[f32],
     candidate_indices: &[usize],

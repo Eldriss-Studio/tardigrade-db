@@ -75,11 +75,13 @@ impl DeletionLog {
     }
 
     /// Check if a pack has been deleted.
+    #[must_use]
     pub fn is_deleted(&self, pack_id: PackId) -> bool {
         self.deleted.contains(&pack_id)
     }
 
     /// The complete set of deleted pack IDs.
+    #[must_use]
     pub fn deleted_set(&self) -> &HashSet<PackId> {
         &self.deleted
     }

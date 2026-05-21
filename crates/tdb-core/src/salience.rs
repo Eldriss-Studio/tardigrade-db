@@ -40,6 +40,10 @@ pub enum SalienceMode {
 
 impl SalienceMode {
     /// Parse the string form callers pass through the `PyO3` layer.
+    ///
+    /// # Errors
+    /// Returns [`UnknownSalienceMode`] if `name` is not one of
+    /// `"none"`, `"explicit"`, `"l2"`, or `"max"`.
     pub fn parse(name: &str) -> Result<Self, UnknownSalienceMode> {
         match name {
             "none" | "explicit" => Ok(Self::Explicit),

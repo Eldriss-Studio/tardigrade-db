@@ -13,6 +13,7 @@ pub struct DotProduct;
 impl DotProduct {
     /// FP32 dot product — reference implementation.
     #[inline]
+    #[must_use]
     pub fn f32_dot(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len());
         Self::f32_dot_scalar(a, b)
@@ -21,6 +22,7 @@ impl DotProduct {
     /// INT8 dot product with scale correction.
     /// Returns an approximate FP32 result: `(scale_a * scale_b) * sum(a_q[i] * b_q[i])`.
     #[inline]
+    #[must_use]
     pub fn int8_dot(a: &QuantizedInt8Vec, b: &QuantizedInt8Vec) -> f32 {
         debug_assert_eq!(a.values.len(), b.values.len());
         let raw = Self::int8_dot_raw(&a.values, &b.values);
@@ -29,6 +31,7 @@ impl DotProduct {
 
     /// Raw INT8 dot product on slices — for `SoA` layout where data is contiguous.
     #[inline]
+    #[must_use]
     pub fn int8_dot_raw_slice(a: &[i8], b: &[i8]) -> i32 {
         debug_assert_eq!(a.len(), b.len());
         Self::int8_dot_raw(a, b)
@@ -151,7 +154,7 @@ impl DotProduct {
 
         let tail = chunks * 32;
         for i in tail..len {
-            result += a[i] as i32 * b[i] as i32;
+            result += i32::from(a[i]) * i32::from(b[i]);
         }
 
         result
@@ -167,7 +170,7 @@ impl DotProduct {
     #[cfg(not(target_arch = "aarch64"))]
     #[inline]
     fn int8_dot_scalar(a: &[i8], b: &[i8]) -> i32 {
-        a.iter().zip(b.iter()).map(|(&x, &y)| x as i32 * y as i32).sum()
+        a.iter().zip(b.iter()).map(|(&x, &y)| i32::from(x) * i32::from(y)).sum()
     }
 }
 
@@ -203,7 +206,8 @@ mod tests {
         let len = 128;
         let a: Vec<i8> = (0..len).map(|i| (i % 10) as i8).collect();
         let b: Vec<i8> = (0..len).map(|i| ((i + 3) % 10) as i8).collect();
-        let expected: i32 = a.iter().zip(b.iter()).map(|(&x, &y)| x as i32 * y as i32).sum();
+        let expected: i32 =
+            a.iter().zip(b.iter()).map(|(&x, &y)| i32::from(x) * i32::from(y)).sum();
         let result = DotProduct::int8_dot_raw(&a, &b);
         assert_eq!(result, expected);
     }

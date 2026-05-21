@@ -54,6 +54,7 @@ pub struct SemanticLookasideBuffer {
 
 impl SemanticLookasideBuffer {
     /// Create a new SLB with the given capacity and vector dimensionality.
+    #[must_use]
     pub fn new(capacity: usize, dim: usize) -> Self {
         Self {
             slots: Vec::with_capacity(capacity),
@@ -72,11 +73,13 @@ impl SemanticLookasideBuffer {
     /// rebuilt at a different dimension (e.g., when the engine was opened
     /// empty with the default dim=128 and the first cells written by
     /// another handle have a different key dimension).
+    #[must_use]
     pub fn dim(&self) -> usize {
         self.dim
     }
 
     /// Capacity (max number of active entries before LRU eviction).
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -174,15 +177,18 @@ impl SemanticLookasideBuffer {
     }
 
     /// Check if a cell is present in the SLB.
+    #[must_use]
     pub fn contains(&self, cell_id: CellId) -> bool {
         self.index.get(&cell_id).is_some_and(|&idx| self.slots[idx].active)
     }
 
     /// Current number of active entries.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.active_count
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.active_count == 0
     }

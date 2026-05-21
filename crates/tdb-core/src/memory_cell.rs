@@ -58,6 +58,7 @@ pub struct MemoryCellBuilder {
 }
 
 impl MemoryCellBuilder {
+    #[must_use]
     pub fn new(id: CellId, owner: OwnerId, layer: LayerId, key: Vec<f32>, value: Vec<f32>) -> Self {
         Self {
             id,
@@ -71,41 +72,49 @@ impl MemoryCellBuilder {
         }
     }
 
+    #[must_use]
     pub fn token_span(mut self, start: u64, end: u64) -> Self {
         self.token_span = (start, end);
         self
     }
 
+    #[must_use]
     pub fn pos_encoding(mut self, encoding: Vec<f32>) -> Self {
         self.pos_encoding = encoding;
         self
     }
 
+    #[must_use]
     pub fn importance(mut self, importance: f32) -> Self {
         self.meta.importance = importance;
         self
     }
 
+    #[must_use]
     pub fn tags(mut self, tags: TagBits) -> Self {
         self.meta.tags = tags;
         self
     }
 
+    #[must_use]
     pub fn tier(mut self, tier: Tier) -> Self {
         self.meta.tier = tier;
         self
     }
 
+    #[must_use]
     pub fn created_at(mut self, ts: u64) -> Self {
         self.meta.created_at = ts;
         self
     }
 
+    #[must_use]
     pub fn updated_at(mut self, ts: u64) -> Self {
         self.meta.updated_at = ts;
         self
     }
 
+    #[must_use]
     pub fn build(self) -> MemoryCell {
         MemoryCell {
             id: self.id,

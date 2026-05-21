@@ -841,8 +841,8 @@ fn test_per_token_recall_improvement() {
         }
     }
 
-    let pt_recall = pt_hits as f64 / n_queries as f64;
-    let bf_recall = bf_hits as f64 / n_queries as f64;
+    let pt_recall = f64::from(pt_hits) / n_queries as f64;
+    let bf_recall = f64::from(bf_hits) / n_queries as f64;
 
     // Log results via eval_log helper.
     eval_log(&format!(
@@ -962,7 +962,7 @@ fn test_top5_avg_recall_at_100_cells() {
         }
     }
 
-    let recall = hits as f64 / n_queries as f64;
+    let recall = f64::from(hits) / n_queries as f64;
     eval_log(&format!("Top5Avg recall@5: {recall:.1}% ({hits}/{n_queries})"));
 
     // Top5Avg is designed for real model hidden states where tokens share signal.

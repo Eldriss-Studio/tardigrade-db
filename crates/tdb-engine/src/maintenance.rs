@@ -63,6 +63,7 @@ pub struct MaintenanceWorker {
 }
 
 impl MaintenanceWorker {
+    #[must_use]
     pub fn new(config: MaintenanceConfig) -> Self {
         Self {
             config,
@@ -97,10 +98,12 @@ impl MaintenanceWorker {
         self.stop_flag.store(false, Ordering::Release);
     }
 
+    #[must_use]
     pub fn status(&self) -> MaintenanceStatus {
         self.status.lock().map_or_else(|_| MaintenanceStatus::default(), |s| s.clone())
     }
 
+    #[must_use]
     pub fn is_running(&self) -> bool {
         self.handle.as_ref().is_some_and(|h| !h.is_finished())
     }

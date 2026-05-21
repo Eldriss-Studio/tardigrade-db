@@ -399,6 +399,7 @@ impl Engine {
     }
 
     /// Number of times [`Engine::load_embedding_table`] has been called.
+    #[must_use]
     pub fn embedding_table_load_count(&self) -> u64 {
         self.embedding_table_loads
     }
@@ -590,6 +591,7 @@ impl Engine {
     }
 
     /// Currently configured refinement mode as an enum (backwards compat).
+    #[must_use]
     pub fn refinement_mode(&self) -> tdb_retrieval::refinement::RefinementMode {
         match self.refinement_strategy.name() {
             "none" => tdb_retrieval::refinement::RefinementMode::None,
@@ -604,6 +606,7 @@ impl Engine {
     }
 
     /// Currently configured refinement mode name (for Python bindings).
+    #[must_use]
     pub fn refinement_mode_name(&self) -> &'static str {
         self.refinement_strategy.name()
     }
@@ -619,6 +622,7 @@ impl Engine {
     }
 
     /// Whether corpus-mean distance token importance reweighting is enabled.
+    #[must_use]
     pub fn token_reweighting(&self) -> bool {
         self.token_reweighting
     }
@@ -1207,41 +1211,49 @@ impl Engine {
     }
 
     /// Get transitive ancestors of a cell following `CausedBy` edges.
+    #[must_use]
     pub fn trace_ancestors(&self, cell_id: CellId) -> Vec<CellId> {
         self.trace.ancestors(cell_id, EdgeType::CausedBy)
     }
 
     /// Whether the Vamana index is currently active.
+    #[must_use]
     pub fn has_vamana(&self) -> bool {
         self.vamana.is_some()
     }
 
     /// Number of stages in the retrieval pipeline.
+    #[must_use]
     pub fn pipeline_stage_count(&self) -> usize {
         self.pipeline.stage_count()
     }
 
     /// Get the current tier of a cell.
+    #[must_use]
     pub fn cell_tier(&self, cell_id: CellId) -> Option<Tier> {
         self.governance.get(&cell_id).map(|g| g.tier_sm.current())
     }
 
     /// Get the current importance score of a cell.
+    #[must_use]
     pub fn cell_importance(&self, cell_id: CellId) -> Option<f32> {
         self.governance.get(&cell_id).map(|g| g.scorer.importance())
     }
 
     /// Total number of cells in the engine.
+    #[must_use]
     pub fn cell_count(&self) -> usize {
         self.pool.cell_count()
     }
 
     /// Directory path of this engine.
+    #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
     /// Snapshot of engine state for monitoring and diagnostics.
+    #[must_use]
     pub fn status(&self) -> EngineStatus {
         let cell_count = self.pool.cell_count();
         let arena_bytes = self.pool.arena_bytes();
@@ -2137,11 +2149,13 @@ impl Engine {
     }
 
     /// Number of KV Packs stored.
+    #[must_use]
     pub fn pack_count(&self) -> usize {
         self.pack_directory.len()
     }
 
     /// Get the stored text for a pack, if any.
+    #[must_use]
     pub fn pack_text(&self, pack_id: PackId) -> Option<&str> {
         self.text_store.get(pack_id)
     }
@@ -2150,6 +2164,7 @@ impl Engine {
     ///
     /// Distinguishes "pack exists but has no text" from "pack doesn't exist"
     /// — both cases return `None` from [`Self::pack_text`].
+    #[must_use]
     pub fn pack_exists(&self, pack_id: PackId) -> bool {
         self.pack_directory.cell_ids(pack_id).is_some()
     }
@@ -2232,6 +2247,7 @@ impl Engine {
     }
 
     /// Get the importance score of a pack.
+    #[must_use]
     pub fn pack_importance(&self, pack_id: PackId) -> Option<f32> {
         let cell_ids = self.pack_directory.cell_ids(pack_id)?;
         let retrieval_cell_id = *cell_ids.first()?;
@@ -2248,6 +2264,7 @@ impl Engine {
     /// Useful for consumers with multiple parties (multi-agent
     /// runtimes, multi-NPC games, multi-tenant `SaaS`) that need to
     /// enumerate or audit which owners have memory recorded.
+    #[must_use]
     pub fn list_owners(&self) -> Vec<OwnerId> {
         let mut owners: std::collections::BTreeSet<OwnerId> = std::collections::BTreeSet::new();
         for &pack_id in self.pack_directory.pack_ids() {
@@ -2268,6 +2285,7 @@ impl Engine {
     ///
     /// Convenience wrapper over [`Engine::list_owners`] for the
     /// frequent "does this owner exist?" check.
+    #[must_use]
     pub fn owner_exists(&self, owner: OwnerId) -> bool {
         self.list_owners().contains(&owner)
     }
@@ -2304,6 +2322,7 @@ impl Engine {
     /// reads, no Q4 cell decompression. At 10K packs the median wall time
     /// is in single-digit milliseconds (see
     /// `experiments/list_packs_microbench.py`).
+    #[must_use]
     pub fn list_packs(&self, owner_filter: Option<OwnerId>) -> Vec<(PackId, OwnerId, Tier, f32)> {
         let mut results = Vec::new();
         for &pack_id in self.pack_directory.pack_ids() {
@@ -2411,21 +2430,25 @@ impl Engine {
     }
 
     /// Get all packs linked to a given pack via trace edges (any type).
+    #[must_use]
     pub fn pack_links(&self, pack_id: PackId) -> Vec<PackId> {
         self.pack_links_by_type_filter(pack_id, None)
     }
 
     /// Get packs linked via a specific edge type.
+    #[must_use]
     pub fn pack_links_by_type(&self, pack_id: PackId, edge_type: EdgeType) -> Vec<PackId> {
         self.pack_links_by_type_filter(pack_id, Some(edge_type))
     }
 
     /// Get packs that support a given pack.
+    #[must_use]
     pub fn pack_supports(&self, pack_id: PackId) -> Vec<PackId> {
         self.pack_links_by_type(pack_id, EdgeType::Supports)
     }
 
     /// Get packs that contradict a given pack.
+    #[must_use]
     pub fn pack_contradicts(&self, pack_id: PackId) -> Vec<PackId> {
         self.pack_links_by_type(pack_id, EdgeType::Contradicts)
     }

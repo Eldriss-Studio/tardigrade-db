@@ -46,6 +46,7 @@ pub struct Int8Group32 {
 
 impl Int8Group32 {
     /// Construct for a fixed per-token dimension.
+    #[must_use]
     pub fn new(dim: usize) -> Self {
         Self { dim }
     }

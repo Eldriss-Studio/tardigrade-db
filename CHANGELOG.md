@@ -10,6 +10,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _no changes yet_
 
+## [0.7.0] — 2026-05-20
+
+Python ↔ Rust boundary migration complete. Six new engine APIs lift
+state and computation out of Python; one deprecation sweep clears
+transition scaffolding the project no longer needs.
+
+### Public API
+
+- **`Engine.compute_retrieval_key(token_ids, strategy)`**: new — returns
+  the retrieval key for a token sequence via `"last_token"`,
+  `"mean_pool"`, or `"projected"`. Pair with
+  `Engine.load_embedding_table(weights)` to push the token-embedding
+  table to the engine once.
+- **`Engine.set_projection_matrix(matrix)`**: new — install the
+  projection used by `"projected"` for `hidden_size != kv_dim` models.
+- **`tardigrade_db.flat_to_paged(flat, kv_heads, head_dim, block_size)`**
+  and **`paged_to_flat(k, v, seq_len, kv_heads, head_dim)`**: new
+  module-level functions for vLLM KV block-layout conversion.
+  Stateless — no engine instance required.
+- **`tardigrade_db.flat_to_paged_torch(tensor, ...)`**: new — accepts a
+  `torch.Tensor` directly via `data_ptr()`. No `tch-rs`, no libtorch
+  link; the default wheel includes the function and the consumer's
+  own torch handles the C++ side.
+- **`Engine.set_fingerprint_capacity(n)`** + **`fingerprint_get` /
+  `fingerprint_put` / `fingerprint_release` / `fingerprint_len`**:
+  new — LRU cache for vLLM request fingerprints, owned by the engine.
+- **`Engine.mem_read_pack_batch(queries, k, owner)`**: new — N
+  retrievals in one engine call. `k` and `owner` accept a scalar
+  (broadcast) or a per-query list; `owner` list entries may be `None`
+  to skip the filter for that one query.
+- **`Engine.mem_read_multi_layer(query_keys, k, owner=None, rrf_k=60)`**:
+  new — multi-layer query fanout + Reciprocal Rank Fusion in one
+  engine call. Score-ties break on `pack_id` ascending.
+- **`Engine.list_packs(owner=..., *, fetch_text)`**: `fetch_text` is
+  now a required keyword-only argument (was optional with
+  `DeprecationWarning`). Pass `fetch_text=False` for metadata-only,
+  `fetch_text=True` to populate `text`, or call
+  `Engine.list_packs_metadata()` for the columnar shape.
+- **`tardigrade_vllm.retrieval_key.get_strategy`**: removed. Use
+  `Engine.compute_retrieval_key(token_ids, "last_token" | "mean_pool")`
+  after `Engine.load_embedding_table(...)`.
+- **`tardigrade_hooks.sweep.GovernanceSweepThread`**: removed (module
+  deleted). Use `engine.start_maintenance()` /
+  `engine.stop_maintenance()` / `engine.maintenance_status()`.
+- **`TardigradeError::InvalidArgument(String)`**: new Rust error
+  variant with stable code `tdb::api::invalid_argument`. Surfaces as
+  `ValueError` on the Python side.
+
+### Performance
+
+- **`Engine.compute_retrieval_key('last_token')`**: 90.3 us → 6.5 us
+  at vocab=152064, hidden=1024, prompt_len=1024 (13.9x).
+- **`Engine.compute_retrieval_key('mean_pool')`**: 411.4 us → 138.5 us
+  at the same dims (3.0x).
+- **`Engine.fingerprint_get` / `fingerprint_put`**: 236 ns → 119 ns vs
+  Python `OrderedDict` at capacity=256 (2.0x).
+- **`tardigrade_db.paged_to_flat`**: 143 us → 68 us at Qwen3-0.6B
+  dims, seq_len=263 (2.1x).
+- **`tardigrade_db.flat_to_paged`**: parity with numpy (76 us vs 71
+  us). numpy reshape + concat already runs at memory bandwidth; the
+  Rust path matches it.
+
+### Behaviour
+
+- **`MultiLayerQuery.query()`**: now routes through
+  `Engine.mem_read_multi_layer` — one engine call, one mutex
+  acquisition on `Arc<Mutex<Engine>>`. Ranking is unchanged.
+- **vLLM connector lifecycle**: `request_finished` calls
+  `Engine.fingerprint_release(fp)` proactively, so a finished
+  request's block id cannot return a stale pack to a new request
+  that reuses the same block.
+- **Connector save path**: per-layer KV block-layout conversion now
+  goes through `tardigrade_db.flat_to_paged` (Rust) instead of the
+  Python `format.py` helper. Numerical output unchanged.
+
 ## [0.6.0] — 2026-05-20
 
 Write-path rewrite. `mem_write_pack` at typical LLM dimensions is now ~7× faster end-to-end, `list_packs` ~10× faster at 10K packs, and a new batch-write API collapses N fsyncs into one.

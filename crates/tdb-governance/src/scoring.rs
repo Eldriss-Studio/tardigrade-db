@@ -29,11 +29,13 @@ pub struct ImportanceScorer {
 
 impl ImportanceScorer {
     /// Create a new scorer with an initial importance value.
+    #[must_use]
     pub fn new(initial: f32) -> Self {
         Self { importance: initial.clamp(MIN_IMPORTANCE, MAX_IMPORTANCE) }
     }
 
     /// Current importance score.
+    #[must_use]
     pub fn importance(&self) -> f32 {
         self.importance
     }
@@ -59,6 +61,7 @@ impl ImportanceScorer {
     }
 
     /// Check if this cell is below the eviction threshold.
+    #[must_use]
     pub fn is_evictable(&self, threshold: f32) -> bool {
         self.importance < threshold
     }

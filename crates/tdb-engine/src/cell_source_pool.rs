@@ -23,6 +23,7 @@ pub struct BlockPoolCellSource<'a> {
 
 impl<'a> BlockPoolCellSource<'a> {
     /// Wrap a borrowed `BlockPool` reference as a [`CellSource`].
+    #[must_use]
     pub fn new(pool: &'a BlockPool) -> Self {
         Self { pool }
     }

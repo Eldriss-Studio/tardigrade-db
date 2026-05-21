@@ -39,6 +39,7 @@ impl Tier {
     ///
     /// Core memories have proven their value through repeated access;
     /// they rank higher than untested Draft memories.
+    #[must_use]
     pub fn retrieval_boost(self) -> f32 {
         match self {
             Self::Draft => DRAFT_RETRIEVAL_BOOST,

@@ -69,6 +69,7 @@ impl PerChannelScaleCalibrator {
     /// `dim` is the per-token vector dimension (e.g. 1024 for
     /// Qwen3-0.6B hidden states). `window_tokens` caps how many
     /// individual token vectors contribute to σ before finalization.
+    #[must_use]
     pub fn new(dim: usize, window_tokens: usize) -> Self {
         Self {
             window_tokens,
@@ -80,16 +81,19 @@ impl PerChannelScaleCalibrator {
 
     /// Create with the default window of
     /// [`DEFAULT_CALIBRATION_WINDOW_TOKENS`].
+    #[must_use]
     pub fn with_default_window(dim: usize) -> Self {
         Self::new(dim, DEFAULT_CALIBRATION_WINDOW_TOKENS)
     }
 
     /// Per-token vector dimension this calibrator was built for.
+    #[must_use]
     pub fn dim(&self) -> usize {
         self.running_abs_max.len()
     }
 
     /// True after [`Self::finalize`] has been called.
+    #[must_use]
     pub fn is_finalized(&self) -> bool {
         self.finalized.is_some()
     }
@@ -97,6 +101,7 @@ impl PerChannelScaleCalibrator {
     /// True when enough tokens have been observed to be ready to
     /// finalize. Always returns `true` after finalization regardless
     /// of count, so callers can poll with a single predicate.
+    #[must_use]
     pub fn is_ready(&self) -> bool {
         self.finalized.is_some() || self.observed_tokens >= self.window_tokens
     }
@@ -143,6 +148,7 @@ impl PerChannelScaleCalibrator {
 
     /// Number of tokens observed so far (saturating at the window).
     /// Exposed for diagnostics; not load-bearing for behavior.
+    #[must_use]
     pub fn observed_tokens(&self) -> usize {
         self.observed_tokens
     }

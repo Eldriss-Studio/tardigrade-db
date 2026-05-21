@@ -81,10 +81,12 @@ impl Segment {
         Ok(Self { id, path, size: meta.len() })
     }
 
+    #[must_use]
     pub fn id(&self) -> u32 {
         self.id
     }
 
+    #[must_use]
     pub fn size(&self) -> u64 {
         self.size
     }
@@ -219,7 +221,7 @@ pub fn scan_segment(dir: &Path, segment_id: u32) -> io::Result<Vec<(CellId, u64)
 
     while pos < file_len {
         let record_len = match read_u32(&mut file) {
-            Ok(len) => len as u64,
+            Ok(len) => u64::from(len),
             Err(_) => break, // truncated record_len — stop scanning
         };
 

@@ -91,13 +91,13 @@ impl DequantizeStrategy for Q4 {
                 }
                 let byte = tensor.data[byte_offset + j];
                 let q_low = i16::from(byte & 0x0F) - 8;
-                result.push(q_low as f32 * scale);
+                result.push(f32::from(q_low) * scale);
 
                 if group_start + j * 2 + 1 >= tensor.original_len {
                     break;
                 }
                 let q_high = i16::from((byte >> 4) & 0x0F) - 8;
-                result.push(q_high as f32 * scale);
+                result.push(f32::from(q_high) * scale);
             }
         }
 

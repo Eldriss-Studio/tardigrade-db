@@ -73,6 +73,7 @@ impl std::error::Error for UnknownBoundaryStrategy {}
 /// `max_pos` is clamped to `text.len()`. An empty `text` always returns
 /// `0`. When no boundary is found, the function returns `max_pos`
 /// (clamped) so the caller can still make forward progress.
+#[must_use]
 pub fn find_chunk_boundary(text: &str, max_pos: usize, strategy: BoundaryStrategy) -> usize {
     let bound = max_pos.min(text.len());
     if bound == 0 {

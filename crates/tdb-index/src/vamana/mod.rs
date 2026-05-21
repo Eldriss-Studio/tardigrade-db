@@ -45,6 +45,7 @@ pub struct VamanaIndex {
 }
 
 impl VamanaIndex {
+    #[must_use]
     pub fn new(dim: usize, max_degree: usize) -> Self {
         Self {
             nodes: Vec::new(),
@@ -151,6 +152,7 @@ impl VamanaIndex {
     }
 
     /// Query for the top-k nearest neighbors by dot product.
+    #[must_use]
     pub fn query(&self, query: &[f32], k: usize) -> Vec<VamanaResult> {
         if self.nodes.is_empty() {
             return Vec::new();
@@ -163,14 +165,17 @@ impl VamanaIndex {
     }
 
     /// Number of neighbors for a given cell ID.
+    #[must_use]
     pub fn neighbor_count(&self, id: CellId) -> usize {
         self.id_to_idx.get(&id).map_or(0, |&idx| self.nodes[idx].neighbors.len())
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }

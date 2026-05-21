@@ -32,8 +32,9 @@ impl Int8Quantizer {
     }
 
     /// Dequantize back to f32.
+    #[must_use]
     pub fn dequantize(qvec: &QuantizedInt8Vec) -> Vec<f32> {
-        qvec.values.iter().map(|&v| v as f32 * qvec.scale).collect()
+        qvec.values.iter().map(|&v| f32::from(v) * qvec.scale).collect()
     }
 }
 

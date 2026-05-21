@@ -94,7 +94,7 @@ fn test_vamana_query_latency() {
         let _ = index.query(query, 10);
     }
     let elapsed = start.elapsed();
-    let avg_us = elapsed.as_micros() as f64 / iterations as f64;
+    let avg_us = elapsed.as_micros() as f64 / f64::from(iterations);
 
     // In debug mode, just verify it completes in reasonable time (<50ms per query).
     assert!(avg_us < 50_000.0, "Average query latency {avg_us:.0}μs exceeds 50ms");

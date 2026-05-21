@@ -42,6 +42,7 @@ impl EmbeddingTable {
     /// # Panics
     ///
     /// Panics if `weights.len() != vocab_size * hidden_size`.
+    #[must_use]
     pub fn new(weights: Vec<f32>, vocab_size: usize, hidden_size: usize) -> Self {
         assert_eq!(
             weights.len(),
@@ -52,17 +53,20 @@ impl EmbeddingTable {
     }
 
     #[inline]
+    #[must_use]
     pub fn vocab_size(&self) -> usize {
         self.vocab_size
     }
 
     #[inline]
+    #[must_use]
     pub fn hidden_size(&self) -> usize {
         self.hidden_size
     }
 
     /// Borrow the embedding row for `token_id`, or `None` if out of range.
     #[inline]
+    #[must_use]
     pub fn row(&self, token_id: i64) -> Option<&[f32]> {
         if token_id < 0 {
             return None;
@@ -139,6 +143,7 @@ impl ProjectedStrategy {
     /// # Panics
     ///
     /// Panics if `projection.len() != kv_dim * hidden_size`.
+    #[must_use]
     pub fn new(projection: Vec<f32>, kv_dim: usize, hidden_size: usize) -> Self {
         assert_eq!(
             projection.len(),

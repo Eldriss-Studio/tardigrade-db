@@ -43,11 +43,13 @@ impl<'a> RetrievalKeyView<'a> {
     }
 
     /// Whether this key is encoded per-token data.
+    #[must_use]
     pub fn is_encoded_per_token(&self) -> bool {
         matches!(self, Self::Encoded { .. })
     }
 
     /// Return raw token-matrix data for token-aware retrieval.
+    #[must_use]
     pub fn raw_tokens(&self) -> Option<(usize, usize, &'a [f32])> {
         match self {
             Self::Encoded { token_count, dim, data } => Some((*token_count, *dim, *data)),
@@ -56,6 +58,7 @@ impl<'a> RetrievalKeyView<'a> {
     }
 
     /// Return a fixed-dimension vector for SLB, brute-force, and Vamana.
+    #[must_use]
     pub fn pooled_vector(&self) -> Vec<f32> {
         match self {
             Self::Plain(key) => key.to_vec(),
@@ -77,11 +80,13 @@ impl<'a> RetrievalKeyView<'a> {
 }
 
 /// Whether a raw key is a valid encoded per-token matrix.
+#[must_use]
 pub fn is_encoded_per_token_key(key: &[f32]) -> bool {
     RetrievalKeyView::parse(key).is_ok_and(|view| view.is_encoded_per_token())
 }
 
 /// Build a fixed-dimension vector for a retrieval stage.
+#[must_use]
 pub fn fixed_dim_key(key: &[f32]) -> Option<Vec<f32>> {
     RetrievalKeyView::parse(key).ok().map(|view| view.pooled_vector())
 }

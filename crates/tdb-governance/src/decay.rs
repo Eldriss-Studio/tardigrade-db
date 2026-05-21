@@ -15,6 +15,7 @@ const TAU_DAYS: f32 = 30.0;
 /// - `r ≈ 0.5` when `days_since_update ≈ 20.8` (half-life)
 ///
 /// Negative inputs are clamped to 0 (returns 1.0).
+#[must_use]
 pub fn recency_decay(days_since_update: f32) -> f32 {
     let dt = days_since_update.max(0.0);
     (-dt / TAU_DAYS).exp()
@@ -23,6 +24,7 @@ pub fn recency_decay(days_since_update: f32) -> f32 {
 /// Compute a retrieval score adjusted for recency.
 ///
 /// `adjusted_score = raw_score × recency_decay(days_since_update)`
+#[must_use]
 pub fn decay_adjusted_score(raw_score: f32, days_since_update: f32) -> f32 {
     raw_score * recency_decay(days_since_update)
 }

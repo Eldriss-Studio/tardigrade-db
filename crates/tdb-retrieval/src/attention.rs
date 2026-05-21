@@ -34,6 +34,7 @@ pub struct BruteForceRetriever {
 }
 
 impl BruteForceRetriever {
+    #[must_use]
     pub fn new() -> Self {
         Self { entries: Vec::new() }
     }
@@ -49,6 +50,7 @@ impl BruteForceRetriever {
     ///
     /// Score = `q · k / √d_k` (scaled dot product, as in transformer attention).
     /// If `owner_filter` is `Some(id)`, only cells belonging to that owner are considered.
+    #[must_use]
     pub fn query(
         &self,
         query: &[f32],
@@ -85,10 +87,12 @@ impl BruteForceRetriever {
     }
 
     /// Number of entries in the retriever.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

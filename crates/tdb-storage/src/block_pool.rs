@@ -162,11 +162,13 @@ impl BlockPool {
     }
 
     /// Number of segment files in this pool.
+    #[must_use]
     pub fn segment_count(&self) -> usize {
         self.segments.len()
     }
 
     /// Number of cells tracked in the index.
+    #[must_use]
     pub fn cell_count(&self) -> usize {
         self.index.len()
     }

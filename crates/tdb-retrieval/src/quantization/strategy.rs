@@ -23,11 +23,13 @@ impl QuantizedToken {
     /// Construct an empty placeholder for the "wrong-dim input" or
     /// "all-zero" cases. The retriever treats empty quantized tokens
     /// as "skip."
+    #[must_use]
     pub fn empty() -> Self {
         Self { values: Vec::new(), scales: Vec::new(), dim: 0 }
     }
 
     /// True when this token has no resolvable values.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.dim == 0 || self.values.is_empty()
     }

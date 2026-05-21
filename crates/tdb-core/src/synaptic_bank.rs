@@ -34,6 +34,7 @@ impl SynapticBankEntry {
     ///
     /// # Panics
     /// Panics if `lora_a.len() != rank * d_model` or `lora_b.len() != d_model * rank`.
+    #[must_use]
     pub fn new(
         id: SynapticId,
         owner: OwnerId,

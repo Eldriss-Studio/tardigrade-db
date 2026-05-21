@@ -261,16 +261,19 @@ pub struct PerTokenRetriever {
 
 impl PerTokenRetriever {
     /// Create a new empty per-token retriever with `MaxSim` scoring and default config.
+    #[must_use]
     pub fn new() -> Self {
         Self::with_config(ScoringMode::MaxSim, PerTokenConfig::default())
     }
 
     /// Create a retriever with a specific scoring mode and default config.
+    #[must_use]
     pub fn with_scoring_mode(mode: ScoringMode) -> Self {
         Self::with_config(mode, PerTokenConfig::default())
     }
 
     /// Create a retriever with explicit scoring mode and config (Parameter Object).
+    #[must_use]
     pub fn with_config(mode: ScoringMode, config: PerTokenConfig) -> Self {
         Self::with_config_and_cache_capacity(mode, config, DEFAULT_TOKEN_CACHE_CAPACITY)
     }
@@ -278,6 +281,7 @@ impl PerTokenRetriever {
     /// Create a retriever with explicit scoring mode, config, and decoded-
     /// token cache capacity (in cells). Defaults to eager mode (in-memory
     /// `TokenStore` populated on insert).
+    #[must_use]
     pub fn with_config_and_cache_capacity(
         mode: ScoringMode,
         config: PerTokenConfig,
@@ -296,6 +300,7 @@ impl PerTokenRetriever {
     /// and `cell_summaries`; the in-memory `TokenStore` is not populated.
     /// Used by the engine — callers must supply a [`CellSource`] at query
     /// time via [`Self::query_with_source`].
+    #[must_use]
     pub fn lazy_with_config_and_cache_capacity(
         mode: ScoringMode,
         config: PerTokenConfig,
@@ -316,6 +321,7 @@ impl PerTokenRetriever {
     /// capacity keeps more cells at INT8 precision at the cost of
     /// RAM; a smaller capacity caps RAM at the cost of cold-cell
     /// recall (falls back to the Q4 archival source).
+    #[must_use]
     pub fn lazy_with_int8_tier_capacity(
         mode: ScoringMode,
         config: PerTokenConfig,
@@ -377,7 +383,7 @@ impl PerTokenRetriever {
         (0..self.store.len()).filter(move |&i| self.store.cell_ids[i] == cell_id).map(|i| {
             let scale = self.store.scales[i];
             let tokens = self.store.token_data(i);
-            let f32_tokens: Vec<f32> = tokens.iter().map(|&v| v as f32 * scale).collect();
+            let f32_tokens: Vec<f32> = tokens.iter().map(|&v| f32::from(v) * scale).collect();
             (f32_tokens, self.store.owners[i])
         })
     }
@@ -567,7 +573,7 @@ impl PerTokenRetriever {
             let scale = self.store.scales[idx];
             let qrow = self.store.token_data(idx);
             for (slot, q) in buf.iter_mut().zip(qrow.iter()) {
-                *slot = (*q as f32) * scale;
+                *slot = f32::from(*q) * scale;
             }
             for (j, &bj) in buf.iter().enumerate() {
                 let row = &mut self.corpus_sq_sum[j * dim..(j + 1) * dim];
@@ -968,7 +974,7 @@ fn compute_whitening_matrix(cov: &[f32], dim: usize) -> Option<Vec<f32>> {
         return None;
     }
 
-    let mat = Mat::from_fn(dim, dim, |i, j| cov[i * dim + j] as f64);
+    let mat = Mat::from_fn(dim, dim, |i, j| f64::from(cov[i * dim + j]));
     let eigen = mat.self_adjoint_eigen(faer::Side::Lower).ok()?;
     let s_diag = eigen.S();
     let u_mat = eigen.U();
@@ -1036,6 +1042,7 @@ pub const DIM_IDX: usize = 33;
 ///
 /// The encoded buffer is designed to survive Q4 round-trip via the storage
 /// layer. See [`HEADER_SIZE`] for the precise contract.
+#[must_use]
 pub fn encode_per_token_keys(token_keys: &[&[f32]]) -> Vec<f32> {
     if token_keys.is_empty() {
         return Vec::new();
@@ -1081,6 +1088,7 @@ pub fn encode_per_token_keys(token_keys: &[&[f32]]) -> Vec<f32> {
 /// because Q4 only changes per-value precision, not buffer length. Together
 /// `(dim, data.len())` are sufficient to recover `n`, so the header
 /// `n_tokens` field is informational only.
+#[must_use]
 pub fn decode_per_token_keys(encoded: &[f32]) -> Option<(usize, usize, &[f32])> {
     if encoded.len() < HEADER_SIZE {
         return None;

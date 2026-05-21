@@ -1084,7 +1084,7 @@ fn test_write_pack_stores_all_layers() {
         layers: (0..12)
             .map(|i| KVLayerPayload {
                 layer_idx: i,
-                data: vec![i as f32 * 0.1; 64], // dummy K+V payload
+                data: vec![f32::from(i) * 0.1; 64], // dummy K+V payload
             })
             .collect(),
         salience: 80.0,
@@ -1110,7 +1110,7 @@ fn test_read_pack_returns_complete_kv() {
         owner: 1,
         retrieval_key,
         layers: (0..4)
-            .map(|i| KVLayerPayload { layer_idx: i, data: vec![(i + 1) as f32; 32] })
+            .map(|i| KVLayerPayload { layer_idx: i, data: vec![f32::from(i + 1); 32] })
             .collect(),
         salience: 80.0,
         text: None,
@@ -1676,19 +1676,19 @@ fn test_pack_layer_hydration_preserves_layer_order() {
         layers: vec![
             KVLayerPayload {
                 layer_idx: OUT_OF_ORDER_LAYER_A,
-                data: vec![OUT_OF_ORDER_LAYER_A as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+                data: vec![f32::from(OUT_OF_ORDER_LAYER_A); TEST_PACK_LAYER_PAYLOAD_DIM],
             },
             KVLayerPayload {
                 layer_idx: OUT_OF_ORDER_LAYER_B,
-                data: vec![OUT_OF_ORDER_LAYER_B as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+                data: vec![f32::from(OUT_OF_ORDER_LAYER_B); TEST_PACK_LAYER_PAYLOAD_DIM],
             },
             KVLayerPayload {
                 layer_idx: OUT_OF_ORDER_LAYER_C,
-                data: vec![OUT_OF_ORDER_LAYER_C as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+                data: vec![f32::from(OUT_OF_ORDER_LAYER_C); TEST_PACK_LAYER_PAYLOAD_DIM],
             },
             KVLayerPayload {
                 layer_idx: OUT_OF_ORDER_LAYER_D,
-                data: vec![OUT_OF_ORDER_LAYER_D as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+                data: vec![f32::from(OUT_OF_ORDER_LAYER_D); TEST_PACK_LAYER_PAYLOAD_DIM],
             },
         ],
         salience: TEST_PACK_SALIENCE,
@@ -1737,7 +1737,7 @@ fn test_pack_materialization_updates_governance_once_per_returned_pack() {
         layers: (0..GOVERNANCE_PACK_LAYER_COUNT as u16)
             .map(|i| KVLayerPayload {
                 layer_idx: i,
-                data: vec![i as f32; TEST_PACK_LAYER_PAYLOAD_DIM],
+                data: vec![f32::from(i); TEST_PACK_LAYER_PAYLOAD_DIM],
             })
             .collect(),
         salience: GOVERNANCE_SALIENCE,
@@ -1809,7 +1809,9 @@ fn test_load_pack_by_id_returns_complete_pack() {
         id: 0,
         owner: 1,
         retrieval_key: key,
-        layers: (0..4).map(|i| KVLayerPayload { layer_idx: i, data: vec![i as f32; 16] }).collect(),
+        layers: (0..4)
+            .map(|i| KVLayerPayload { layer_idx: i, data: vec![f32::from(i); 16] })
+            .collect(),
         salience: 80.0,
         text: None,
     };
@@ -2359,14 +2361,17 @@ fn test_delete_pack_preserves_other_packs() {
     let mut engine = Engine::open(dir.path()).unwrap();
     let mut ids = Vec::new();
     for i in 0u8..3 {
-        let key = encode_per_token_keys(&[&[i as f32, 0.0, 0.0, 0.0]]);
+        let key = encode_per_token_keys(&[&[f32::from(i), 0.0, 0.0, 0.0]]);
         ids.push(
             engine
                 .mem_write_pack(&KVPack {
                     id: 0,
                     owner: 1,
                     retrieval_key: key,
-                    layers: vec![KVLayerPayload { layer_idx: 0, data: vec![i as f32 + 1.0; 16] }],
+                    layers: vec![KVLayerPayload {
+                        layer_idx: 0,
+                        data: vec![f32::from(i) + 1.0; 16],
+                    }],
                     salience: 80.0,
                     text: Some(format!("Pack {i}")),
                 })
@@ -2399,7 +2404,7 @@ fn refresh_test_pack(seed: f32) -> KVPack {
         owner: 1,
         retrieval_key,
         layers: (0..4)
-            .map(|i| KVLayerPayload { layer_idx: i, data: vec![seed + i as f32; 32] })
+            .map(|i| KVLayerPayload { layer_idx: i, data: vec![seed + f32::from(i); 32] })
             .collect(),
         salience: 80.0,
         text: None,

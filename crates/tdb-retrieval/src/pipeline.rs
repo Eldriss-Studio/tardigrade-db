@@ -29,6 +29,7 @@ pub struct RetrieverPipeline {
 
 impl RetrieverPipeline {
     /// Create an empty pipeline.
+    #[must_use]
     pub fn new() -> Self {
         Self { stages: Vec::new(), oversample_factor: 2 }
     }
@@ -107,6 +108,7 @@ impl RetrieverPipeline {
     }
 
     /// Number of stages in the pipeline.
+    #[must_use]
     pub fn stage_count(&self) -> usize {
         self.stages.len()
     }

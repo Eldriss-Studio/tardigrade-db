@@ -25,16 +25,19 @@ pub struct TierStateMachine {
 }
 
 impl TierStateMachine {
+    #[must_use]
     pub fn new() -> Self {
         Self { current: Tier::Draft }
     }
 
     /// Create a state machine starting at a specific tier.
+    #[must_use]
     pub fn with_tier(tier: Tier) -> Self {
         Self { current: tier }
     }
 
     /// Current tier.
+    #[must_use]
     pub fn current(&self) -> Tier {
         self.current
     }

@@ -184,6 +184,7 @@ impl RefinementStrategy for WhiteningStrategy {
 ///
 /// Accepted names: `"none"`, `"centered"` / `"mean_centered"`, `"prf"` / `"latent_prf"`.
 /// Returns `None` for unrecognized names.
+#[must_use]
 pub fn strategy_from_name(
     name: &str,
     alpha: Option<f32>,

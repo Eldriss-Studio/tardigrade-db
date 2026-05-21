@@ -99,6 +99,7 @@ impl SynapticStore {
     }
 
     /// Number of entries in the store.
+    #[must_use]
     pub fn entry_count(&self) -> usize {
         self.index.len()
     }
@@ -112,7 +113,7 @@ fn scan_entries(path: &Path) -> io::Result<Vec<(u64, OwnerId, u64)>> {
 
     while pos + 4 <= file_len {
         let record_len = match read_u32(&mut file) {
-            Ok(len) => len as u64,
+            Ok(len) => u64::from(len),
             Err(_) => break,
         };
 
