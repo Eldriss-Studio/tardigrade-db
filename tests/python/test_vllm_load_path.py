@@ -505,7 +505,6 @@ def _build_bare_connector_for_scheduler(tmp_path, embed_dim=8):
     c._load_packs = {}
     c._load_meta = {}
     c._save_buffers = {}
-    c._pack_id_by_fingerprint = {}
     c._embed_weights = None
     c._match_threshold = 1.0  # low threshold so any positive match counts
     c.hidden_size = embed_dim
@@ -653,13 +652,13 @@ def _build_connector_for_save_path(tmp_path, max_fingerprints=4):
     only the attributes wait_for_save touches.
     """
     import tardigrade_db
-    from collections import OrderedDict
 
     pytest.importorskip("vllm", reason="vLLM not installed")
     from tardigrade_vllm.connector import TardigradeConnector
 
     c = TardigradeConnector.__new__(TardigradeConnector)
     c.engine = tardigrade_db.Engine(str(tmp_path))
+    c.engine.set_fingerprint_capacity(max_fingerprints)
     c.owner = 1
     c.kv_dim = 8
     c.num_kv_heads = 2
@@ -670,7 +669,6 @@ def _build_connector_for_save_path(tmp_path, max_fingerprints=4):
     c._load_packs = {}
     c._load_meta = {}
     c._save_buffers = {}
-    c._pack_id_by_fingerprint = OrderedDict()
     c._save_token_ids_by_fingerprint = {}
     c._max_fingerprints = max_fingerprints
     c._embed_weights = np.random.RandomState(42).randn(1000, 8).astype(np.float32)
@@ -730,15 +728,15 @@ def test_fingerprint_map_bounded_after_many_requests(tmp_path):
     """GIVEN a connector with max_num_seqs=4
     AND 20 sequential requests each completing save_kv_layer + wait_for_save
     WHEN all 20 have completed
-    THEN len(_pack_id_by_fingerprint) <= 4"""
+    THEN engine.fingerprint_len() <= 4"""
     c = _build_connector_for_save_path(tmp_path, max_fingerprints=4)
 
     for i in range(20):
         _simulate_save_cycle(c, batch_idx=0, block_index=100 + i)
 
-    assert len(c._pack_id_by_fingerprint) <= 4, (
+    assert c.engine.fingerprint_len() <= 4, (
         f"Fingerprint map should be bounded to max_num_seqs=4, "
-        f"got {len(c._pack_id_by_fingerprint)}"
+        f"got {c.engine.fingerprint_len()}"
     )
 
 
@@ -753,13 +751,13 @@ def test_stale_fingerprint_eviction_prevents_wrong_pack_deletion(tmp_path):
 
     # Request A writes with fingerprint=5
     _simulate_save_cycle(c, batch_idx=0, block_index=5)
-    pack_a = c._pack_id_by_fingerprint.get(5)
+    pack_a = c.engine.fingerprint_get(5)
     assert pack_a is not None, "Request A should have written a pack"
 
     # Evict A by filling the map past capacity
     _simulate_save_cycle(c, batch_idx=0, block_index=100)
     _simulate_save_cycle(c, batch_idx=0, block_index=101)
-    assert 5 not in c._pack_id_by_fingerprint, (
+    assert c.engine.fingerprint_get(5) is None, (
         "Fingerprint 5 should have been evicted"
     )
 
@@ -771,7 +769,7 @@ def test_stale_fingerprint_eviction_prevents_wrong_pack_deletion(tmp_path):
 
     # Request B gets the same block_index=5 (block reuse after A finished)
     _simulate_save_cycle(c, batch_idx=0, block_index=5)
-    pack_b = c._pack_id_by_fingerprint.get(5)
+    pack_b = c.engine.fingerprint_get(5)
     assert pack_b is not None, "Request B should have written a pack"
     assert pack_b != pack_a, "B should have a different pack_id than A"
 
@@ -796,17 +794,19 @@ def test_live_request_fingerprint_survives_eviction_of_others(tmp_path):
     for i, fp in enumerate([10, 20, 30, 40]):
         _simulate_save_cycle(c, batch_idx=0, block_index=fp)
 
-    assert len(c._pack_id_by_fingerprint) == 4
-    assert 10 in c._pack_id_by_fingerprint  # A is oldest
+    assert c.engine.fingerprint_len() == 4
+    # Don't peek fp=10 here — fingerprint_get promotes it to most-recent
+    # and would change which entry the next insert evicts. The eviction
+    # assertion below is the behavioural check.
 
     # Request E arrives — should evict A (oldest)
     _simulate_save_cycle(c, batch_idx=0, block_index=50)
 
-    assert 10 not in c._pack_id_by_fingerprint, "A (oldest) should be evicted"
-    assert 20 in c._pack_id_by_fingerprint, "B should survive"
-    assert 30 in c._pack_id_by_fingerprint, "C should survive"
-    assert 40 in c._pack_id_by_fingerprint, "D should survive"
-    assert 50 in c._pack_id_by_fingerprint, "E should be present"
+    assert c.engine.fingerprint_get(10) is None, "A (oldest) should be evicted"
+    assert c.engine.fingerprint_get(20) is not None, "B should survive"
+    assert c.engine.fingerprint_get(30) is not None, "C should survive"
+    assert c.engine.fingerprint_get(40) is not None, "D should survive"
+    assert c.engine.fingerprint_get(50) is not None, "E should be present"
 
 
 # -- Metadata Bridge (DTO pattern) -----------------------------------

@@ -1184,6 +1184,44 @@ impl Engine {
         Ok(key.map(|v| numpy::PyArray1::from_vec(py, v).into_any().unbind()))
     }
 
+    /// Configure (or resize) the engine-side fingerprint LRU cache.
+    ///
+    /// `capacity` matches the vLLM scheduler's `max_num_seqs` in
+    /// practice — keeps the cache exactly large enough to hold every
+    /// concurrently in-flight request and no larger, so a finished
+    /// request's fingerprint cannot survive into a new request that
+    /// reuses the same block id.
+    fn set_fingerprint_capacity(&self, capacity: usize) -> PyResult<()> {
+        lock_engine(&self.inner)?.set_fingerprint_capacity(capacity);
+        Ok(())
+    }
+
+    /// Lookup the pack id last written for this fingerprint.
+    /// Returns `None` when absent or when the cache has not been
+    /// sized yet via [`Engine::set_fingerprint_capacity`].
+    fn fingerprint_get(&self, fingerprint: u64) -> PyResult<Option<u64>> {
+        Ok(lock_engine(&self.inner)?.fingerprint_get(fingerprint))
+    }
+
+    /// Store `pack_id` for this fingerprint, evicting the LRU entry
+    /// when the cache is full.
+    fn fingerprint_put(&self, fingerprint: u64, pack_id: u64) -> PyResult<()> {
+        lock_engine(&self.inner)?.fingerprint_put(fingerprint, pack_id);
+        Ok(())
+    }
+
+    /// Drop the entry for this fingerprint (no-op when absent).
+    /// Call from the connector's `request_finished` lifecycle hook.
+    fn fingerprint_release(&self, fingerprint: u64) -> PyResult<()> {
+        lock_engine(&self.inner)?.fingerprint_release(fingerprint);
+        Ok(())
+    }
+
+    /// Current number of fingerprint entries (observability hook).
+    fn fingerprint_len(&self) -> PyResult<usize> {
+        Ok(lock_engine(&self.inner)?.fingerprint_len())
+    }
+
     /// Enumerate all packs as a list of dicts, with text included.
     ///
     /// Returns a list of dicts with keys: `pack_id`, `owner`, `tier`, `importance`, `text`.

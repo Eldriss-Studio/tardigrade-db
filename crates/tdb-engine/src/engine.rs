@@ -272,6 +272,13 @@ pub struct Engine {
     /// strategy. Required only when callers explicitly select that
     /// strategy; the other two strategies do not use it.
     projection_matrix: Option<(Vec<f32>, usize, usize)>,
+    /// Process-local LRU cache keyed by request fingerprint
+    /// (vLLM connector: first block index). Bounded to
+    /// `max_num_seqs` to keep memory cost predictable and to
+    /// guarantee stale entries from completed requests are evicted
+    /// before they can collide with a new request reusing the same
+    /// block id. `None` until [`Engine::set_fingerprint_capacity`].
+    fingerprint_cache: Option<lru::LruCache<u64, u64>>,
 }
 
 /// Configuration for the optional streaming-ingest write buffer.
@@ -514,6 +521,54 @@ impl Engine {
         Ok(out)
     }
 
+    /// Configure (or resize) the fingerprint LRU cache. Sized to
+    /// `max_num_seqs` in practice — matches vLLM's per-engine slot
+    /// bound, guaranteeing a finished request's fingerprint is
+    /// evicted before its block id can be reused by a new one.
+    pub fn set_fingerprint_capacity(&mut self, capacity: usize) {
+        if capacity == 0 {
+            self.fingerprint_cache = None;
+            return;
+        }
+        let cap = std::num::NonZeroUsize::new(capacity).expect("capacity > 0");
+        match self.fingerprint_cache.as_mut() {
+            Some(cache) => cache.resize(cap),
+            None => self.fingerprint_cache = Some(lru::LruCache::new(cap)),
+        }
+    }
+
+    /// Look up the pack id last written for this fingerprint.
+    /// Promotes the entry to most-recently-used on hit.
+    pub fn fingerprint_get(&mut self, fingerprint: u64) -> Option<u64> {
+        self.fingerprint_cache.as_mut()?.get(&fingerprint).copied()
+    }
+
+    /// Store `pack_id` for this fingerprint. Evicts the LRU entry
+    /// when the cache is full.
+    ///
+    /// No-op when [`Engine::set_fingerprint_capacity`] has not been
+    /// called yet; callers are expected to configure capacity before
+    /// using the cache.
+    pub fn fingerprint_put(&mut self, fingerprint: u64, pack_id: u64) {
+        if let Some(cache) = self.fingerprint_cache.as_mut() {
+            cache.put(fingerprint, pack_id);
+        }
+    }
+
+    /// Drop the entry for this fingerprint (no-op when absent).
+    /// Called from the connector's `request_finished` lifecycle hook
+    /// to prevent stale-block-id collisions.
+    pub fn fingerprint_release(&mut self, fingerprint: u64) {
+        if let Some(cache) = self.fingerprint_cache.as_mut() {
+            cache.pop(&fingerprint);
+        }
+    }
+
+    /// Current number of fingerprint entries (observability hook).
+    pub fn fingerprint_len(&self) -> usize {
+        self.fingerprint_cache.as_ref().map_or(0, lru::LruCache::len)
+    }
+
     /// Replace the refinement strategy with a trait object directly (Strategy pattern).
     pub fn set_refinement_strategy(
         &mut self,
@@ -603,6 +658,7 @@ impl Engine {
             embedding_table: None,
             embedding_table_loads: 0,
             projection_matrix: None,
+            fingerprint_cache: None,
         };
 
         engine.refresh()?;

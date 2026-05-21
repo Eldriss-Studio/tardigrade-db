@@ -25,7 +25,6 @@ Configuration via engine_args:
 import logging
 import os
 import sys
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -206,15 +205,16 @@ if HAS_VLLM:
             # latest snapshot.
             self._save_buffers: dict = {}  # batch_index → {layer_idx: (kv_layer, BatchSlice)}
 
-            # Bounded Cache: maps live request fingerprints (block_indices[0])
-            # to the pack_id last written. LRU eviction at max_num_seqs
-            # capacity prevents unbounded growth and stale-fingerprint
-            # collisions after block reuse.
-            self._pack_id_by_fingerprint: OrderedDict[int, int] = OrderedDict()
+            # Engine-owned LRU fingerprint cache: maps live request
+            # fingerprints (block_indices[0]) to the pack_id last
+            # written. Capacity = max_num_seqs guarantees a finished
+            # request's fingerprint is evicted before its block id
+            # can be reused by a new request.
             self._max_fingerprints = getattr(
                 getattr(vllm_config, "scheduler_config", None),
                 "max_num_seqs", 256
             )
+            self.engine.set_fingerprint_capacity(self._max_fingerprints)
 
             self._load_packs = {}  # request_id → {pack_data, seq_len}
             self._load_meta = {}  # request_id → {block_ids, num_tokens}
@@ -569,7 +569,7 @@ if HAS_VLLM:
                 )
 
                 # Drop the previous pack for this request, if any.
-                prior = self._pack_id_by_fingerprint.get(fingerprint)
+                prior = self.engine.fingerprint_get(fingerprint)
                 if prior is not None:
                     try:
                         self.engine.delete_pack(prior)
@@ -578,10 +578,7 @@ if HAS_VLLM:
 
                 pack_id = self._write_pack_for_batch(layer_buf, fingerprint)
                 if pack_id is not None:
-                    self._pack_id_by_fingerprint[fingerprint] = pack_id
-                    self._pack_id_by_fingerprint.move_to_end(fingerprint)
-                    while len(self._pack_id_by_fingerprint) > self._max_fingerprints:
-                        self._pack_id_by_fingerprint.popitem(last=False)
+                    self.engine.fingerprint_put(fingerprint, pack_id)
 
             self._save_buffers.clear()
 
@@ -726,6 +723,12 @@ if HAS_VLLM:
                 if first_blocks:
                     fp = first_blocks[0] if isinstance(first_blocks, list) else first_blocks
                     self._save_token_ids_by_fingerprint.pop(fp, None)
+                    # Release the engine-side fingerprint entry so a new
+                    # request reusing this block id cannot read stale state.
+                    try:
+                        self.engine.fingerprint_release(int(fp))
+                    except (TypeError, ValueError, OverflowError) as e:
+                        logger.debug(f"request_finished: fingerprint_release({fp!r}) failed: {e!r}")
             return False, None
 
         def shutdown(self) -> None:
