@@ -8,7 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_no changes yet_
+### Documentation
+
+- **README**: revised seven sections through the new `/write-docs` skill's
+  craft layer (curse of knowledge, classic style, context-where-it-lands).
+  The opening pitch leads with the reader's pain (three round trips per
+  fact recalled, context window fills as the agent learns) before naming
+  the implementation. The hero example pre-announces the CUDA prereq and
+  points CPU users at `examples/e2e_demo.py`. The "Why TardigradeDB?"
+  section spells out what a "text round-trip" actually costs instead of
+  assuming the reader has already named the inefficiency. The "Isn't this
+  just a KV cache?" FAQ entry was a 60-word run-on listing six
+  distinctions in one sentence; broken into two paragraphs that each
+  carry one idea. The "Why 'Tardigrade'?" entry traded four brand-pitch
+  bullets for a paragraph that actually tells the tardigrade-biology
+  parallel. The Project Status second bullet now leads with the verdict
+  ("HuggingFace direct injection works today; vLLM is partial because
+  KV Connector v1 is prefix-cache only") instead of with the framing.
+  Quick Start now opens with "Is this a Rust library or a Python
+  library?" — the integration story (Rust engine, Python API, why the
+  split, no Rust crate to depend on from a third-party Rust app today)
+  before the install commands. The subsection headings switched from
+  audience labels ("Python users", "Rust contributors") to intent labels
+  ("Using TardigradeDB from Python", "Building TardigradeDB from source")
+  so a reader who wants to *use* it from Rust isn't accidentally routed
+  into the contributor path.
 
 ## [0.7.1] — 2026-05-21
 

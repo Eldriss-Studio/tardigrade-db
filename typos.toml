@@ -12,5 +12,10 @@ Asai = "Asai"
 # Ned — dog's name in LoCoMo eval dataset Q&A pairs
 Ned = "Ned"
 
+[default.extend-identifiers]
+# flate2 — the de-facto Rust compression crate. typos splits the
+# identifier on digits and reads "flate" as a typo of "flat".
+flate2 = "flate2"
+
 [files]
 extend-exclude = ["Cargo.lock", "*.bin", "*.ptx", "*.cubin", "_session_backup/"]

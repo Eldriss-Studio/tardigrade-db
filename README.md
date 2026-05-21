@@ -8,9 +8,11 @@
 
 > **TardigradeDB v0.7.1 is a research-grade preview.** Public APIs are stable; benchmark methodology is under active validation.
 
-A persistent KV-cache memory engine for LLMs. Store the model's own internal attention state, retrieve it later with attention-native scoring, and inject it back into the model without spending prompt tokens. Built from scratch in Rust with PyO3 Python bindings.
+Most LLM memory systems run a separate embedding model on every store and every query, then re-tokenize the retrieved text into the prompt — three round trips per fact recalled, and a context window that fills as the agent learns. TardigradeDB skips both detours. It stores the model's own attention state (the KV cache), retrieves it via the same dot-product attention the model uses to think, and reinjects it without spending a single prompt token. Built from scratch in Rust with PyO3 Python bindings.
 
 ## Hero example
+
+This example needs a CUDA-capable GPU with ~2 GB free. To run on CPU, see [`examples/e2e_demo.py`](examples/e2e_demo.py), which uses GPT-2.
 
 ```python
 import torch
@@ -33,12 +35,12 @@ kps.store("User prefers morning meetings")
 # Retrieve it later — the model "remembers" without the text in the prompt
 text, prompt_tokens, had_memory = kps.generate("When should we meet?")
 # prompt_tokens is ~46% lower than the equivalent text-RAG path,
-# output is byte-identical.
+# and the output is byte-identical to having the fact in the prompt.
 ```
 
 ## Why TardigradeDB?
 
-Embedding RAG asks an LLM to read text retrieved by a *different* model. TardigradeDB skips the text round-trip: it stores the LLM's own hidden-state tensors and reinjects them directly into attention. The model searches its own memories using its internal activations — no translator model, no prompt tokens consumed on injection.
+Embedding RAG asks one LLM to read text retrieved by a *different* model that was trained to embed text. There's a translator in the middle. Every fact your agent stores costs an embedding call; every fact it recalls costs another embedding call and then a re-tokenization back into the prompt. TardigradeDB cuts the translator out. It stores the LLM's own hidden-state tensors and reinjects them directly into attention. The model searches its own memories using its internal activations — no translator model, no prompt tokens consumed on injection.
 
 **Use TardigradeDB when** you need persistent memory across LLM sessions and care about latency / context-window cost. **Reach for embedding RAG when** your problem is "find the right document chunk and paste it into a prompt" — embedding RAG is more mature and stronger at vague-query text retrieval today.
 
@@ -104,17 +106,29 @@ Full design: [`docs/architecture.md`](docs/architecture.md).
 
 ## Quick Start
 
-### Python users — install from PyPI
+### Is this a Rust library or a Python library?
+
+Both, but not equally. The engine — storage, retrieval, governance, indexing — is a Rust workspace. Consumers reach it through PyO3 bindings that ship as a Python wheel. We put the engine in Rust for the latency and footprint reasons the [Architecture](#architecture) section covers, and we put the consumer surface in Python because that's where the LLM ecosystem lives: HuggingFace `transformers`, vLLM, the agent frameworks, the calibration tools, the notebooks.
+
+The practical consequence is that **`pip install tardigrade-db` is the install command for everyone using the library**, regardless of whether you write Rust elsewhere. There is no separate Rust crate to depend on from your own Rust application today — the workspace crates are unpublished (`publish = false`) and not designed as a third-party Rust API. If you want TardigradeDB inside a Rust binary, the options are to embed a Python interpreter, to fork and `path = "..."` the workspace, or to wait for the crates to land on crates.io ([roadmap](docs/roadmap.md)).
+
+Two paths follow.
+
+### Using TardigradeDB from Python
+
+This is the path for almost everyone — anyone storing and retrieving KV memory from a HuggingFace model, a vLLM serving deployment, an agent framework, or a notebook.
 
 ```bash
 pip install tardigrade-db
-# For HuggingFace injection examples:
+# Only if you'll run the HuggingFace injection examples:
 pip install transformers torch
 ```
 
-Then drop the hero example into a Python file and run it.
+Then drop the [hero example](#hero-example) into a Python file and run it. For more usage patterns, see [`docs/guide/python-api.md`](docs/guide/python-api.md) (the `TardigradeClient` facade) and [`docs/guide/knowledge-pack-store.md`](docs/guide/knowledge-pack-store.md) (direct HuggingFace injection).
 
-### Rust contributors — build from source
+### Building TardigradeDB from source
+
+This is the path if you're contributing to the engine, hacking on the Python bindings, or want to run the end-to-end demo on a CPU-only box.
 
 ```bash
 git clone https://github.com/Eldriss-Studio/tardigrade-db.git
@@ -123,7 +137,7 @@ lefthook install
 just ci        # fmt + lint + typos + test + deny + doc
 ```
 
-Python bindings:
+Rebuild the Python bindings against your local changes:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -132,7 +146,7 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop
 pytest tests/python/ -v -m "not gpu"
 ```
 
-End-to-end GPT-2 demo (validates the full persistence / retrieval loop):
+Run the end-to-end GPT-2 demo (CPU-friendly; validates the full persistence and retrieval loop without needing a GPU):
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -140,7 +154,7 @@ pip install transformers
 python examples/e2e_demo.py
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor workflow (CI gates, benchmarks, MSRV, reliability contracts).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor workflow — CI gates, benchmarks, MSRV, reliability contracts, working with Claude.
 
 ## Project Status
 
@@ -153,7 +167,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor workflow (CI g
 
 **Under active validation:**
 - LoCoMo / LongMemEval benchmark methodology — earlier headline numbers (68.2 % LoCoMo / 90.9 % LongMemEval) were **retracted on 2026-05-14** after an audit found the runs measured the lexical fallback adapter on a corpus corrupted by a dataset-prep bug. Honest native-engine number on clean LoCoMo: ~36 % R@1 at 50-item scale; full-corpus re-measurement pending. Synthetic-corpus results (100 % recall at 5K, vague-query refinement, KV injection on gibberish facts, cross-model retrieval) are unaffected. Full record: [`docs/experiments/2026-05-14-bench-audit.md`](docs/experiments/2026-05-14-bench-audit.md).
-- GPU integration paths to production (HuggingFace direct injection works; vLLM custom-attention plugin is future work). See [`docs/roadmap.md`](docs/roadmap.md).
+- Production serving. HuggingFace direct injection works today via `KnowledgePackStore`. vLLM is partial: the official KV Connector v1 supports prefix-cache acceleration (a real win on repeated prompts), but cross-prompt KV injection — the thing that lets the model behave as if it had lived through prior conversations — would need a custom attention plugin, which is future work. See [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Documentation map
 
@@ -185,16 +199,13 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor workflow (CI g
 
 ### Why "Tardigrade"?
 
-Four design pillars borrowed from the animal:
-
-- **Cryptobiosis → dormant memory revival.** Quantized KV state can be persisted, then "reanimated" by retrieval and reinjection later.
-- **Resilience under stress → recovery-first design.** WAL + rebuildable derived state + fail-fast replay boundaries.
-- **Tiny footprint → compressed survival.** Q4 / Q8 compression keeps memory practical under constrained capacity.
-- **Adaptive survival → memory lifecycle control.** AKL promotion / demotion / decay keeps useful memory active and stale memory fading.
+Tardigrades survive what kills most things. They dehydrate to near-zero metabolism — cryptobiosis — and rehydrate years later. That's the same trick the engine plays with quantized KV state: a memory cell can be persisted to disk and reanimated by retrieval and reinjection later, even after the process that wrote it is gone. Tardigrades also survive radiation, vacuum, and crushing pressure, which is the recovery-first instinct behind the WAL, the rebuildable derived state, and the fail-fast replay model. They're tiny — about half a millimetre — which matches the engine's per-cell footprint of around 751 bytes on disk. And they adapt: organisms that aren't useful in a given environment don't last. The Adaptive Knowledge Lifecycle does the same thing for memory cells, promoting the ones that get used and decaying the ones that don't.
 
 ### Isn't this just a KV cache?
 
-Yes at the data level; no at the system level. A raw KV cache is append-and-replay state for one running model session. TardigradeDB stores KV tensors, but behaves like a managed long-term memory kernel: attention-native semantic retrieval (not text keyword overlap), selective injection (not full-history replay), durable Q4 persistence across sessions (not process-local ephemerality), lifecycle governance (not unmanaged growth), a causal Trace + WAL recovery model, and a cross-agent boundary via a shared engine API.
+Yes at the data level; no at the system level. A raw KV cache is append-and-replay state for one running model session — it lives in GPU memory while the model is generating, and it disappears when generation ends.
+
+TardigradeDB stores the same kind of tensors but treats them as a managed long-term memory kernel. Retrieval is attention-native and semantic, not keyword overlap on text. Injection is selective — only the relevant slices, not a full-history replay. Persistence is durable across sessions through Q4 compression, not process-local ephemerality. Lifecycle is governed by importance, tier, and decay rather than unmanaged growth. And because memory cells are owner-scoped, the same engine can serve multiple agents without one's memories leaking into another's.
 
 ### How does it compare to embedding RAG and a traditional KV cache?
 
