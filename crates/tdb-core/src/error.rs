@@ -197,6 +197,18 @@ pub enum TardigradeError {
         )
     )]
     EmptyTokenMatrix { n_tokens: usize, dim: usize, buffer_len: usize },
+
+    /// Generic input-validation failure. Surfaces as a `ValueError` on the
+    /// Python side. Reach for one of the typed variants above when the
+    /// shape of the failure is stable; use this when the call simply
+    /// disagrees with the API contract (unknown strategy name, mutually
+    /// exclusive flags set together, etc.).
+    #[error("invalid argument: {0}")]
+    #[diagnostic(
+        code(tdb::api::invalid_argument),
+        help("check the caller's arguments against the API contract")
+    )]
+    InvalidArgument(String),
 }
 
 pub type Result<T> = std::result::Result<T, TardigradeError>;

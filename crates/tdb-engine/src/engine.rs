@@ -259,6 +259,19 @@ pub struct Engine {
     /// Durable action scheduler. Persists pending actions to a
     /// JSON sidecar so a scheduled action survives engine reopen.
     scheduler: crate::scheduler::Scheduler,
+    /// Token-embedding table for the lightweight retrieval-key path
+    /// (vLLM scheduler side: no hidden states, only token IDs).
+    /// Lazily loaded by [`Engine::load_embedding_table`]; `None` until
+    /// the consumer pushes the weights in.
+    embedding_table: Option<tdb_retrieval::retrieval_key::EmbeddingTable>,
+    /// Process-local counter of [`Engine::load_embedding_table`] calls.
+    /// Used by observability tests to assert the table is loaded
+    /// once and reused across many `compute_retrieval_key` invocations.
+    embedding_table_loads: u64,
+    /// Optional projection matrix for the `"projected"` retrieval-key
+    /// strategy. Required only when callers explicitly select that
+    /// strategy; the other two strategies do not use it.
+    projection_matrix: Option<(Vec<f32>, usize, usize)>,
 }
 
 /// Configuration for the optional streaming-ingest write buffer.
@@ -343,6 +356,80 @@ impl Engine {
             }
         };
         self.refinement_strategy = strategy;
+    }
+
+    /// Load the model's token-embedding table into the engine.
+    ///
+    /// Used by the vLLM connector path where the scheduler does not have
+    /// hidden states but does have token IDs. The table is taken as a flat
+    /// row-major `Vec<f32>` of length `vocab_size * hidden_size`. Repeated
+    /// calls replace the previous table; the load counter is incremented
+    /// once per call (observability: assert one load across many computes).
+    pub fn load_embedding_table(
+        &mut self,
+        weights: Vec<f32>,
+        vocab_size: usize,
+        hidden_size: usize,
+    ) {
+        self.embedding_table = Some(tdb_retrieval::retrieval_key::EmbeddingTable::new(
+            weights,
+            vocab_size,
+            hidden_size,
+        ));
+        self.embedding_table_loads += 1;
+    }
+
+    /// Number of times [`Engine::load_embedding_table`] has been called.
+    pub fn embedding_table_load_count(&self) -> u64 {
+        self.embedding_table_loads
+    }
+
+    /// Install a projection matrix for the `"projected"` retrieval-key
+    /// strategy. `matrix` is row-major `kv_dim × hidden_size`.
+    pub fn set_projection_matrix(&mut self, matrix: Vec<f32>, kv_dim: usize, hidden_size: usize) {
+        assert_eq!(matrix.len(), kv_dim * hidden_size);
+        self.projection_matrix = Some((matrix, kv_dim, hidden_size));
+    }
+
+    /// Compute a retrieval key from token IDs via the named strategy.
+    ///
+    /// Returns `None` when the embedding table has not been loaded, when
+    /// `token_ids` is empty, or when every token id is out of vocabulary
+    /// range. Returns `Err(InvalidArgument)` when `strategy` is not one
+    /// of `"last_token"`, `"mean_pool"`, `"projected"`.
+    pub fn compute_retrieval_key(
+        &self,
+        token_ids: &[i64],
+        strategy: &str,
+    ) -> Result<Option<Vec<f32>>> {
+        use tdb_retrieval::retrieval_key::{
+            LastTokenStrategy, MeanPoolStrategy, ProjectedStrategy, RetrievalKeyStrategy,
+        };
+
+        let Some(table) = self.embedding_table.as_ref() else {
+            return Ok(None);
+        };
+
+        let result = match strategy {
+            "last_token" => LastTokenStrategy.compute(token_ids, table),
+            "mean_pool" => MeanPoolStrategy.compute(token_ids, table),
+            "projected" => {
+                let (matrix, kv_dim, hidden_size) =
+                    self.projection_matrix.as_ref().ok_or_else(|| {
+                        TardigradeError::InvalidArgument(
+                            "projected strategy requires set_projection_matrix() first".into(),
+                        )
+                    })?;
+                ProjectedStrategy::new(matrix.clone(), *kv_dim, *hidden_size)
+                    .compute(token_ids, table)
+            }
+            other => {
+                return Err(TardigradeError::InvalidArgument(format!(
+                    "unknown retrieval-key strategy: {other:?} (expected last_token | mean_pool | projected)"
+                )));
+            }
+        };
+        Ok(result)
     }
 
     /// Replace the refinement strategy with a trait object directly (Strategy pattern).
@@ -431,6 +518,9 @@ impl Engine {
             token_reweighting: false,
             write_buffer: None,
             scheduler: crate::scheduler::Scheduler::open(dir)?,
+            embedding_table: None,
+            embedding_table_loads: 0,
+            projection_matrix: None,
         };
 
         engine.refresh()?;

@@ -172,18 +172,31 @@ if HAS_VLLM:
 
             from tardigrade_vllm.retrieval_key import (
                 LAST_TOKEN_EMBEDDING,
+                MEAN_POOL_EMBEDDING,
+                LastTokenEmbeddingStrategy,
+                MeanPoolEmbeddingStrategy,
                 check_key_alignment,
-                get_strategy,
             )
 
+            def _build_strategy(name):
+                if name == LAST_TOKEN_EMBEDDING:
+                    return LastTokenEmbeddingStrategy()
+                if name == MEAN_POOL_EMBEDDING:
+                    return MeanPoolEmbeddingStrategy()
+                raise ValueError(
+                    f"Unknown retrieval_key_strategy: {name!r}. "
+                    f"Expected: {LAST_TOKEN_EMBEDDING!r} or {MEAN_POOL_EMBEDDING!r}."
+                )
+
             strategy_name = config.get("retrieval_key_strategy", LAST_TOKEN_EMBEDDING)
-            self._retrieval_key_strategy = get_strategy(strategy_name)
+            self._retrieval_key_strategy = _build_strategy(strategy_name)
             check_key_alignment(self.hidden_size, self.kv_dim)
 
             # Load embedding table for lightweight retrieval key computation.
             # The scheduler doesn't have hidden states — only token IDs.
             # We use the embedding table to convert tokens → vectors cheaply.
             self._embed_weights = None  # lazy-loaded from model weights
+            self._embedding_table_pushed = False  # set when engine accepts the table
 
             # Per-request state. save_buffers is keyed by step-local
             # batch_index. Across forward steps, save_kv_layer overwrites the
@@ -281,7 +294,29 @@ if HAS_VLLM:
                 return np.array([])
 
         def _compute_retrieval_key(self, token_ids):
-            """Delegate to the configured RetrievalKeyStrategy."""
+            """Compute the retrieval key.
+
+            Fast path: Rust ``Engine.compute_retrieval_key`` after the
+            embedding table is loaded on the engine. Falls back to the
+            Python Strategy when the engine does not have the table
+            loaded yet (one-time bootstrap on the first call).
+            """
+            from tardigrade_vllm.retrieval_key import LastTokenEmbeddingStrategy
+            strategy_name = (
+                "last_token"
+                if isinstance(self._retrieval_key_strategy, LastTokenEmbeddingStrategy)
+                else "mean_pool"
+            )
+            pushed = getattr(self, "_embedding_table_pushed", False)
+            if not pushed:
+                embed = self._get_embed_weights()
+                if embed is not None and embed.size > 0:
+                    self.engine.load_embedding_table(np.ascontiguousarray(embed, dtype=np.float32))
+                    self._embedding_table_pushed = True
+                    pushed = True
+            if pushed:
+                return self.engine.compute_retrieval_key(list(token_ids), strategy_name)
+            # Last-resort path while the table is still unloadable.
             embed = self._get_embed_weights()
             return self._retrieval_key_strategy.compute(token_ids, embed)
 

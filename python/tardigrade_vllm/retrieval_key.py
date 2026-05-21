@@ -7,6 +7,15 @@ Both save and load sides use the same strategy (via compute/compute_for_save).
 This guarantees keys live in the same retrieval-key space — a proxy space
 derived from the embedding table, not the KV latent space itself. No GPU
 forward pass required on either side.
+
+.. note::
+   The Python strategies in this module are retained as a numerical
+   reference and a one-time bootstrap fallback. Production paths should
+   call :py:meth:`tardigrade_db.Engine.compute_retrieval_key` after
+   loading the embedding table with
+   :py:meth:`tardigrade_db.Engine.load_embedding_table`. The Rust path
+   is ~14x faster on ``last_token`` and ~3x faster on ``mean_pool`` at
+   prompt_len=1024 / hidden=1024.
 """
 
 import logging

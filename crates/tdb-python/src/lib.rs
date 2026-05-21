@@ -1136,6 +1136,72 @@ impl Engine {
         Ok(dict.into_any().unbind())
     }
 
+    /// Load the model's token-embedding table into the engine.
+    ///
+    /// `weights` is a `(vocab_size, hidden_size)` float32 ndarray. The
+    /// engine takes a flat owned copy so the call is safe even if the
+    /// caller drops or mutates `weights` afterwards. Repeated calls
+    /// replace the previous table; the load counter is incremented.
+    fn load_embedding_table(&self, weights: PyReadonlyArray2<'_, f32>) -> PyResult<()> {
+        let arr = weights.as_array();
+        let shape = arr.shape();
+        let vocab_size = shape[0];
+        let hidden_size = shape[1];
+        let flat: Vec<f32> = if let Some(slice) = arr.as_slice() {
+            slice.to_vec()
+        } else {
+            arr.iter().copied().collect()
+        };
+        let mut eng = lock_engine(&self.inner)?;
+        eng.load_embedding_table(flat, vocab_size, hidden_size);
+        Ok(())
+    }
+
+    /// Number of `load_embedding_table` calls (observability counter).
+    fn embedding_table_load_count(&self) -> PyResult<u64> {
+        Ok(lock_engine(&self.inner)?.embedding_table_load_count())
+    }
+
+    /// Install a projection matrix for the `"projected"` strategy.
+    ///
+    /// `matrix` is a `(kv_dim, hidden_size)` float32 ndarray.
+    fn set_projection_matrix(&self, matrix: PyReadonlyArray2<'_, f32>) -> PyResult<()> {
+        let arr = matrix.as_array();
+        let shape = arr.shape();
+        let kv_dim = shape[0];
+        let hidden_size = shape[1];
+        let flat: Vec<f32> = if let Some(slice) = arr.as_slice() {
+            slice.to_vec()
+        } else {
+            arr.iter().copied().collect()
+        };
+        let mut eng = lock_engine(&self.inner)?;
+        eng.set_projection_matrix(flat, kv_dim, hidden_size);
+        Ok(())
+    }
+
+    /// Compute a retrieval key from `token_ids` via the named strategy.
+    ///
+    /// Returns the key as a 1-D float32 ndarray, or `None` when the
+    /// embedding table has not been loaded, when `token_ids` is empty,
+    /// or when every id is out of vocabulary range. Raises
+    /// `ValueError` when `strategy` is not one of `"last_token"`,
+    /// `"mean_pool"`, `"projected"`.
+    #[pyo3(signature = (token_ids, strategy="last_token"))]
+    fn compute_retrieval_key(
+        &self,
+        py: Python<'_>,
+        token_ids: Vec<i64>,
+        strategy: &str,
+    ) -> PyResult<Option<pyo3::Py<pyo3::PyAny>>> {
+        use pyo3::exceptions::PyValueError;
+        let eng = lock_engine(&self.inner)?;
+        let key = eng
+            .compute_retrieval_key(&token_ids, strategy)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(key.map(|v| numpy::PyArray1::from_vec(py, v).into_any().unbind()))
+    }
+
     /// Enumerate all packs as a list of dicts, with text included.
     ///
     /// Returns a list of dicts with keys: `pack_id`, `owner`, `tier`, `importance`, `text`.

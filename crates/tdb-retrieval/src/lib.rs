@@ -90,6 +90,7 @@ pub mod per_token;
 pub mod pipeline;
 pub mod quantization;
 pub mod refinement;
+pub mod retrieval_key;
 pub mod retriever;
 pub mod simd_distance;
 pub mod slb;
