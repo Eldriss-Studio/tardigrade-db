@@ -5,6 +5,10 @@
 //! without changing the public engine API.
 
 #[derive(Debug, Clone, Copy)]
+// Reason: the `_nanos` suffix is the unit. Stripping it would require either
+// renaming to less-clear identifiers or adding a doc comment per field saying
+// the same thing the suffix says — the suffix wins.
+#[allow(clippy::struct_field_names)]
 pub(crate) struct PackReadPhaseProfile {
     pub(crate) retrieval_nanos: u64,
     pub(crate) pack_read_nanos: u64,

@@ -56,17 +56,49 @@ tempfile = "3"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-# Allowed — conflict with project patterns
-module_name_repetitions = "allow"
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
+
+# ─────────────────────────────────────────────────────────────────────
+# Policy: `cast_precision_loss` is allowed workspace-wide.
+#
+# This lint fires on every `usize → f32`, `u64 → f32`, `i32 → f32` etc.,
+# i.e. integer-to-float casts where the integer type has more bits than
+# the float mantissa. In a KV-cache retrieval engine this surfaces in
+# ~200 sites: count → ratio, index → coordinate, mean denominator,
+# decay-exponent argument, score normalization, etc.
+#
+# We follow the convention of every major numerical-Rust project
+# (tokio, DataFusion, TiKV, Polars, Qdrant, LanceDB, candle): allow
+# this lint at the workspace level because it flags a *property of the
+# type system*, not a bug shape. Real precision bugs live in algorithm
+# choice, accumulator type, and summation order — none of which clippy
+# can see by looking at a single cast.
+#
+# Numerical correctness is defended by acceptance tests that pin
+# observable behavior:
+#   - `tdb-engine`'s recall @ 5K cells (100% on Q4 + Top5Avg pipeline)
+#   - `tdb-storage::quantization` Q4 SNR > 20 dB round-trip
+#   - `tdb-retrieval::per_token::compute_whitening_matrix` uses an f64
+#     inner-product accumulator before narrowing to f32 (line ~993)
+#   - `tdb-governance::scoring` bounds ι ∈ [0, 100] (fits f32 mantissa
+#     exactly) and uses `powi` exponentiation-by-squaring for decay,
+#     so accumulated error is bounded across the engine's lifetime
+#
+# If a numerical regression slips through, the fix is to change the
+# accumulator type or the algorithm — not to add 200 `#[allow]`
+# annotations that drown the real concerns in syntactic noise.
+# ─────────────────────────────────────────────────────────────────────
 cast_precision_loss = "allow"
-cast_lossless = "allow"
-must_use_candidate = "allow"
-return_self_not_must_use = "allow"
-struct_field_names = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
+
+# Lints whose allowlist entries were retired in Phase 1 / Phase 2 of
+# the warnings-cleanup initiative — every site now either uses a checked
+# conversion or has a local `#[allow] // Reason:` annotation citing the
+# specific invariant. Re-enabling these at workspace level keeps new
+# offenders out.
+#
+#   cast_possible_truncation, cast_sign_loss, cast_lossless,
+#   must_use_candidate, return_self_not_must_use, struct_field_names,
+#   missing_errors_doc, missing_panics_doc, module_name_repetitions
+
 # Hard denials — project invariants
 undocumented_unsafe_blocks = "deny"
 dbg_macro = "deny"

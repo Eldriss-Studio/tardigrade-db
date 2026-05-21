@@ -40,6 +40,10 @@ pub(crate) struct PackAccessSnapshot {
 
 #[cfg(test)]
 #[derive(Debug, Default, Clone, Copy)]
+// Reason: the `_count` suffix is the unit, not redundant naming. Each field
+// counts a different population (candidates, unique packs, hydrated layers,
+// returned packs); the suffix tells the reader what kind of number it is.
+#[allow(clippy::struct_field_names)]
 pub(crate) struct PackMaterializationCounters {
     pub(crate) candidate_count: usize,
     pub(crate) unique_pack_count: usize,
