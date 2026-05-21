@@ -228,13 +228,6 @@ def run_dataset(adapter: TardigradeAdapter, items: list[BenchmarkItem],
             item_rank_histogram, item_not_in_top_k
         ),
         "item_cumulative_in_top_k_pct": _make_cumulative(item_rank_histogram),
-        # Backward-compat keys (deprecated; equal to chunk_* above)
-        "rank_histogram_counts": dict(chunk_rank_histogram),
-        "not_in_top_k": chunk_not_in_top_k,
-        "rank_histogram_pct": _make_pct(
-            chunk_rank_histogram, chunk_not_in_top_k
-        ),
-        "cumulative_in_top_k_pct": _make_cumulative(chunk_rank_histogram),
     }
 
     return {"summary": summary, "records": records}

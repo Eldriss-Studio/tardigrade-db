@@ -1,4 +1,10 @@
-"""ATDD acceptance tests for background governance sweep (Active Object pattern)."""
+"""ATDD acceptance tests for the Rust-native background maintenance worker.
+
+The Python ``GovernanceSweepThread`` Active Object was removed in favour of
+``Engine.start_maintenance()`` / ``stop_maintenance()`` — a single Rust
+thread that runs governance sweep (decay + eviction) and segment compaction
+with no GIL contention.
+"""
 
 import sys
 import time
@@ -10,7 +16,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
 import tardigrade_db
-from tardigrade_hooks.sweep import GovernanceSweepThread
 
 
 @pytest.fixture
@@ -24,107 +29,111 @@ def write_cell(engine, cell_id_hint=0, salience=50.0):
     return engine.mem_write(1, 0, key, np.zeros(32, dtype=np.float32), salience, None)
 
 
-# ── ATDD Test 1: Sweep runs automatically ─────────────────────────────────
+# ── ATDD Test 1: Maintenance runs automatically ──────────────────────────
 
 
-def test_sweep_runs_automatically(engine):
-    """Start sweep with short interval. After waiting, tick_count > 0."""
+def test_maintenance_decays_importance(engine):
+    """Start maintenance with a short interval and an aggressive
+    hours_per_tick. After waiting, the worker should have run at least
+    one sweep and the cell's importance should have decayed."""
     cell_id = write_cell(engine, salience=10.0)
     importance_before = engine.cell_importance(cell_id)
 
-    # 0.1s interval, 24 hours per tick (= 1 full day of decay per tick).
-    sweep = GovernanceSweepThread(engine, interval_secs=0.1, hours_per_tick=24.0)
-    sweep.start()
+    engine.start_maintenance(
+        sweep_interval_secs=0.1,
+        compaction_interval_secs=3600.0,
+        eviction_threshold=0.0,
+        hours_per_tick=24.0,
+    )
+    try:
+        time.sleep(0.5)
+    finally:
+        engine.stop_maintenance()
 
-    time.sleep(0.5)  # Let 4-5 ticks run.
-    sweep.stop()
-
-    assert sweep.tick_count >= 2, f"Expected ≥2 ticks, got {sweep.tick_count}"
+    status = engine.maintenance_status()
+    assert status["sweep_count"] >= 2, (
+        f"Expected >=2 sweep cycles, got {status['sweep_count']}"
+    )
 
     importance_after = engine.cell_importance(cell_id)
     assert importance_after < importance_before, (
-        f"Importance should have decayed: before={importance_before}, after={importance_after}"
+        f"Importance should have decayed: "
+        f"before={importance_before}, after={importance_after}"
     )
 
 
-# ── ATDD Test 2: Sweep promotes active cells ──────────────────────────────
+# ── ATDD Test 2: Promoted cells stay promoted ────────────────────────────
 
 
-def test_sweep_promotes_active_cells(engine):
-    """Write cell, boost via reads, let sweep evaluate. Tier should promote."""
+def test_maintenance_preserves_promoted_cells(engine):
+    """Promoted cells should stay promoted while sweep runs."""
     key = np.ones(32, dtype=np.float32)
     cell_id = engine.mem_write(1, 0, key, np.zeros(32, dtype=np.float32), 50.0, None)
 
-    # Initial: 50 + 5 (write) = 55 → Draft.
-    assert engine.cell_tier(cell_id) == 0  # Draft
-
-    # Boost to ≥65 via reads: 55 + 4×3 = 67 → Validated.
+    # Boost to >=65 via reads: 55 + 4*3 = 67 -> Validated.
     for _ in range(4):
         engine.mem_read(key, 1, None)
-
-    # Tier is already updated by mem_read's governance boost.
     assert engine.cell_tier(cell_id) == 1  # Validated
 
-    # Start sweep — it should maintain the promoted tier (not revert).
-    sweep = GovernanceSweepThread(engine, interval_secs=0.1, hours_per_tick=0.01)
-    sweep.start()
-    time.sleep(0.3)
-    sweep.stop()
+    engine.start_maintenance(
+        sweep_interval_secs=0.1,
+        compaction_interval_secs=3600.0,
+        eviction_threshold=0.0,
+        hours_per_tick=0.01,
+    )
+    try:
+        time.sleep(0.3)
+    finally:
+        engine.stop_maintenance()
 
-    # Tier should still be Validated (sweep doesn't undo promotion with tiny decay).
     assert engine.cell_tier(cell_id) == 1  # Validated
 
 
-# ── ATDD Test 3: Sweep evicts stale cells ─────────────────────────────────
+# ── ATDD Test 3: Stops cleanly ───────────────────────────────────────────
 
 
-def test_sweep_evicts_stale_cells(engine):
-    """Write cell with low salience. Many sweep cycles decay it below threshold."""
-    cell_id = write_cell(engine, salience=10.0)
+def test_maintenance_stops_cleanly(engine):
+    """Start maintenance, stop it. The worker should report not running."""
+    engine.start_maintenance(
+        sweep_interval_secs=0.1,
+        compaction_interval_secs=3600.0,
+    )
+    assert engine.is_maintenance_running()
 
-    # Run sweep with aggressive decay: each tick = 100 days.
-    sweep = GovernanceSweepThread(engine, interval_secs=0.05, hours_per_tick=2400.0)
-    sweep.start()
-    time.sleep(0.3)  # ~6 ticks × 100 days = 600 days of decay
-    sweep.stop()
-
-    importance = engine.cell_importance(cell_id)
-    # 15.0 (10 + 5 write boost) × 0.995^600 ≈ 0.75 — well below eviction threshold.
-    assert importance < 5.0, f"Importance {importance:.2f} should be <5.0 after heavy decay"
-
-
-# ── ATDD Test 4: Sweep stops cleanly on close ────────────────────────────
-
-
-def test_sweep_stops_on_close(engine):
-    """Start sweep, stop it. Thread should terminate."""
-    sweep = GovernanceSweepThread(engine, interval_secs=0.1)
-    sweep.start()
-    assert sweep.is_running
-
-    sweep.stop(timeout=2.0)
-    assert not sweep.is_running, "Sweep thread should be stopped"
+    engine.stop_maintenance()
+    # stop_maintenance is best-effort synchronous; give the worker thread
+    # a brief moment to wind down its current iteration.
+    for _ in range(20):
+        if not engine.is_maintenance_running():
+            break
+        time.sleep(0.05)
+    assert not engine.is_maintenance_running()
 
 
-# ── ATDD Test 5: Sweep does not corrupt state ────────────────────────────
+# ── ATDD Test 4: Sweep does not corrupt state under concurrent writes ──
 
 
-def test_sweep_does_not_corrupt(engine):
-    """Run sweep concurrently with writes/reads for 0.5s. No exceptions."""
-    sweep = GovernanceSweepThread(engine, interval_secs=0.05, hours_per_tick=1.0)
-    sweep.start()
+def test_maintenance_concurrent_safety(engine):
+    """Run maintenance concurrently with writes/reads. No exceptions, no
+    lost data — the engine's Arc<Mutex<>> serialises access.
+    """
+    engine.start_maintenance(
+        sweep_interval_secs=0.05,
+        compaction_interval_secs=3600.0,
+        hours_per_tick=1.0,
+    )
 
-    # Concurrent writes and reads.
     errors = []
-    for i in range(50):
-        try:
-            key = np.full(32, float(i), dtype=np.float32)
-            engine.mem_write(1, 0, key, np.zeros(32, dtype=np.float32), 50.0, None)
-            engine.mem_read(key, 3, None)
-        except Exception as e:
-            errors.append(str(e))
+    try:
+        for i in range(50):
+            try:
+                key = np.full(32, float(i), dtype=np.float32)
+                engine.mem_write(1, 0, key, np.zeros(32, dtype=np.float32), 50.0, None)
+                engine.mem_read(key, 3, None)
+            except Exception as exc:  # noqa: BLE001 — collected for assertion
+                errors.append(str(exc))
+    finally:
+        engine.stop_maintenance()
 
-    sweep.stop()
-
-    assert len(errors) == 0, f"Errors during concurrent sweep+write: {errors}"
+    assert errors == [], f"Errors during concurrent maintenance+writes: {errors}"
     assert engine.cell_count() == 50

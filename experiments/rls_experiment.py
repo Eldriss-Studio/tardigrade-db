@@ -148,9 +148,8 @@ for name, strategies in configs:
 
     # Build cell_to_pack mapping from pack directory
     for pid in pack_ids:
-        packs = engine.list_packs(OWNER)
-        for p in packs:
-            cell_to_pack[p["pack_id"]] = p["pack_id"]
+        for p_pid in engine.list_packs_metadata(OWNER)["pack_ids"].tolist():
+            cell_to_pack[p_pid] = p_pid
 
     if strategies is None:
         sp = run_baseline(engine, SPECIFIC, pack_ids, "Specific")

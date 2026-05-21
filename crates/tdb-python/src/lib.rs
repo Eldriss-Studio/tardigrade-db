@@ -71,24 +71,6 @@ struct Engine {
     maintenance_worker: Option<tdb_engine::maintenance::MaintenanceWorker>,
 }
 
-/// Emit a Python `DeprecationWarning` for callers using `list_packs` without
-/// an explicit `fetch_text=` kwarg. Fires on every call; Python's default
-/// warnings filter deduplicates by source location.
-fn warn_legacy_list_packs(py: Python<'_>) -> PyResult<()> {
-    let warnings_mod = py.import("warnings")?;
-    let category = py.get_type::<pyo3::exceptions::PyDeprecationWarning>();
-    warnings_mod.call_method1(
-        "warn",
-        (
-            "Engine.list_packs() without an explicit `fetch_text=` kwarg is deprecated; \
-             pass `fetch_text=True` to keep the current behaviour or call \
-             Engine.list_packs_metadata() to skip the per-pack text lookup.",
-            category,
-        ),
-    )?;
-    Ok(())
-}
-
 /// Resolve the effective salience for a write given the caller's explicit
 /// value and an optional [`SalienceMode`] name. Returns the salience to
 /// store or a `ValueError`-shaped error on an unknown mode.
@@ -138,7 +120,7 @@ impl Engine {
 
     /// Write key/value vectors to the engine (cell-level API).
     ///
-    /// **Deprecated:** Use `mem_write_pack` for new code. The Pack API is
+    /// Prefer [`Engine::mem_write_pack`] for new code — the Pack API is
     /// the canonical interface for storing multi-layer KV caches.
     fn mem_write(
         &self,
@@ -210,7 +192,7 @@ impl Engine {
 
     /// Read the top-k most relevant cells for a query key (cell-level API).
     ///
-    /// **Deprecated:** Use `mem_read_pack` for new code. The Pack API returns
+    /// Prefer [`Engine::mem_read_pack`] for new code — the Pack API returns
     /// complete multi-layer KV caches ready for injection.
     fn mem_read(
         &self,
@@ -1212,19 +1194,18 @@ impl Engine {
     /// [`Engine::list_packs_metadata`] — it returns parallel numpy arrays from a
     /// single Rust→Python crossing.
     ///
-    /// When `fetch_text` is omitted, the call emits a `DeprecationWarning` and
-    /// returns the list-of-dicts shape; pass `fetch_text=True` to keep the
-    /// behaviour silently.
-    #[pyo3(signature = (owner=None, fetch_text=None))]
+    /// `fetch_text` is a required keyword argument. Pass `True` to populate
+    /// the `text` field via a per-pack lookup. Pass `False` to skip the
+    /// lookup and emit `None` for every `text` entry — useful when only
+    /// metadata is needed but the list-of-dicts shape is still convenient.
+    /// For pure metadata enumeration prefer [`Engine::list_packs_metadata`].
+    #[pyo3(signature = (owner=None, *, fetch_text))]
     fn list_packs(
         &self,
         py: Python<'_>,
         owner: Option<u64>,
-        fetch_text: Option<bool>,
+        fetch_text: bool,
     ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-        if fetch_text.is_none() {
-            warn_legacy_list_packs(py)?;
-        }
         let eng = lock_engine(&self.inner)?;
         let packs = eng.list_packs(owner);
         let py_list = pyo3::types::PyList::empty(py);
@@ -1234,7 +1215,8 @@ impl Engine {
             dict.set_item("owner", pack_owner)?;
             dict.set_item("tier", tier as u8)?;
             dict.set_item("importance", importance)?;
-            dict.set_item("text", eng.pack_text(pack_id))?;
+            let text = if fetch_text { eng.pack_text(pack_id) } else { None };
+            dict.set_item("text", text)?;
             py_list.append(dict)?;
         }
         Ok(py_list.into_any().unbind())

@@ -1,11 +1,12 @@
-"""HuggingFaceHook — DEPRECATED. Use HuggingFaceKVHook or KnowledgePackStore.
+"""HuggingFaceHook — legacy mean-pool hidden-state hook.
 
-This hook uses mean-pooled hidden states, which was proven to produce
-31% recall (gravity well problem). Superseded by:
-  - HuggingFaceKVHook: per-token K/Q projections for retrieval
-  - KnowledgePackStore: end-to-end KV injection via Knowledge Packs approach
+Uses mean-pooled hidden states; produces ~31% recall (the gravity-well
+problem). Superseded by:
+  - :class:`HuggingFaceKVHook` — per-token K/Q projections for retrieval
+  - :class:`tardigrade_hooks.kp_injector.KnowledgePackStore` — end-to-end
+    KV injection via the Knowledge Packs approach
 
-Kept for backwards compatibility with existing tests.
+Retained as a baseline for hook-API regression tests and example scripts.
 """
 
 import numpy as np

@@ -1,13 +1,13 @@
-"""MemoryInjector — DEPRECATED. Use KnowledgePackStore instead.
+"""MemoryInjector — legacy embedding-query injector.
 
-This injector uses embedding-based queries and per-cell KV injection,
-which was proven inferior to the Knowledge Packs approach (chat template +
-full past_key_values injection). KnowledgePackStore achieves byte-identical
-output to text RAG with 46% fewer prompt tokens.
+Embedding-based queries with per-cell KV injection. Inferior retrieval
+quality to the Knowledge Packs approach (chat template + full
+past_key_values injection): the latter achieves byte-identical output to
+text RAG with 46% fewer prompt tokens. Prefer
+:class:`tardigrade_hooks.kp_injector.KnowledgePackStore` for new code.
 
-Kept for backwards compatibility with existing tests. The kv_injector
-module (reshape_to_kv, build_injection_cache, etc.) is still used by
-test_kv_injector.py and test_memory_injector.py.
+Retained as the regression vehicle for the underlying ``kv_injector``
+primitives (``reshape_to_kv``, ``build_injection_cache``).
 """
 
 from typing import Optional

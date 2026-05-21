@@ -124,8 +124,7 @@ class TestLongDocument:
     def test_all_chunks_indexed(self, env):
         engine, ingestor = env
         result = ingestor.ingest(LONG_DOC)
-        packs = engine.list_packs(OWNER)
-        pack_ids_in_engine = {p["pack_id"] for p in packs}
+        pack_ids_in_engine = set(engine.list_packs_metadata(OWNER)["pack_ids"].tolist())
         for pid in result.pack_ids:
             assert pid in pack_ids_in_engine
 
@@ -134,7 +133,7 @@ class TestSalience:
     def test_default_salience_used(self, env):
         engine, ingestor = env
         result = ingestor.ingest(SHORT_DOC)
-        packs = engine.list_packs(OWNER)
-        for p in packs:
-            if p["pack_id"] in result.pack_ids:
-                assert p["importance"] >= DEFAULT_FILE_INGEST_SALIENCE - 1.0
+        meta = engine.list_packs_metadata(OWNER)
+        importance_by_id = dict(zip(meta["pack_ids"].tolist(), meta["importances"].tolist()))
+        for pid in result.pack_ids:
+            assert importance_by_id[pid] >= DEFAULT_FILE_INGEST_SALIENCE - 1.0

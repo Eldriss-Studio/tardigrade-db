@@ -7,16 +7,12 @@ Two enumeration APIs cover the metadata-vs-text axis:
   Rust→Python crossing. No per-row Python dict, no text fetch.
 * `Engine.list_packs(owner, fetch_text=True)` returns the list-of-dicts
   shape with `text` included, for callers that need text inline.
-
-The no-kwarg `Engine.list_packs(owner)` form emits a `DeprecationWarning`
-matching the codebase convention (see `tardigrade_hooks/sweep.py`) and
-returns the same list-of-dicts shape as the kwarg form.
+  `fetch_text` is a required keyword argument.
 """
 
 from __future__ import annotations
 
 import threading
-import warnings
 
 import numpy as np
 import pytest
@@ -109,31 +105,17 @@ def test_list_packs_with_fetch_text_true_returns_stored_text_or_none(tmp_path):
     assert by_id[pid_without]["text"] is None
 
 
-# ---- deprecation warning on legacy no-kwarg call --------------------------
+# ---- fetch_text is a required keyword argument ----------------------------
 
-def test_legacy_list_packs_emits_deprecation_warning(tmp_path):
-    """The no-kwarg form (kept for backward compat) emits DeprecationWarning.
-
-    Frequency matches the codebase convention from `tardigrade_hooks/sweep.py`:
-    `warnings.warn(...)` on every call, with no manual once-per-process guard.
-    Python's default warnings filter deduplicates by source location, so users
-    see one warning per call site without us tracking state in Rust.
-    """
+def test_list_packs_requires_fetch_text_kwarg(tmp_path):
+    """`list_packs` rejects callers that omit `fetch_text=` — the kwarg is
+    required so the caller's intent (pay the per-pack text lookup or not)
+    is explicit at every call site."""
     engine = _engine(tmp_path)
     _write_pack(engine, OWNER, 70.0, text="alpha", marker=0.1)
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        engine.list_packs(OWNER)  # no fetch_text kwarg → legacy path
-
-    deprecation_messages = [
-        w for w in caught
-        if issubclass(w.category, DeprecationWarning)
-        and "list_packs" in str(w.message)
-    ]
-    assert len(deprecation_messages) >= 1, (
-        "expected at least one DeprecationWarning mentioning list_packs"
-    )
+    with pytest.raises(TypeError):
+        engine.list_packs(OWNER)  # type: ignore[call-arg]
 
 
 # ---- consolidate latency at 10K (slow) ------------------------------------

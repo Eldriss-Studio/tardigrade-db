@@ -167,7 +167,7 @@ for pid in pack_ids:
 
 engine.set_refinement_mode("centered")
 
-print(f"\nTotal packs: {len(engine.list_packs(OWNER))} (10 canonical + 30 views)")
+print(f"\nTotal packs: {engine.list_packs_metadata(OWNER)['pack_ids'].size} (10 canonical + 30 views)")
 
 for query_text, expected_fact_idx in MODERATE_QUERIES:
     query_key = capture_key(query_text)

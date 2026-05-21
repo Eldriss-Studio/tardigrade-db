@@ -45,14 +45,14 @@ def test_multi_agent_pack_isolation(tmp_path):
     THEN each agent sees only their own packs."""
     engine, _, _, _ = _multi_agent_fixture(tmp_path)
 
-    alpha_packs = engine.list_packs(AGENT_ALPHA)
-    beta_packs = engine.list_packs(AGENT_BETA)
-    all_packs = engine.list_packs()
+    alpha_meta = engine.list_packs_metadata(AGENT_ALPHA)
+    beta_meta = engine.list_packs_metadata(AGENT_BETA)
+    all_meta = engine.list_packs_metadata()
 
-    assert len(alpha_packs) == PACKS_PER_AGENT
-    assert len(beta_packs) == PACKS_PER_AGENT
-    assert len(all_packs) == PACKS_PER_AGENT * 3
-    assert all(p["owner"] == AGENT_ALPHA for p in alpha_packs)
+    assert alpha_meta["pack_ids"].size == PACKS_PER_AGENT
+    assert beta_meta["pack_ids"].size == PACKS_PER_AGENT
+    assert all_meta["pack_ids"].size == PACKS_PER_AGENT * 3
+    assert bool((alpha_meta["owners"] == AGENT_ALPHA).all())
 
 
 def test_multi_agent_eviction_scoped(tmp_path):
@@ -83,8 +83,8 @@ def test_multi_agent_delete_isolation(tmp_path):
 
     engine.delete_pack(alpha_ids[0])
 
-    assert len(engine.list_packs(AGENT_ALPHA)) == PACKS_PER_AGENT - 1
-    assert len(engine.list_packs(AGENT_BETA)) == PACKS_PER_AGENT
+    assert engine.list_packs_metadata(AGENT_ALPHA)["pack_ids"].size == PACKS_PER_AGENT - 1
+    assert engine.list_packs_metadata(AGENT_BETA)["pack_ids"].size == PACKS_PER_AGENT
 
 
 def test_multi_agent_trace_isolation(tmp_path):

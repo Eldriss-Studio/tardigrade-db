@@ -12,13 +12,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
 from tardigrade_vllm.retrieval_key import (
-    LAST_TOKEN_EMBEDDING,
-    MEAN_POOL_EMBEDDING,
     LastTokenEmbeddingStrategy,
     MeanPoolEmbeddingStrategy,
     ProjectedEmbeddingStrategy,
     check_key_alignment,
-    get_strategy,
 )
 
 
@@ -56,22 +53,6 @@ def test_last_token_embedding_strategy_empty_inputs():
 
     assert strategy.compute([], np.ones((10, 4), dtype=np.float32)) is None
     assert strategy.compute([1, 2], np.array([])) is None
-
-
-def test_get_strategy_returns_default():
-    """GIVEN the LAST_TOKEN_EMBEDDING constant,
-    WHEN calling get_strategy(),
-    THEN returns LastTokenEmbeddingStrategy instance."""
-    strategy = get_strategy(LAST_TOKEN_EMBEDDING)
-    assert isinstance(strategy, LastTokenEmbeddingStrategy)
-
-
-def test_get_strategy_raises_on_unknown_name():
-    """GIVEN an unknown strategy name 'foobar',
-    WHEN calling get_strategy(),
-    THEN ValueError is raised with available strategies listed."""
-    with pytest.raises(ValueError, match="Unknown retrieval key strategy"):
-        get_strategy("foobar")
 
 
 def test_alignment_check_passes_on_matching_dimensions():
@@ -124,11 +105,6 @@ def test_mean_pool_strategy_filters_invalid_tokens():
 def test_mean_pool_strategy_empty_returns_none():
     strategy = MeanPoolEmbeddingStrategy()
     assert strategy.compute([], np.ones((10, 4), dtype=np.float32)) is None
-
-
-def test_mean_pool_strategy_available_via_factory():
-    strategy = get_strategy(MEAN_POOL_EMBEDDING)
-    assert isinstance(strategy, MeanPoolEmbeddingStrategy)
 
 
 # ── ProjectedEmbeddingStrategy ────────────────────────────────────────────
@@ -194,19 +170,18 @@ def test_compute_for_save_defaults_to_compute():
 
 
 def test_save_and_load_identical_for_all_strategies():
-    """GIVEN each registered strategy,
+    """GIVEN each strategy,
     WHEN computing save and load keys for the same input,
     THEN they are identical — the strategy governs both sides."""
     embed = np.random.randn(100, 8).astype(np.float32)
     token_ids = [5, 15, 25]
 
-    for name in [LAST_TOKEN_EMBEDDING, MEAN_POOL_EMBEDDING]:
-        strategy = get_strategy(name)
+    for strategy in (LastTokenEmbeddingStrategy(), MeanPoolEmbeddingStrategy()):
         load_key = strategy.compute(token_ids, embed)
         save_key = strategy.compute_for_save(token_ids, embed)
         np.testing.assert_array_equal(
             load_key, save_key,
-            err_msg=f"Strategy {name}: save and load keys diverge"
+            err_msg=f"{type(strategy).__name__}: save and load keys diverge",
         )
 
 

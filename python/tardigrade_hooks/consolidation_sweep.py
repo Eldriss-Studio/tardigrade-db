@@ -1,8 +1,9 @@
 """Background consolidation sweep for multi-view memory creation.
 
-Active Object pattern (matches ``GovernanceSweepThread``): owns a timer
-loop in a daemon thread, periodically runs ``MemoryConsolidator`` on
-all eligible packs.
+Active Object pattern: owns a timer loop in a daemon thread, periodically
+runs ``MemoryConsolidator`` on all eligible packs. Governance sweep
+(decay + eviction) is handled in Rust by ``MaintenanceWorker``, started
+via ``engine.start_maintenance()``.
 """
 
 from __future__ import annotations

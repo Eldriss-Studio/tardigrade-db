@@ -84,11 +84,13 @@ class TestConsolidationBasics:
 
     def test_canonical_importance_unchanged(self, env):
         engine, pack_id = env
-        packs_before = {p["pack_id"]: p["importance"] for p in engine.list_packs(OWNER)}
+        meta_before = engine.list_packs_metadata(OWNER)
+        packs_before = dict(zip(meta_before["pack_ids"], meta_before["importances"]))
         importance_before = packs_before[pack_id]
         consolidator = MemoryConsolidator(engine, owner=OWNER)
         consolidator.consolidate(pack_id)
-        packs_after = {p["pack_id"]: p["importance"] for p in engine.list_packs(OWNER)}
+        meta_after = engine.list_packs_metadata(OWNER)
+        packs_after = dict(zip(meta_after["pack_ids"], meta_after["importances"]))
         assert packs_after[pack_id] == importance_before
 
 
