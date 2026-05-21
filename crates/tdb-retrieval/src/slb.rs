@@ -13,8 +13,25 @@
 //! The key optimization: `query()` iterates a contiguous `Vec` (cache-line friendly)
 //! and uses partial sort (`select_nth_unstable_by`) for O(n + k log k) instead of
 //! full sort O(n log n).
+//!
+//! ## Concurrency
+//!
+//! [`SemanticLookasideBuffer::query`] takes `&self` so multiple readers can
+//! run in parallel under an outer `RwLock::read()` guard. LRU bookkeeping
+//! (`access_counter` and per-slot `access_order`) uses [`AtomicU64`] with
+//! `Relaxed` ordering.
+//!
+//! `Relaxed` is sufficient because LRU ordering does not need to synchronize
+//! with any other state — it only needs to be approximately monotonic. The
+//! happens-before edge that makes writer-side `recompute_lru` see all reader
+//! stores comes from the **outer `RwLock`**: when a writer acquires
+//! `RwLock::write()` after readers release `RwLock::read()`, the lock
+//! implementation provides an acquire-release pair that publishes every
+//! reader's `Relaxed` store to the writer. Without that outer lock the
+//! Relaxed ordering would not be safe.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tdb_core::{CellId, OwnerId};
 
@@ -23,12 +40,16 @@ use crate::int8_quant::{Int8Quantizer, QuantizedInt8Vec};
 use crate::simd_distance::DotProduct;
 
 /// A slot in the contiguous storage Vec.
+///
+/// `access_order` is [`AtomicU64`] so [`SemanticLookasideBuffer::query`]
+/// can stamp it through a shared `&SlbSlot` reference. See the
+/// module-level Concurrency note for the ordering argument.
 #[derive(Debug)]
 struct SlbSlot {
     cell_id: CellId,
     owner: OwnerId,
     quantized_key: QuantizedInt8Vec,
-    access_order: u64,
+    access_order: AtomicU64,
     /// False if this slot has been evicted (tombstone).
     active: bool,
 }
@@ -47,7 +68,7 @@ pub struct SemanticLookasideBuffer {
     lru_slot: Option<usize>,
     capacity: usize,
     dim: usize,
-    access_counter: u64,
+    access_counter: AtomicU64,
     /// Number of active (non-tombstone) entries.
     active_count: usize,
 }
@@ -62,7 +83,7 @@ impl SemanticLookasideBuffer {
             lru_slot: None,
             capacity,
             dim,
-            access_counter: 0,
+            access_counter: AtomicU64::new(0),
             active_count: 0,
         }
     }
@@ -87,13 +108,13 @@ impl SemanticLookasideBuffer {
     /// Insert or update a cell in the SLB.
     /// If at capacity, evicts the least-recently-used entry.
     pub fn insert(&mut self, cell_id: CellId, owner: OwnerId, key: &[f32]) {
-        self.access_counter += 1;
+        let new_counter = self.access_counter.fetch_add(1, Ordering::Relaxed) + 1;
 
         // Update existing entry (O(1) via index).
         if let Some(&slot_idx) = self.index.get(&cell_id) {
             let slot = &mut self.slots[slot_idx];
             slot.quantized_key = Int8Quantizer::quantize(key);
-            slot.access_order = self.access_counter;
+            slot.access_order.store(new_counter, Ordering::Relaxed);
             self.refresh_lru_after_touch(slot_idx);
             return;
         }
@@ -109,7 +130,7 @@ impl SemanticLookasideBuffer {
             cell_id,
             owner,
             quantized_key,
-            access_order: self.access_counter,
+            access_order: AtomicU64::new(new_counter),
             active: true,
         });
         self.index.insert(cell_id, slot_idx);
@@ -124,9 +145,13 @@ impl SemanticLookasideBuffer {
     /// Uses contiguous Vec iteration (cache-friendly) and partial sort
     /// for O(n + k log k) instead of full O(n log n).
     ///
+    /// Takes `&self` so multiple readers can score in parallel. LRU
+    /// stamping uses [`AtomicU64`] stores with `Relaxed` ordering — see
+    /// the module-level Concurrency note for why that is sufficient.
+    ///
     /// # Panics
     /// Panics if `query.len() != self.dim`.
-    pub fn query(&mut self, query: &[f32], k: usize) -> Vec<RetrievalResult> {
+    pub fn query(&self, query: &[f32], k: usize) -> Vec<RetrievalResult> {
         assert_eq!(
             query.len(),
             self.dim,
@@ -161,10 +186,12 @@ impl SemanticLookasideBuffer {
         scored.truncate(take);
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Mark returned cells as recently accessed.
-        self.access_counter += 1;
+        // Mark returned cells as recently accessed. `fetch_add` returns a
+        // unique-per-call counter even under concurrent readers; each
+        // returned slot is stamped with the calling thread's counter.
+        let new_counter = self.access_counter.fetch_add(1, Ordering::Relaxed) + 1;
         for &(idx, _) in &scored {
-            self.slots[idx].access_order = self.access_counter;
+            self.slots[idx].access_order.store(new_counter, Ordering::Relaxed);
         }
 
         scored
@@ -215,11 +242,17 @@ impl SemanticLookasideBuffer {
     }
 
     /// Track LRU on new insert.
+    ///
+    /// Runs under the outer writer lock, so the `Relaxed` loads on
+    /// `access_order` see every reader's `Relaxed` stores (the writer
+    /// lock's acquire pairs with the readers' release on `RwLock::read`).
     fn update_lru_on_insert(&mut self, new_idx: usize) {
         match self.lru_slot {
             None => self.lru_slot = Some(new_idx),
             Some(current_lru) => {
-                if self.slots[new_idx].access_order < self.slots[current_lru].access_order {
+                let new_order = self.slots[new_idx].access_order.load(Ordering::Relaxed);
+                let current_order = self.slots[current_lru].access_order.load(Ordering::Relaxed);
+                if new_order < current_order {
                     self.lru_slot = Some(new_idx);
                 }
             }
@@ -234,14 +267,14 @@ impl SemanticLookasideBuffer {
             .iter()
             .enumerate()
             .filter(|(_, s)| s.active)
-            .min_by_key(|(_, s)| s.access_order)
+            .min_by_key(|(_, s)| s.access_order.load(Ordering::Relaxed))
             .map(|(idx, _)| idx);
     }
 }
 
 impl crate::retriever::Retriever for SemanticLookasideBuffer {
     fn query(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -327,5 +360,70 @@ mod tests {
         assert!(!slb.contains(2));
         assert!(slb.contains(3));
         assert!(slb.contains(4));
+    }
+
+    /// Concurrent queries against a quiescent SLB must return identical
+    /// result sets. INT8 dot products are deterministic on the same data,
+    /// and the only reader-side mutation (LRU stamping via `AtomicU64`)
+    /// does not affect the returned `(cell_id, score)` tuples.
+    ///
+    /// This catches torn reads of slot state — if the `Relaxed` ordering
+    /// were unsafe, two threads could observe different `quantized_key`
+    /// or `active` flags and disagree on the result set.
+    #[test]
+    fn concurrent_queries_against_quiescent_slb_return_identical_result_sets() {
+        use std::sync::Arc;
+        use std::thread;
+
+        const CELL_COUNT: usize = 64;
+        const DIM: usize = 16;
+        const READERS: usize = 8;
+        const QUERIES_PER_READER: usize = 50;
+        const K: usize = 5;
+
+        let mut slb = SemanticLookasideBuffer::new(CELL_COUNT, DIM);
+        for cell_id in 0..CELL_COUNT {
+            let key: Vec<f32> = (0..DIM).map(|d| ((cell_id + d) as f32 * 0.1).sin()).collect();
+            slb.insert(cell_id as u64, 1, &key);
+        }
+        let slb = Arc::new(slb);
+
+        let query: Vec<f32> = (0..DIM).map(|d| (d as f32 * 0.3).cos()).collect();
+
+        let mut handles = Vec::with_capacity(READERS);
+        for _ in 0..READERS {
+            let slb = Arc::clone(&slb);
+            let query = query.clone();
+            handles.push(thread::spawn(move || {
+                let mut all = Vec::with_capacity(QUERIES_PER_READER);
+                for _ in 0..QUERIES_PER_READER {
+                    all.push(slb.query(&query, K));
+                }
+                all
+            }));
+        }
+
+        let per_thread: Vec<Vec<Vec<RetrievalResult>>> =
+            handles.into_iter().map(|h| h.join().expect("thread")).collect();
+
+        let baseline = &per_thread[0][0];
+        for thread_results in &per_thread {
+            for results in thread_results {
+                assert_eq!(
+                    results.len(),
+                    baseline.len(),
+                    "result-set size diverged under concurrent reads"
+                );
+                for (got, want) in results.iter().zip(baseline.iter()) {
+                    assert_eq!(got.cell_id, want.cell_id, "cell ordering diverged");
+                    assert!(
+                        (got.score - want.score).abs() < f32::EPSILON,
+                        "score diverged: got {} want {}",
+                        got.score,
+                        want.score
+                    );
+                }
+            }
+        }
     }
 }

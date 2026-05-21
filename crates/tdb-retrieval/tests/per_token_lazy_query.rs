@@ -122,7 +122,7 @@ fn overlap(a: &[CellId], b: &[CellId]) -> usize {
 
 #[test]
 fn lazy_query_matches_eager_top_k_and_decodes_only_candidates() {
-    let (mut retriever, source_map) = populated_retriever_with_source_map();
+    let (retriever, source_map) = populated_retriever_with_source_map();
     let query = encoded_cell_key(QUERY_CELL_ID);
     let source = CountingCellSource::new(source_map);
 

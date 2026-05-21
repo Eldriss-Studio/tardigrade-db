@@ -25,6 +25,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lru::LruCache;
@@ -195,7 +196,12 @@ pub struct PerTokenRetriever {
     /// Tuneable retrieval thresholds (Parameter Object pattern).
     config: PerTokenConfig,
     /// Number of distinct cells fully reranked during the previous query.
-    last_scored_cell_count: usize,
+    ///
+    /// Stamped via `Relaxed` store on every query so [`Self::query_inner`]
+    /// can take `&self`. Diagnostic only — no other code reads it for
+    /// correctness, so under concurrent queries the "previous query" is
+    /// last-writer-wins and that is fine.
+    last_scored_cell_count: AtomicUsize,
     /// Running sum of stored f32 token vectors, per dimension. Used by
     /// mean-centered refinement to subtract the corpus's shared high-energy
     /// direction. Updated on insert; not decremented on remove (the bias is
@@ -354,7 +360,7 @@ impl PerTokenRetriever {
             dim: None,
             scoring_mode: mode,
             config,
-            last_scored_cell_count: 0,
+            last_scored_cell_count: AtomicUsize::new(0),
             corpus_sum: Vec::new(),
             corpus_token_count: 0,
             corpus_sq_sum: Vec::new(),
@@ -625,7 +631,7 @@ impl PerTokenRetriever {
     }
 
     fn query_inner(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -696,7 +702,7 @@ impl PerTokenRetriever {
                     .push(dot);
             }
         }
-        self.last_scored_cell_count = cell_scores.len();
+        self.last_scored_cell_count.store(cell_scores.len(), Ordering::Relaxed);
 
         let mut results: Vec<RetrievalResult> = cell_scores
             .into_iter()
@@ -728,7 +734,7 @@ impl PerTokenRetriever {
     /// candidate filter. Equivalent to
     /// [`Self::query_with_source_and_candidates`] called with `None`.
     pub fn query_with_source(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -748,7 +754,7 @@ impl PerTokenRetriever {
     /// in that set are scored — Phase-1 selection still runs and the two
     /// sets are intersected.
     pub fn query_with_source_and_candidates(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -793,7 +799,7 @@ impl PerTokenRetriever {
             })
             .collect();
 
-        self.last_scored_cell_count = results.len();
+        self.last_scored_cell_count.store(results.len(), Ordering::Relaxed);
 
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(k);
@@ -1135,7 +1141,7 @@ pub fn decode_per_token_keys(encoded: &[f32]) -> Option<(usize, usize, &[f32])> 
 
 impl Retriever for PerTokenRetriever {
     fn query(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -1225,7 +1231,7 @@ impl Retriever for PerTokenRetriever {
     /// if provided, intersect with the Phase-1 selection so we only score
     /// cells that survived earlier pipeline stages (e.g. Vamana).
     fn query_with_source(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -1298,7 +1304,7 @@ mod tests {
 
     #[test]
     fn test_candidate_reduction_matches_exact_top5avg_on_normalized_fixture() {
-        let mut retriever = populated_top5_retriever(LARGE_CELL_COUNT);
+        let retriever = populated_top5_retriever(LARGE_CELL_COUNT);
         let query = encoded_cell(FIXTURE_DIM, TARGET_CELL_ID, TOKENS_PER_CELL);
 
         let exact = retriever.query_inner(&query, QUERY_K, Some(OWNER_ONE), false);
@@ -1343,17 +1349,17 @@ mod tests {
 
     #[test]
     fn test_candidate_reduction_limits_scored_cells_for_encoded_queries() {
-        let mut retriever = populated_top5_retriever(LARGE_CELL_COUNT);
+        let retriever = populated_top5_retriever(LARGE_CELL_COUNT);
         let query = encoded_cell(FIXTURE_DIM, TARGET_CELL_ID, TOKENS_PER_CELL);
 
         let _ = retriever.query_inner(&query, QUERY_K, Some(OWNER_ONE), true);
 
         let defaults = PerTokenConfig::default();
         assert_eq!(
-            retriever.last_scored_cell_count,
+            retriever.last_scored_cell_count.load(Ordering::Relaxed),
             defaults.min_candidates.max(QUERY_K * defaults.candidate_multiplier)
         );
-        assert!(retriever.last_scored_cell_count < retriever.cell_count());
+        assert!(retriever.last_scored_cell_count.load(Ordering::Relaxed) < retriever.cell_count());
     }
 
     #[test]
@@ -1389,7 +1395,7 @@ mod tests {
 
         assert_eq!(results[0].cell_id, 0);
         assert_eq!(
-            retriever.last_scored_cell_count,
+            retriever.last_scored_cell_count.load(Ordering::Relaxed),
             retriever.cell_count(),
             "plain token queries must keep exact full scan behavior"
         );
@@ -1413,7 +1419,10 @@ mod tests {
 
         assert!(results.iter().all(|result| result.owner == 1));
         assert_eq!(results[0].cell_id, OWNER_FILTER_TARGET_CELL_ID as CellId);
-        assert!(retriever.last_scored_cell_count <= retriever.candidate_limit(QUERY_K));
+        assert!(
+            retriever.last_scored_cell_count.load(Ordering::Relaxed)
+                <= retriever.candidate_limit(QUERY_K)
+        );
     }
 
     #[test]
@@ -1438,9 +1447,9 @@ mod tests {
 
         // THEN candidate reduction activates (scored fewer than total cells)
         assert!(
-            retriever.last_scored_cell_count < retriever.cell_count(),
+            retriever.last_scored_cell_count.load(Ordering::Relaxed) < retriever.cell_count(),
             "candidate reduction should activate: scored {} of {} cells",
-            retriever.last_scored_cell_count,
+            retriever.last_scored_cell_count.load(Ordering::Relaxed),
             retriever.cell_count(),
         );
     }

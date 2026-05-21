@@ -44,8 +44,9 @@ impl RetrieverPipeline {
     /// Backward-compat shim: calls [`Self::query_with_source`] with no
     /// source. Stages that need a source (e.g. lazy `PerTokenRetriever`)
     /// will fall back to their default eager path.
+    #[must_use]
     pub fn query(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -59,8 +60,9 @@ impl RetrieverPipeline {
     /// `upstream_candidates` so downstream stages can narrow their scan
     /// to cells nominated by earlier stages (Chain of Responsibility with
     /// enriched context).
+    #[must_use]
     pub fn query_with_source(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -69,7 +71,7 @@ impl RetrieverPipeline {
         let mut seen: HashSet<CellId> = HashSet::new();
         let mut candidates: Vec<RetrievalResult> = Vec::new();
 
-        for stage in &mut self.stages {
+        for stage in &self.stages {
             if stage.is_empty() {
                 continue;
             }
@@ -145,7 +147,7 @@ impl Default for RetrieverPipeline {
 
 impl Retriever for RetrieverPipeline {
     fn query(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -214,7 +216,7 @@ mod tests {
 
     impl Retriever for FixedYieldStage {
         fn query(
-            &mut self,
+            &self,
             _query_key: &[f32],
             _k: usize,
             _owner_filter: Option<OwnerId>,
@@ -245,7 +247,7 @@ mod tests {
 
     impl Retriever for RecordingStage {
         fn query(
-            &mut self,
+            &self,
             _query_key: &[f32],
             _k: usize,
             _owner_filter: Option<OwnerId>,
@@ -259,7 +261,7 @@ mod tests {
             1
         }
         fn query_with_source(
-            &mut self,
+            &self,
             _query_key: &[f32],
             _k: usize,
             _owner_filter: Option<OwnerId>,

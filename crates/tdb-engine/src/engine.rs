@@ -117,7 +117,7 @@ struct VamanaAdapter {
 
 impl Retriever for VamanaAdapter {
     fn query(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         _owner_filter: Option<OwnerId>,

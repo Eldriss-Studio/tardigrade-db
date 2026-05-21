@@ -119,7 +119,7 @@ fn populated_retriever() -> (PerTokenRetriever, HashMapCellSource) {
 
 #[test]
 fn lru_capacity_bound_caps_memory_and_falls_back_on_cold_miss() {
-    let (mut retriever, source) = populated_retriever();
+    let (retriever, source) = populated_retriever();
 
     // Pick the most-recently-inserted cell (still in LRU) and the
     // oldest (long-since evicted) as the two probes.

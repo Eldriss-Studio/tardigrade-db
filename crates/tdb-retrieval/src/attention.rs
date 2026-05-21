@@ -106,7 +106,7 @@ impl Default for BruteForceRetriever {
 
 impl crate::retriever::Retriever for BruteForceRetriever {
     fn query(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,

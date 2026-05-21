@@ -20,8 +20,20 @@ use crate::cell_source::CellSource;
 /// Strategy interface for retrieval backends.
 ///
 /// Implementations must support both insertion (indexing) and querying.
-/// The `query` method takes `&mut self` because some implementations
-/// (e.g., SLB) update internal state on access (LRU tracking).
+/// Query methods take `&self` so multiple readers can run in parallel
+/// under an outer `RwLock::read()` guard; implementations that need to
+/// update bookkeeping on access (e.g. SLB LRU, `PerTokenRetriever`
+/// metrics) do so via interior mutability with `Relaxed` atomics. The
+/// outer writer lock provides the happens-before edge that makes the
+/// `Relaxed` ordering safe.
+///
+/// Mutating methods (`insert`, `remove`, `as_any_mut`) keep `&mut self`
+/// — they run under the outer writer lock with no concurrent reader.
+///
+/// The trait is intentionally **not** split into separate Read / Write
+/// halves: every production impl needs both, the pipeline stores a
+/// single `Vec<Box<dyn Retriever>>`, and a sub-trait split would just
+/// reproduce today's interface in two pieces with no caller benefit.
 ///
 /// Requires `Send + Sync` because the engine may be wrapped in a `PyO3`
 /// `#[pyclass]` or shared across threads.
@@ -32,7 +44,7 @@ pub trait Retriever: Send + Sync {
     /// Retrievers that don't support internal filtering may return
     /// results from any owner — the caller is responsible for final filtering.
     fn query(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
@@ -77,7 +89,7 @@ pub trait Retriever: Send + Sync {
     /// everything in RAM ignore this. Stages that don't store data at
     /// all (lazy retrievers) require it.
     fn query_with_source(
-        &mut self,
+        &self,
         query_key: &[f32],
         k: usize,
         owner_filter: Option<OwnerId>,
