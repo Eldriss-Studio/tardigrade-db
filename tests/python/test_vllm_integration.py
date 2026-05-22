@@ -79,8 +79,18 @@ def llm(db_path):
         gpu_memory_utilization=0.8,
         enforce_eager=True,  # Skip CUDA graph compilation for faster startup
     )
-    yield llm_instance
-    # Cleanup handled by garbage collection
+    try:
+        yield llm_instance
+    finally:
+        # Drop the hard reference, then delegate to the shared cleanup
+        # helper. GC alone does NOT release vLLM's worker subprocesses,
+        # NCCL groups, or the torch caching allocator — when this
+        # module-scoped fixture finishes, the next test module inherits
+        # whatever wasn't explicitly released.
+        # See feedback-gpu-fixtures-need-explicit-cleanup.
+        del llm_instance
+        from _gpu_test_utils import do_gpu_cleanup
+        do_gpu_cleanup()
 
 
 # -- Save Path Tests ----------------------------------------------------------

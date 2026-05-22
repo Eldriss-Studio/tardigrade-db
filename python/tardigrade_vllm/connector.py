@@ -469,6 +469,24 @@ if HAS_VLLM:
             else:
                 return 0, False
 
+            # Clamp seq_len to the request's remaining prompt budget. vLLM's
+            # scheduler asserts `num_computed_tokens + new_matched_tokens
+            # <= request.num_tokens` and requires at least one token to
+            # remain for actual computation. The cumulative_seq_len save-
+            # side fix made packs hold the full request KV (e.g. 16 tokens
+            # at prefill), but short queries can't absorb that much —
+            # without this clamp, vLLM crashes with `assert
+            # num_computed_tokens <= request.num_tokens` deep in the
+            # scheduler. See feedback-e2e-before-each-phase-commit.
+            prompt_ids = getattr(request, "prompt_token_ids", None)
+            if prompt_ids is not None:
+                # Leave at least 1 prompt token for vLLM to compute itself.
+                max_seq_len = max(0, len(prompt_ids) - num_computed_tokens - 1)
+                if seq_len > max_seq_len:
+                    seq_len = max_seq_len
+                if seq_len <= 0:
+                    return 0, False
+
             # Stash for load phase
             self._load_packs[req_id] = {
                 "pack": pack,

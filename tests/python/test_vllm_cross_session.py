@@ -32,6 +32,27 @@ requires_cuda = pytest.mark.skipif(
 
 MODEL_NAME = os.environ.get("TARDIGRADE_TEST_MODEL", "Qwen/Qwen3-0.6B")
 
+# Conservative VRAM budget so this test runs reliably AFTER tests that
+# load heavier models earlier in the pytest session. The full story:
+#
+# `torch.cuda.empty_cache()` returns blocks to PyTorch's allocator pool
+# but NOT to the CUDA driver — only process exit fully releases VRAM
+# (see reference-pytest-cuda-memory-isolation). Even pytest-forked is
+# insufficient because `os.fork()` COPIES the parent's CUDA context;
+# the forked child sees the same VRAM occupied. A truly clean CUDA
+# context requires `spawn` (separate Python startup), which pytest
+# does not support natively.
+#
+# So this test takes a defensive posture: ask for less VRAM (0.3 = ~2.4
+# GB on an 8 GB GPU, fits Qwen3-0.6B + KV cache) so it can run reliably
+# even when the parent pytest process is holding leaked VRAM from
+# earlier modules. The remaining ordering-dependent failure mode (vLLM's
+# init-snapshot race: parent releases memory mid-vLLM-init, vLLM
+# crashes on `init_snapshot.free_memory >= free_gpu_memory`) can ONLY
+# be eliminated by running heavy-model test files in separate `pytest`
+# invocations in CI — there is no single-process fix.
+VLLM_MEMORY_UTIL = 0.3
+
 # vLLM startup is heavy (~30s per process). We pay it twice in this test
 # to actually prove cross-process persistence — that is the whole point.
 
@@ -51,7 +72,7 @@ _RUN1_SCRIPT = textwrap.dedent(r"""
         model={model!r},
         kv_transfer_config=cfg,
         max_model_len=512,
-        gpu_memory_utilization=0.8,
+        gpu_memory_utilization={mem_util},
         enforce_eager=True,
     )
     llm.generate(["Tardigrades survive cryptobiosis: vacuum, radiation, dehydration."],
@@ -81,7 +102,7 @@ _RUN2_SCRIPT = textwrap.dedent(r"""
         model={model!r},
         kv_transfer_config=cfg,
         max_model_len=512,
-        gpu_memory_utilization=0.8,
+        gpu_memory_utilization={mem_util},
         enforce_eager=True,
     )
     out = llm.generate(["How do tardigrades survive harsh conditions?"],
@@ -108,7 +129,8 @@ def test_pack_persists_across_vllm_restart(tmp_path):
 
     # --- Run #1: write packs ---
     run1_code = _RUN1_SCRIPT.format(
-        python_dir=python_dir, db_path=db_path, model=MODEL_NAME
+        python_dir=python_dir, db_path=db_path, model=MODEL_NAME,
+        mem_util=VLLM_MEMORY_UTIL,
     )
     r1 = subprocess.run(
         [sys.executable, "-c", run1_code],
@@ -126,7 +148,8 @@ def test_pack_persists_across_vllm_restart(tmp_path):
 
     # --- Run #2: separate process, same db_path ---
     run2_code = _RUN2_SCRIPT.format(
-        python_dir=python_dir, db_path=db_path, model=MODEL_NAME
+        python_dir=python_dir, db_path=db_path, model=MODEL_NAME,
+        mem_util=VLLM_MEMORY_UTIL,
     )
     r2 = subprocess.run(
         [sys.executable, "-c", run2_code],

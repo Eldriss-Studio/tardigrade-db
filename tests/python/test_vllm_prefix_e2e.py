@@ -69,7 +69,15 @@ def llm():
         gpu_memory_utilization=0.8,
         enforce_eager=True,
     )
-    yield llm_instance
+    try:
+        yield llm_instance
+    finally:
+        # See feedback-gpu-fixtures-need-explicit-cleanup. Module-scoped
+        # vLLM fixtures must release worker subprocesses, NCCL groups, and
+        # the CUDA caching allocator explicitly — GC does not handle it.
+        del llm_instance
+        from _gpu_test_utils import do_gpu_cleanup
+        do_gpu_cleanup()
 
 
 def _store_fact(engine, text, owner=1):

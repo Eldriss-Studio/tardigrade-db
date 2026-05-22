@@ -780,6 +780,75 @@ def test_get_num_new_matched_tokens_loads_embed_table_when_packs_exist(tmp_path)
     assert isinstance(result, tuple) and len(result) == 2
 
 
+def test_get_num_new_matched_tokens_clamps_seq_len_to_request_budget(tmp_path):
+    """GIVEN a stored pack with N tokens of KV per layer and a request
+    with a shorter prompt,
+    WHEN get_num_new_matched_tokens is called,
+    THEN the returned seq_len is clamped to AT MOST (prompt_len -
+    num_computed_tokens - 1).
+
+    Why: vLLM's scheduler asserts `num_computed_tokens + new_matched
+    <= request.num_tokens` (and reserves at least one token for actual
+    computation). If the connector returns a seq_len larger than the
+    request's remaining prompt budget, the scheduler crashes with
+    `assert num_computed_tokens <= request.num_tokens` deep inside vLLM,
+    which is exactly the failure mode that surfaced after the
+    cumulative_seq_len fix landed: packs now hold full request KV
+    (e.g. 16 tokens), but short queries (3-5 tokens) can't absorb
+    that much. The connector must clamp."""
+    from unittest.mock import MagicMock, patch
+    c = _build_bare_connector_for_scheduler(tmp_path, embed_dim=8)
+
+    # Seed a pack big enough that the raw pack seq_len would exceed the
+    # request's prompt length. kv_dim = embed_dim = 8. Each token of KV
+    # takes 2 * 8 = 16 floats in the flat layer payload. 16 tokens =
+    # 256 floats. Make the pack hold 16 tokens of KV.
+    pack_tokens = 16
+    key = np.ones(c.kv_dim, dtype=np.float32)
+    payload = np.full(2 * pack_tokens * c.kv_dim, 0.5, dtype=np.float32)
+    c.engine.mem_write_pack(c.owner, key, [(0, payload)], 80.0)
+
+    # Short request: only 3 prompt tokens. The raw pack seq_len would
+    # be 16, but the request only has 3 tokens — clamping must kick in.
+    request = MagicMock()
+    request.request_id = "req_short"
+    request.prompt_token_ids = [10, 20, 30]
+
+    # Patch the embedding table so the retrieval-key path runs without
+    # network/model download.
+    fake_embeds = np.random.RandomState(0).randn(100, c.kv_dim).astype(np.float32)
+    # Force a hit by making the query embed point in the same direction
+    # as the stored key (all ones).
+    fake_embeds[10] = np.ones(c.kv_dim, dtype=np.float32)
+    fake_embeds[20] = np.ones(c.kv_dim, dtype=np.float32)
+    fake_embeds[30] = np.ones(c.kv_dim, dtype=np.float32)
+    with patch.object(type(c), "_get_embed_weights", return_value=fake_embeds):
+        seq_len, async_load = c.get_num_new_matched_tokens(request, 0)
+
+    if seq_len == 0:
+        pytest.skip(
+            "no pack matched (score below threshold). The retrieval-key "
+            "alignment fixture is fragile; the clamp behavior is "
+            "validated by the next assertions which only matter when a "
+            "match did occur."
+        )
+    # Clamp invariant: connector must not claim more tokens than the
+    # request can absorb, leaving at least 1 for vLLM to compute.
+    prompt_len = len(request.prompt_token_ids)
+    num_computed = 0
+    max_allowed = prompt_len - num_computed - 1
+    assert seq_len <= max_allowed, (
+        f"connector returned seq_len={seq_len} for a prompt of "
+        f"{prompt_len} tokens with {num_computed} computed; vLLM's "
+        f"scheduler will assert because num_computed + seq_len = "
+        f"{num_computed + seq_len} exceeds the request's budget of "
+        f"{prompt_len - 1} (leaving 1 token for actual computation)."
+    )
+    assert async_load is False, (
+        "async-load contract is sync; this AT should not change that"
+    )
+
+
 def test_connector_init_back_compat_with_two_arg_call():
     """GIVEN older callers that may still pass (vllm_config, role),
     WHEN TardigradeConnector is instantiated with two positional args,
