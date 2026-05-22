@@ -170,8 +170,13 @@ def test_qwen3_17b_synthetic_fact_recall(gpu_model):
 
 @pytest.mark.gpu
 @pytest.mark.slow
-def test_qwen3_17b_gpu_memory_budget(gpu_model):
-    """B1.2 — peak GPU memory under 7 GB with 20-cell ingest."""
+def test_qwen3_17b_gpu_memory_budget(gpu_model, capsys):
+    """Peak GPU memory under the configured budget with 20-cell ingest.
+
+    Self-diagnosing: prints the measured peak alongside the budget on
+    every run so a budget failure shows the breakdown without needing a
+    separate profiling session. Run with `pytest -s` to see the output.
+    """
     import torch
 
     torch.cuda.reset_peak_memory_stats()
@@ -182,6 +187,17 @@ def test_qwen3_17b_gpu_memory_budget(gpu_model):
     model, _ = gpu_model
     _ = model.config  # touch
     peak = torch.cuda.max_memory_allocated()
+
+    # Observer (GoF Behavioral): the test observes its own allocation
+    # envelope on every run. Future budget failures self-diagnose; no
+    # extra profiling session needed when this fires in CI.
+    with capsys.disabled():
+        print(
+            f"\n[budget] peak={peak / 1024**3:.3f} GB, "
+            f"budget={_GPU_MEMORY_BUDGET_BYTES / 1024**3:.0f} GB"
+        )
+        print(torch.cuda.memory_summary(abbreviated=True))
+
     assert peak < _GPU_MEMORY_BUDGET_BYTES, (
         f"peak GPU memory {peak / 1024**3:.2f} GB exceeds "
         f"{_GPU_MEMORY_BUDGET_BYTES / 1024**3:.0f} GB budget"
