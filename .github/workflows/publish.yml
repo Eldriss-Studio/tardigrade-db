@@ -45,7 +45,12 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          args: --release --out dist --find-interpreter
+          # Pin to interpreters we explicitly validate. `--find-interpreter`
+          # discovers every Python on the runner — that's how v0.7.4 ended
+          # up shipping cp314, cp315, pp311 wheels we never tested. PyO3
+          # 0.28 officially supports up to CPython 3.13; the cp313t free-
+          # threaded wheel ships from a separate job below.
+          args: --release --out dist --interpreter python3.10 python3.11 python3.12 python3.13
           manylinux: auto
 
       # Belt-and-braces: even if Cargo.toml was right, confirm the
