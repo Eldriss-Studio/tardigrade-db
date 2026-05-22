@@ -55,6 +55,57 @@ from tardigrade_vllm.slot_resolver import BatchSlice, RequestSlotResolver
 logger = logging.getLogger("tardigrade_vllm")
 
 
+def _first_block_id(blocks) -> Optional[int]:
+    """Extract the first block ID from vLLM's allocation result.
+
+    Adapter (GoF Structural): bridges vLLM 0.19+'s ``KVCacheBlocks``
+    dataclass to the ``fp: int`` fingerprint contract our connector and
+    engine already understand. The ``hasattr`` duck-type gate also
+    accepts older vLLM builds that passed a bare list of block IDs or
+    a tuple of lists — useful when a consumer is pinned to vLLM 0.18.
+
+    Returns ``None`` if the allocation result contains no blocks
+    (e.g. precomputed empty ``KVCacheBlocks`` for requests that didn't
+    need an allocation).
+    """
+    if hasattr(blocks, "get_block_ids"):
+        # vLLM 0.19+ — KVCacheBlocks dataclass. Returns
+        # tuple[list[int], ...] where the outer tuple is per kv cache
+        # group; we fingerprint by group 0's first block.
+        groups = blocks.get_block_ids()
+        if not groups or not groups[0]:
+            return None
+        return int(groups[0][0])
+    # Legacy: tuple of lists or bare list of block-id ints.
+    first_group = blocks[0] if isinstance(blocks, tuple) else blocks
+    if not first_group:
+        return None
+    return int(first_group[0] if isinstance(first_group, list) else first_group)
+
+
+def _extract_block_ids_list(blocks) -> list:
+    """Extract group 0's block IDs as a ``list[int]``.
+
+    Sibling to [`_first_block_id`] that returns the full list rather
+    than just the fingerprint. Used when downstream code needs to
+    iterate over allocated blocks (e.g. building per-block load
+    requests for the worker side).
+    """
+    if hasattr(blocks, "get_block_ids"):
+        groups = blocks.get_block_ids()
+        if not groups or not groups[0]:
+            return []
+        return [int(b) for b in groups[0]]
+    # Legacy: tuple of lists or bare list.
+    first_group = blocks[0] if isinstance(blocks, tuple) else blocks
+    if not first_group:
+        return []
+    if isinstance(first_group, list):
+        return [int(b) for b in first_group]
+    # Bare scalar — wrap as single-element list.
+    return [int(first_group)]
+
+
 def _parse_layer_index(layer_name: str):
     """Extract the integer following the ``layers`` segment in a layer name.
 
@@ -230,6 +281,39 @@ if HAS_VLLM:
             # Minimum retrieval score to consider a match
             self._match_threshold = float(config.get("match_threshold", 150.0))
 
+            # vLLM 0.19 contract: worker receives the per-layer KV caches via
+            # `register_kv_caches` at startup and stashes them by layer index.
+            # The older `forward_context.kv_caches[layer_idx]` accessor was
+            # removed; this dict replaces that lookup path in `start_load_kv`.
+            self._layer_caches_by_index: dict = {}
+
+        def register_kv_caches(self, kv_caches) -> None:
+            """vLLM 0.19+ lifecycle hook — receive per-layer KV cache tensors.
+
+            Called once at worker startup with the full layer-name → tensor
+            mapping. We index by parsed layer number so [`start_load_kv`]
+            can look up the cache by `layer_idx` from a pack entry.
+
+            Older vLLM (0.9.x) did not call this hook; the connector instead
+            grabbed `forward_context.kv_caches[layer_idx]` per call. That
+            attribute is gone in 0.19, so this hook is the only way to get
+            the cache references on current vLLM.
+            """
+            stashed = 0
+            for layer_name, tensor in kv_caches.items():
+                layer_idx = _parse_layer_index(layer_name)
+                if layer_idx is not None:
+                    self._layer_caches_by_index[layer_idx] = tensor
+                    stashed += 1
+                else:
+                    logger.debug(
+                        f"register_kv_caches: could not parse layer index from "
+                        f"{layer_name!r}; skipping"
+                    )
+            logger.info(
+                f"register_kv_caches: stashed {stashed}/{len(kv_caches)} layer caches"
+            )
+
         def _get_embed_weights(self):
             """Lazy-load the model's token embedding weights for retrieval keys.
 
@@ -398,7 +482,14 @@ if HAS_VLLM:
             logger.warning(
                 f"[match-OK] returning seq_len={seq_len} (matched pack {pack['pack_id']})"
             )
-            return seq_len, True  # async load supported
+            # Return load-is-synchronous (False). Our `start_load_kv` copies
+            # the pack tensors into the worker's KV cache slots before
+            # returning; there is no separate async-transfer machinery
+            # that would later signal completion via `get_finished()`.
+            # Returning True here would make vLLM wait forever for that
+            # signal — the exact cause of the v0.19 test 5 hang fixed in
+            # this commit.
+            return seq_len, False
 
         def update_state_after_alloc(
             self,
@@ -406,11 +497,20 @@ if HAS_VLLM:
             blocks,
             num_external_tokens: int,
         ) -> None:
-            """Record allocated block IDs for the load phase and stash token IDs."""
+            """Record allocated block IDs for the load phase and stash token IDs.
+
+            ``blocks`` is vLLM 0.19+'s ``KVCacheBlocks`` dataclass (older
+            vLLM passed a bare list / tuple of lists). Both shapes are
+            normalized through [`_first_block_id`] and
+            [`_extract_block_ids_list`] before crossing into our state.
+            """
             req_id = getattr(request, "request_id", id(request))
             if req_id in self._load_packs and num_external_tokens > 0:
+                # Materialize block IDs as a list[int] here so the
+                # consumer in build_connector_meta can list(...) without
+                # needing to know about KVCacheBlocks.
                 self._load_meta[req_id] = {
-                    "block_ids": blocks,
+                    "block_ids": _extract_block_ids_list(blocks),
                     "num_tokens": num_external_tokens,
                 }
 
@@ -418,9 +518,8 @@ if HAS_VLLM:
             # Works for ALL requests, not just load-matched ones.
             prompt_ids = getattr(request, "prompt_token_ids", None)
             if prompt_ids is not None:
-                first_blocks = blocks[0] if isinstance(blocks, tuple) else blocks
-                if first_blocks:
-                    fp = first_blocks[0] if isinstance(first_blocks, list) else first_blocks
+                fp = _first_block_id(blocks)
+                if fp is not None:
                     self._save_token_ids_by_fingerprint[fp] = list(prompt_ids)
 
         def build_connector_meta(self, scheduler_output) -> "KVConnectorMetadata":
@@ -482,7 +581,18 @@ if HAS_VLLM:
                     k_blocks = k_flat.reshape(num_blocks, self.block_size, self.num_kv_heads, self.head_dim)
                     v_blocks = v_flat.reshape(num_blocks, self.block_size, self.num_kv_heads, self.head_dim)
 
-                    kv_cache = forward_context.kv_caches[layer_idx]
+                    # vLLM 0.19 contract: KV caches arrive via `register_kv_caches`
+                    # at worker startup and live on `self._layer_caches_by_index`.
+                    # The older `forward_context.kv_caches[layer_idx]` accessor
+                    # was removed.
+                    kv_cache = self._layer_caches_by_index.get(layer_idx)
+                    if kv_cache is None:
+                        logger.warning(
+                            f"start_load_kv: no cached tensor for layer_idx={layer_idx}; "
+                            f"register_kv_caches may not have fired or layer name "
+                            f"did not parse. Skipping this layer."
+                        )
+                        continue
                     k_cache, v_cache = kv_cache[0], kv_cache[1]
 
                     k_tensor = torch.from_numpy(k_blocks)
@@ -717,16 +827,16 @@ if HAS_VLLM:
             self._load_packs.pop(req_id, None)
             self._load_meta.pop(req_id, None)
             # Defense-in-depth: clean token stash for finished requests.
-            # Normally cleared per-step in build_connector_meta.
+            # Normally cleared per-step in build_connector_meta. Same
+            # KVCacheBlocks-vs-legacy normalization as update_state_after_alloc.
             if block_ids is not None:
-                first_blocks = block_ids[0] if isinstance(block_ids, tuple) else block_ids
-                if first_blocks:
-                    fp = first_blocks[0] if isinstance(first_blocks, list) else first_blocks
+                fp = _first_block_id(block_ids)
+                if fp is not None:
                     self._save_token_ids_by_fingerprint.pop(fp, None)
                     # Release the engine-side fingerprint entry so a new
                     # request reusing this block id cannot read stale state.
                     try:
-                        self.engine.fingerprint_release(int(fp))
+                        self.engine.fingerprint_release(fp)
                     except (TypeError, ValueError, OverflowError) as e:
                         logger.debug(f"request_finished: fingerprint_release({fp!r}) failed: {e!r}")
             return False, None
