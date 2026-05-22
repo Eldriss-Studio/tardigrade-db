@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-05-22
+
+Finishes the vLLM 0.19 connector port that started in v0.7.5 — two save-path crashes now eliminated.
+
+### Bug Fixes
+
+- **vLLM connector save path**: under prefix-cache hits, was capturing only the new-token KV slice instead of the full request KV — the on-disk pack lost everything the cache had already served. Now threads `cumulative_seq_len` from `attn_metadata.seq_lens` through the worker so the saved slice covers the entire request.
+- **vLLM connector matched-token count**: `get_num_new_matched_tokens` could return a value larger than the request's remaining token budget, hitting `assert num_computed_tokens <= request.num_tokens` in vLLM's scheduler on short queries after the save-path fix above. Now clamps to `len(prompt_ids) - num_computed_tokens - 1`.
+
+### Test Infrastructure
+
+- **`tests/python/_gpu_test_utils.do_gpu_cleanup()`**: canonical helper for releasing GPU model fixtures (`del + gc.collect() + torch.cuda.empty_cache()`). Module-scoped `llm` fixtures in `test_vllm_integration.py` and `test_vllm_prefix_e2e.py` use it via `try/yield/finally`.
+- **`test_vllm_cross_session.py`**: `gpu_memory_utilization` lowered to `0.3` for the subprocess vLLM init, leaving headroom for whatever VRAM the parent pytest process is still holding from earlier modules — `empty_cache()` returns blocks to PyTorch's allocator pool, not to the CUDA driver, so only process exit fully releases. Fully eliminating cross-module VRAM leaks requires running heavy-GPU test files in separate `pytest` invocations in CI; tracked for follow-up.
+
 ## [0.7.5] — 2026-05-22
 
 vLLM 0.19 connector compatibility restored, plus a wheel matrix cleanup that retires three never-validated Python ABIs from PyPI.
