@@ -8,9 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-05-22
+
+Free-threaded Python 3.13t (PEP 703) support — a `cp313-cp313t` wheel now ships alongside the abi3 wheels.
+
 ### Compatibility
 
-- **Free-threaded Python 3.13t**: the publish workflow now builds a `cp313-cp313t` wheel alongside the abi3 wheels. Consumers running `python3.13t` (PEP 703 — experimental no-GIL CPython) get a wheel that lifts the GIL ceiling on concurrent reads. Measured win on the proof-of-concept hardware: GIL Python plateaus at ~42k qps for single-call workloads regardless of thread count; the cp313t wheel keeps scaling, reaching ~86k qps at 16 threads. Full record at [`docs/experiments/2026-05-22-freethreaded-python-proof.md`](docs/experiments/2026-05-22-freethreaded-python-proof.md). No consumer code changes — `pip install tardigrade-db` under 3.13t resolves to the cp313t wheel; under 3.10/3.11/3.12 it resolves to the abi3 wheel as before.
+- **Free-threaded Python 3.13t**: `pip install tardigrade-db` under `python3.13t` now resolves to a `cp313-cp313t` wheel built against the no-GIL CPython interpreter. Under 3.10 / 3.11 / 3.12 the abi3 wheel keeps serving as before. No consumer code changes. Lifts the GIL ceiling on concurrent reads: GIL Python plateaus at **~42k qps** for single-call workloads at 8+ threads; the cp313t wheel keeps scaling, reaching **~86k qps** at 16 threads on the proof-of-concept host. Full measurement record: [`docs/experiments/2026-05-22-freethreaded-python-proof.md`](docs/experiments/2026-05-22-freethreaded-python-proof.md).
 
 ## [0.7.3] — 2026-05-21
 

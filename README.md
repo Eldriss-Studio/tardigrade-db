@@ -6,7 +6,7 @@
 [![Docs](https://img.shields.io/badge/docs-eldriss--studio.github.io-blue)](https://eldriss-studio.github.io/tardigrade-db)
 [![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](rust-toolchain.toml)
 
-> **TardigradeDB v0.7.3 is a research-grade preview.** Public APIs are stable; benchmark methodology is under active validation.
+> **TardigradeDB v0.7.4 is a research-grade preview.** Public APIs are stable; benchmark methodology is under active validation.
 
 Most LLM memory systems run a separate embedding model on every store and every query, then re-tokenize the retrieved text into the prompt — three round trips per fact recalled, and a context window that fills as the agent learns. TardigradeDB skips both detours. It stores the model's own attention state (the KV cache), retrieves it via the same dot-product attention the model uses to think, and reinjects it without spending a single prompt token. Built from scratch in Rust with PyO3 Python bindings.
 
@@ -159,7 +159,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor workflow — C
 
 ## Project Status
 
-**Current version:** v0.7.3. Public APIs (Python + Rust) are stable for the 0.x series; breaking changes ride minor bumps per the semver pre-1.0 convention.
+**Current version:** v0.7.4. Public APIs (Python + Rust) are stable for the 0.x series; breaking changes ride minor bumps per the semver pre-1.0 convention.
 
 **Stable surfaces:**
 - The PyO3 Python API on `tardigrade_db.Engine` and the `tardigrade_hooks` consumer modules.
