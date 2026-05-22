@@ -41,10 +41,27 @@ class BatchSlice:
     """Sorted, deduplicated block IDs touched by this request this step."""
 
     slot_count: int
-    """Number of valid (non-padded) slots written this step."""
+    """Number of valid (non-padded) slots written THIS step (= query length).
+
+    For decode steps this is 1 (one new token per forward pass). For
+    prefill it's the full prompt length. Use [`cumulative_seq_len`]
+    when you need the full request's KV span across steps, not just
+    this step's new tokens.
+    """
 
     first_slot: int
     """First absolute slot index (useful for padding-vs-data detection)."""
+
+    cumulative_seq_len: int = 0
+    """Total tokens in this request's KV cache across all forward steps so
+    far (i.e. ``attn_metadata.seq_lens[i]``). Zero if the resolver could
+    not derive it from the attn_metadata (older vLLM, missing field).
+
+    Used by the save path: each step's `kv_layer` tensor holds the
+    request's cumulative KV, not just this step's new contribution.
+    Saving with `slot_count` (per-step) loses the prior steps; saving
+    with `cumulative_seq_len` captures the whole request.
+    """
 
 
 class RequestSlotResolver:
@@ -76,6 +93,14 @@ class RequestSlotResolver:
         starts = query_start_loc.tolist() if hasattr(query_start_loc, "tolist") else list(query_start_loc)
         slots = slot_mapping.tolist() if hasattr(slot_mapping, "tolist") else list(slot_mapping)
 
+        # seq_lens is the cumulative KV length per request (across all
+        # forward steps so far). Optional — older vLLM may not have it.
+        seq_lens_attr = getattr(attn_metadata, "seq_lens", None)
+        seq_lens = (
+            seq_lens_attr.tolist() if hasattr(seq_lens_attr, "tolist")
+            else (list(seq_lens_attr) if seq_lens_attr is not None else None)
+        )
+
         slices: list[BatchSlice] = []
         for i in range(len(starts) - 1):
             start, end = starts[i], starts[i + 1]
@@ -83,10 +108,14 @@ class RequestSlotResolver:
                 continue
             req_slots = slots[start:end]
             req_blocks = sorted({slot // block_size for slot in req_slots})
+            cumulative = (
+                int(seq_lens[i]) if seq_lens is not None and i < len(seq_lens) else 0
+            )
             slices.append(BatchSlice(
                 batch_index=i,
                 block_indices=tuple(req_blocks),
                 slot_count=end - start,
                 first_slot=req_slots[0],
+                cumulative_seq_len=cumulative,
             ))
         return slices

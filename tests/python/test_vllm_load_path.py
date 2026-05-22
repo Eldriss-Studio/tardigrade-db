@@ -273,12 +273,23 @@ def test_connector_init_accepts_kv_cache_config_kwarg():
 
 # -- RequestSlotResolver tests (Step 1 / Strategy + Parameter Object) ---------
 
-def _make_attn_metadata_mock(slot_mapping, query_start_loc):
-    """Build a minimal mock that mimics vLLM 0.19 FlashAttentionMetadata."""
+def _make_attn_metadata_mock(slot_mapping, query_start_loc, seq_lens=None):
+    """Build a minimal mock that mimics vLLM 0.19 FlashAttentionMetadata.
+
+    `seq_lens` is the cumulative KV length per request (across all forward
+    steps so far). Explicitly set to None when omitted so MagicMock's
+    auto-attribute doesn't return a sub-mock that the resolver would then
+    try to tolist() — pass a real list / tensor of per-request cumulative
+    lengths to test the cumulative-seq-len path.
+    """
     import torch
     am = MagicMock()
     am.slot_mapping = torch.tensor(slot_mapping, dtype=torch.long)
     am.query_start_loc = torch.tensor(query_start_loc, dtype=torch.long)
+    am.seq_lens = (
+        torch.tensor(seq_lens, dtype=torch.long) if seq_lens is not None
+        else None
+    )
     return am
 
 
@@ -362,6 +373,127 @@ def test_resolver_handles_decode_step_one_token_per_request():
     assert [s.block_indices for s in slices] == [(1,), (0,), (4,)]
 
 
+# -- cumulative_seq_len: save-side captures the full request, not just the
+#    current step's new tokens. Without this, multi-step generations (prefill
+#    + N decode steps) save only the last step's KV (slot_count=1), losing
+#    every prior token from the pack. The recall test surfaces it; these ATs
+#    pin the underlying contract.
+
+def test_resolver_populates_cumulative_seq_len_from_attn_metadata():
+    """GIVEN attn_metadata where each request has a different cumulative
+    sequence length across forward passes (e.g., one at step 20, one at step 5),
+    WHEN resolve() runs,
+    THEN each BatchSlice.cumulative_seq_len matches the seq_lens entry for
+    that request — NOT slot_count, which only reflects this step's new tokens."""
+    pytest.importorskip("torch")
+    from tardigrade_vllm.slot_resolver import RequestSlotResolver
+
+    # Two decode-step requests: each adds 1 token THIS step (slot_count=1)
+    # but they've been generating for different durations.
+    am = _make_attn_metadata_mock(
+        slot_mapping=[20, 5],
+        query_start_loc=[0, 1, 2],
+        seq_lens=[20, 5],
+    )
+    slices = RequestSlotResolver().resolve(am, block_size=16)
+
+    assert len(slices) == 2
+    assert slices[0].slot_count == 1  # per-step (still 1)
+    assert slices[1].slot_count == 1
+    assert slices[0].cumulative_seq_len == 20  # cumulative across steps
+    assert slices[1].cumulative_seq_len == 5
+
+
+def test_resolver_cumulative_seq_len_defaults_to_zero_when_attn_metadata_lacks_field():
+    """GIVEN attn_metadata without seq_lens (older vLLM, or missing field),
+    WHEN resolve() runs,
+    THEN cumulative_seq_len is 0 — a sentinel meaning 'unknown, fall back to
+    slot_count downstream'. Backward-compat path for vLLM < 0.19."""
+    pytest.importorskip("torch")
+    from tardigrade_vllm.slot_resolver import RequestSlotResolver
+
+    am = _make_attn_metadata_mock(
+        slot_mapping=[16, 17, 18, 19, 20],
+        query_start_loc=[0, 5],
+        # seq_lens omitted — defaults to None
+    )
+    slices = RequestSlotResolver().resolve(am, block_size=16)
+
+    assert len(slices) == 1
+    assert slices[0].slot_count == 5
+    assert slices[0].cumulative_seq_len == 0
+
+
+def test_extract_kv_slice_prefers_cumulative_seq_len_over_slot_count():
+    """GIVEN a BatchSlice with cumulative_seq_len=20 (full request) and
+    slot_count=1 (this decode step's new token),
+    WHEN _extract_kv_slice runs,
+    THEN the returned (k, v) arrays have 20 rows — capturing the full request's
+    KV across all prior forward passes, NOT just the 1-token slice from this
+    step. This is the contract that turns multi-step save into one pack per
+    request instead of one pack per forward pass."""
+    pytest.importorskip("vllm", reason="vLLM not installed")
+    torch = pytest.importorskip("torch")
+    from tardigrade_vllm.slot_resolver import BatchSlice
+
+    # Block size 16, 2 blocks → 32 slots total. A request with
+    # cumulative_seq_len=20 should fill 20 of those 32 slots.
+    c = _build_bare_connector(num_kv_heads=4, head_dim=8, block_size=16, num_layers=1)
+    kv = torch.zeros((2, 2, 16, 4, 8), dtype=torch.float32)  # [2, blocks, bs, h, d]
+    # Mark slots 0..19 with distinct values so we can verify they're captured.
+    for slot in range(20):
+        block = slot // 16
+        within = slot % 16
+        kv[0, block, within] = float(slot + 100)  # K
+        kv[1, block, within] = float(slot + 200)  # V
+
+    sl = BatchSlice(
+        batch_index=0,
+        block_indices=(0, 1),
+        slot_count=1,            # decode step's contribution
+        first_slot=20,
+        cumulative_seq_len=20,   # full request span
+    )
+    k_np, v_np = c._extract_kv_slice(kv, sl, torch)
+
+    assert k_np.shape[0] == 20, f"expected 20 rows (cumulative), got {k_np.shape[0]}"
+    assert v_np.shape[0] == 20, f"expected 20 rows (cumulative), got {v_np.shape[0]}"
+    # First and last token's K must carry the values we wrote in
+    assert k_np[0, 0] == 100.0
+    assert k_np[19, 0] == 119.0
+    assert v_np[0, 0] == 200.0
+    assert v_np[19, 0] == 219.0
+
+
+def test_extract_kv_slice_falls_back_to_slot_count_when_cumulative_zero():
+    """GIVEN a BatchSlice with cumulative_seq_len=0 (older vLLM, no seq_lens),
+    WHEN _extract_kv_slice runs,
+    THEN it falls back to slot_count for the row count. Backward-compat path."""
+    pytest.importorskip("vllm", reason="vLLM not installed")
+    torch = pytest.importorskip("torch")
+    from tardigrade_vllm.slot_resolver import BatchSlice
+
+    c = _build_bare_connector(num_kv_heads=4, head_dim=8, block_size=16, num_layers=1)
+    kv = torch.zeros((2, 1, 16, 4, 8), dtype=torch.float32)
+    for slot in range(5):
+        kv[0, 0, slot] = float(slot + 100)
+        kv[1, 0, slot] = float(slot + 200)
+
+    sl = BatchSlice(
+        batch_index=0,
+        block_indices=(0,),
+        slot_count=5,
+        first_slot=0,
+        cumulative_seq_len=0,  # unknown — should fall back to slot_count
+    )
+    k_np, v_np = c._extract_kv_slice(kv, sl, torch)
+
+    assert k_np.shape[0] == 5
+    assert v_np.shape[0] == 5
+    assert k_np[0, 0] == 100.0
+    assert k_np[4, 0] == 104.0
+
+
 # -- Step 4: real start_load_kv writes to GPU buffer (Spy pattern) ------------
 #
 # Constructs TardigradeConnector via __new__ to skip the heavyweight vLLM
@@ -369,7 +501,13 @@ def test_resolver_handles_decode_step_one_token_per_request():
 # from real torch tensors so .copy_() actually moves data. CPU-only.
 
 def _build_bare_connector(num_kv_heads, head_dim, block_size, num_layers):
-    """Construct a TardigradeConnector with the minimum attributes start_load_kv touches."""
+    """Construct a TardigradeConnector with the minimum attributes start_load_kv touches.
+
+    Includes the empty ``_layer_caches_by_index`` dict that vLLM 0.19+
+    populates via ``register_kv_caches`` at worker startup — tests that
+    drive ``start_load_kv`` are expected to register caches before the
+    call. Matches the production lifecycle.
+    """
     pytest.importorskip("vllm", reason="vLLM not installed")
     from tardigrade_vllm.connector import TardigradeConnector
 
@@ -381,21 +519,36 @@ def _build_bare_connector(num_kv_heads, head_dim, block_size, num_layers):
     c.kv_dim = num_kv_heads * head_dim
     c._load_packs = {}
     c._load_meta = {}
+    c._layer_caches_by_index = {}
     return c
 
 
-def _mock_torch_forward_context(num_layers, num_total_blocks, block_size, num_kv_heads, head_dim):
-    """Build a mock forward_context with torch CPU tensors for kv_caches."""
+def _mock_torch_kv_caches(num_layers, num_total_blocks, block_size, num_kv_heads, head_dim):
+    """Build a layer-name → (k, v) dict shaped to feed `register_kv_caches`.
+
+    Returns a dict the test can pass directly to ``c.register_kv_caches(...)``;
+    after that call, ``c._layer_caches_by_index`` is populated and
+    ``start_load_kv`` can run. The values are ``(k, v)`` tuples (the layout
+    ``kv_cache[0], kv_cache[1]`` continues to unpack correctly) so tests can
+    inspect K and V independently.
+    """
     torch = pytest.importorskip("torch")
-    ctx = MagicMock()
     shape = (num_total_blocks, block_size, num_kv_heads, head_dim)
-    kv_caches = []
-    for _ in range(num_layers):
-        k = torch.zeros(shape, dtype=torch.float32)
-        v = torch.zeros(shape, dtype=torch.float32)
-        kv_caches.append((k, v))
-    ctx.kv_caches = kv_caches
-    return ctx
+    return {
+        f"model.layers.{i}.self_attn.attn": (
+            torch.zeros(shape, dtype=torch.float32),
+            torch.zeros(shape, dtype=torch.float32),
+        )
+        for i in range(num_layers)
+    }
+
+
+def _mock_torch_forward_context():
+    """Bare forward_context stub. vLLM 0.19 removed ``kv_caches`` from it;
+    tests use [`_mock_torch_kv_caches`] + ``register_kv_caches`` instead.
+    The ctx still needs to exist because ``start_load_kv`` accepts it as a
+    positional arg."""
+    return MagicMock()
 
 
 def _bind_metadata_for_load(connector, requests):
@@ -414,7 +567,7 @@ def _bind_metadata_for_load(connector, requests):
 
 def test_real_start_load_kv_writes_block_slot():
     """GIVEN a manually-staged pack with all-ones K and known V data,
-    WHEN TardigradeConnector.start_load_kv runs,
+    WHEN TardigradeConnector.start_load_kv runs (after register_kv_caches),
     THEN the allocated GPU block slot is non-zero in both K and V caches."""
     torch = pytest.importorskip("torch")
     num_kv_heads, head_dim, block_size = 2, 4, 4
@@ -422,8 +575,11 @@ def test_real_start_load_kv_writes_block_slot():
     seq_len = 4  # exactly 1 block worth
 
     c = _build_bare_connector(num_kv_heads, head_dim, block_size, num_layers)
-    ctx = _mock_torch_forward_context(num_layers, num_total_blocks, block_size,
+    kv_caches = _mock_torch_kv_caches(num_layers, num_total_blocks, block_size,
                                        num_kv_heads, head_dim)
+    # vLLM 0.19 lifecycle: register_kv_caches fires before any start_load_kv.
+    c.register_kv_caches(kv_caches)
+    ctx = _mock_torch_forward_context()
 
     kv_dim = num_kv_heads * head_dim
     k_flat = np.ones(seq_len * kv_dim, dtype=np.float32)
@@ -440,14 +596,15 @@ def test_real_start_load_kv_writes_block_slot():
         "num_tokens": seq_len,
     }])
 
-    for k_cache, v_cache in ctx.kv_caches:
+    for layer_idx in range(num_layers):
+        k_cache, v_cache = c._layer_caches_by_index[layer_idx]
         assert torch.all(k_cache == 0)
         assert torch.all(v_cache == 0)
 
     c.start_load_kv(ctx)
 
     for layer_idx in range(num_layers):
-        k_cache, v_cache = ctx.kv_caches[layer_idx]
+        k_cache, v_cache = c._layer_caches_by_index[layer_idx]
         assert torch.all(k_cache[3] == 1.0), (
             f"Layer {layer_idx}: K cache block 3 not written to all-ones; "
             f"got max={k_cache[3].max().item()}, min={k_cache[3].min().item()}"
@@ -467,14 +624,16 @@ def test_real_start_load_kv_ignores_empty_metadata():
     num_layers, num_total_blocks = 1, 4
 
     c = _build_bare_connector(num_kv_heads, head_dim, block_size, num_layers)
-    ctx = _mock_torch_forward_context(num_layers, num_total_blocks, block_size,
+    kv_caches = _mock_torch_kv_caches(num_layers, num_total_blocks, block_size,
                                        num_kv_heads, head_dim)
+    c.register_kv_caches(kv_caches)
+    ctx = _mock_torch_forward_context()
 
     _bind_metadata_for_load(c, [])
 
     c.start_load_kv(ctx)
 
-    k_cache, v_cache = ctx.kv_caches[0]
+    k_cache, v_cache = c._layer_caches_by_index[0]
     assert torch.all(k_cache == 0), "No blocks should be touched"
 
 
@@ -504,6 +663,7 @@ def _build_bare_connector_for_scheduler(tmp_path, embed_dim=8):
     c.block_size = 4
     c._load_packs = {}
     c._load_meta = {}
+    c._layer_caches_by_index = {}  # populated via register_kv_caches in vLLM 0.19
     c._save_buffers = {}
     c._embed_weights = None
     c._match_threshold = 1.0  # low threshold so any positive match counts
@@ -668,6 +828,7 @@ def _build_connector_for_save_path(tmp_path, max_fingerprints=4):
     c.hidden_size = 8
     c._load_packs = {}
     c._load_meta = {}
+    c._layer_caches_by_index = {}  # populated via register_kv_caches in vLLM 0.19
     c._save_buffers = {}
     c._save_token_ids_by_fingerprint = {}
     c._max_fingerprints = max_fingerprints
@@ -896,17 +1057,19 @@ def test_start_load_kv_reads_from_bound_metadata_not_instance_state(tmp_path):
     # Simulate IPC: bind the metadata on the worker side
     c._connector_metadata = meta
 
-    # Build mock forward context with torch caches
-    ctx = _mock_torch_forward_context(
+    # vLLM 0.19 lifecycle: register_kv_caches fires before start_load_kv.
+    kv_caches = _mock_torch_kv_caches(
         c.num_layers, 8, c.block_size, c.num_kv_heads, c.head_dim
     )
+    c.register_kv_caches(kv_caches)
+    ctx = _mock_torch_forward_context()
 
     c.start_load_kv(ctx)
 
     # Verify at least one block was written (non-zero)
     wrote_something = False
     for layer_idx in range(c.num_layers):
-        k_cache, v_cache = ctx.kv_caches[layer_idx]
+        k_cache, v_cache = c._layer_caches_by_index[layer_idx]
         for bid in [1, 2, 3]:  # block_ids from the two requests
             if not torch.allclose(k_cache[bid], torch.zeros_like(k_cache[bid])):
                 wrote_something = True

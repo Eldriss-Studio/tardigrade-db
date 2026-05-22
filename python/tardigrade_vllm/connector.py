@@ -639,7 +639,10 @@ if HAS_VLLM:
             if not slices:
                 # No per-request slot info — fall back to single-buffer behaviour
                 # so we don't silently drop the step on unknown attn_metadata shapes.
-                slices = [BatchSlice(batch_index=0, block_indices=(), slot_count=0, first_slot=0)]
+                slices = [BatchSlice(
+                    batch_index=0, block_indices=(), slot_count=0,
+                    first_slot=0, cumulative_seq_len=0,
+                )]
 
             for sl in slices:
                 buf = self._save_buffers.setdefault(sl.batch_index, {})
@@ -789,11 +792,24 @@ if HAS_VLLM:
                 .cpu()
                 .numpy()
             )
-            # Reshape to (tokens, kv_dim) and trim to the actual valid token count
+            # Reshape to (tokens, kv_dim) and trim to the actual valid token count.
+            #
+            # Prefer `cumulative_seq_len` (= total tokens in this request's
+            # KV cache across all forward steps) over `slot_count` (= just
+            # this step's new tokens). `kv` holds the full cumulative KV
+            # for the request; saving with slot_count alone loses every
+            # token from prior forward passes — which manifests as packs
+            # that only contain the last decode step's single new token,
+            # breaking recall.
             n_blocks = sliced.shape[1]
             slots_per_block = sliced.shape[2]
             total_slots = n_blocks * slots_per_block
-            valid = sl.slot_count if sl.slot_count > 0 else total_slots
+            if sl.cumulative_seq_len > 0:
+                valid = sl.cumulative_seq_len
+            elif sl.slot_count > 0:
+                valid = sl.slot_count
+            else:
+                valid = total_slots
             valid = min(valid, total_slots)
 
             k_np = sliced[0].reshape(total_slots, self.kv_dim)[:valid]
