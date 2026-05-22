@@ -81,6 +81,82 @@ jobs:
           name: wheels-${{ matrix.os }}
           path: dist
 
+  build-wheels-freethreaded:
+    name: Build free-threaded wheel (cp313t)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Same version-vs-tag guard as the abi3 builds. A stale-target
+      # GitHub Release would otherwise burn a full free-threaded build
+      # before erroring on the wheel-filename check downstream.
+      - name: Verify Cargo.toml version matches tag
+        shell: bash
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          TAG="${GH_REF#refs/tags/}"
+          EXPECTED="${TAG#v}"
+          ACTUAL=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Cargo.toml workspace version '$ACTUAL' does not match release tag '$EXPECTED'"
+            exit 1
+          fi
+
+      # python3.13t — free-threaded CPython per PEP 703. setup-python
+      # serves these binaries since mid-2025; if they ever vanish from
+      # the Action's manifest, swap to actions/setup-python@v5 with
+      # `allow-prereleases: true` or fall back to a uv-managed install.
+      - name: Install free-threaded Python 3.13t
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13t'
+
+      - name: Install maturin
+        run: pip install maturin
+
+      # Disable abi3 forward-compat: cp313t does not share an ABI with
+      # the abi3 wheels. Build under the explicit interpreter so the
+      # wheel filename carries the cp313-cp313t ABI tags PyPI requires
+      # to route 3.13t installs to this wheel.
+      - name: Build cp313t wheel
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 0
+        run: |
+          maturin build --release --out dist --interpreter $(which python3.13t)
+
+      - name: Verify wheel filename carries cp313t tags
+        shell: bash
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          TAG="${GH_REF#refs/tags/}"
+          EXPECTED="${TAG#v}"
+          fail=0
+          for whl in dist/*.whl; do
+            VER=$(basename "$whl" | cut -d- -f2)
+            if [ "$VER" != "$EXPECTED" ]; then
+              echo "::error::Wheel $(basename "$whl") version '$VER' does not match tag '$EXPECTED'"
+              fail=1
+            fi
+            case "$(basename "$whl")" in
+              *-cp313-cp313t-*) ;;
+              *)
+                echo "::error::Wheel $(basename "$whl") is missing cp313-cp313t ABI tags"
+                fail=1
+                ;;
+            esac
+          done
+          [ "$fail" = "0" ] || exit 1
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-freethreaded
+          path: dist
+
   build-sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
@@ -132,7 +208,7 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: [build-wheels, build-sdist]
+    needs: [build-wheels, build-wheels-freethreaded, build-sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

@@ -166,6 +166,9 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor workflow — C
 - The Rust `tdb-engine` crate and supporting workspace crates.
 - Portable snapshot / restore (tar archive with magic, codec identifiers, SHA-256).
 
+**Experimental:**
+- Free-threaded Python 3.13t (PEP 703). The publish workflow ships a `cp313-cp313t` wheel alongside the abi3 wheels — installing under `python3.13t` resolves to it automatically. Lifts the GIL ceiling on concurrent pack reads: GIL Python plateaus at ~42k qps for single-call workloads at 8+ threads; the cp313t wheel keeps scaling. Proof-of-concept measurements: [`docs/experiments/2026-05-22-freethreaded-python-proof.md`](docs/experiments/2026-05-22-freethreaded-python-proof.md).
+
 **Under active validation:**
 - LoCoMo / LongMemEval benchmark methodology — earlier headline numbers (68.2 % LoCoMo / 90.9 % LongMemEval) were **retracted on 2026-05-14** after an audit found the runs measured the lexical fallback adapter on a corpus corrupted by a dataset-prep bug. Honest native-engine number on clean LoCoMo: ~36 % R@1 at 50-item scale; full-corpus re-measurement pending. Synthetic-corpus results (100 % recall at 5K, vague-query refinement, KV injection on gibberish facts, cross-model retrieval) are unaffected. Full record: [`docs/experiments/2026-05-14-bench-audit.md`](docs/experiments/2026-05-14-bench-audit.md).
 - Production serving. HuggingFace direct injection works today via `KnowledgePackStore`. vLLM is partial: the official KV Connector v1 supports prefix-cache acceleration (a real win on repeated prompts), but cross-prompt KV injection — the thing that lets the model behave as if it had lived through prior conversations — would need a custom attention plugin, which is future work. See [`docs/roadmap.md`](docs/roadmap.md).

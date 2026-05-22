@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Compatibility
+
+- **Free-threaded Python 3.13t**: the publish workflow now builds a `cp313-cp313t` wheel alongside the abi3 wheels. Consumers running `python3.13t` (PEP 703 — experimental no-GIL CPython) get a wheel that lifts the GIL ceiling on concurrent reads. Measured win on the proof-of-concept hardware: GIL Python plateaus at ~42k qps for single-call workloads regardless of thread count; the cp313t wheel keeps scaling, reaching ~86k qps at 16 threads. Full record at [`docs/experiments/2026-05-22-freethreaded-python-proof.md`](docs/experiments/2026-05-22-freethreaded-python-proof.md). No consumer code changes — `pip install tardigrade-db` under 3.13t resolves to the cp313t wheel; under 3.10/3.11/3.12 it resolves to the abi3 wheel as before.
+
 ## [0.7.3] — 2026-05-21
 
 Concurrent pack reads. Multiple Python threads can now call `mem_read_pack` against a shared engine in parallel — **1.74× aggregate throughput at 8 threads** measured on a 192-pack corpus (33,682 queries/sec vs 19,309 single-threaded). Single-thread drops ~10% from RwLock acquire overhead vs the prior Mutex; the win arrives from real parallel reads.
