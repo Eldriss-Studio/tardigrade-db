@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-05-22
+
+vLLM 0.19 connector compatibility restored, plus a wheel matrix cleanup that retires three never-validated Python ABIs from PyPI.
+
+### Bug Fixes
+
+- **vLLM 0.19 connector**: three stacked API drifts since vLLM 0.18. `update_state_after_alloc(blocks=…)` now receives a `KVCacheBlocks` dataclass instead of a list of block IDs — was crashing on `TypeError: unhashable type`. `ForwardContext.kv_caches` was removed; the connector now stashes per-layer caches via the new `register_kv_caches` lifecycle hook. The connector also advertised async-load semantics it never delivered — vLLM 0.19 enforced that contract by waiting forever for a completion signal. Returns sync semantics now. Result: 5 of 7 vLLM integration tests pass reliably (up from 0 of 7 on 0.7.4); test suite wall time 25-min hang → 45s. Two remaining vLLM tests fail on different bug classes (silent injection skip on the worker, fixture isolation) tracked for follow-up.
+
+### Compatibility
+
+- **Wheel matrix pinned**: `pip install tardigrade-db` no longer ships wheels for Python 3.14 RC, Python 3.15 alpha, or PyPy 3.11. v0.7.4 had shipped those by accident — `maturin --find-interpreter` discovered them on the GitHub runner without our ever validating against them. Consumers on those interpreters now fall through to `sdist` build-from-source. Validated set: cp310, cp311, cp312, cp313 (abi3) + cp313t (free-threaded, separate wheel).
+
 ## [0.7.4] — 2026-05-22
 
 Free-threaded Python 3.13t (PEP 703) support — a `cp313-cp313t` wheel now ships alongside the abi3 wheels.
