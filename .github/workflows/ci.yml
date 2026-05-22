@@ -206,13 +206,15 @@ jobs:
       - name: Build cp313t wheel
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 0
-        run: maturin develop --release --interpreter $(which python3.13t)
+        run: |
+          maturin build --release --out dist --interpreter "$(which python3.13t)"
+          pip install dist/*.whl
 
       - name: Confirm GIL is disabled
-        run: python -c "import sys; assert not sys._is_gil_enabled(), 'GIL still on'"
+        run: python3.13t -c "import sys; assert not sys._is_gil_enabled(), 'GIL still on'"
 
       - name: Run scaling diagnostic
-        run: python experiments/concurrent_reads_scaling.py | tee freethreaded-scaling.log
+        run: python3.13t experiments/concurrent_reads_scaling.py | tee freethreaded-scaling.log
 
       # Contract: the cp313t wheel exists to deliver real parallel reads
       # on single-call workloads. 8-thread b=1 speedup > 3.0x on a hot
@@ -227,7 +229,7 @@ jobs:
             exit 1
           fi
           echo "Measured 8-thread b=1 speedup: ${SPEEDUP}x"
-          python -c "import sys; sys.exit(0 if float('${SPEEDUP}') > 3.0 else 1)"
+          python3.13t -c "import sys; sys.exit(0 if float('${SPEEDUP}') > 3.0 else 1)"
 
   doc:
     name: Documentation
