@@ -296,4 +296,14 @@ def test_calibrate_on_recurrentgemma_does_not_crash():
 
     result = select_query_layer(model, tok)
     assert 0 <= result.best_layer < result.n_layers + 1
-    assert len(result.scores) == result.n_layers + 1
+    # Behavioral contract per the test name ("does not crash"):
+    # calibration produced output AND the engine round-trip worked for
+    # at least one (strategy, layer) candidate. Multi-strategy
+    # calibration enumerates 1+ candidate per strategy, so result.scores
+    # cardinality is an implementation detail — what we care about is
+    # that retrieval signal is non-zero somewhere.
+    assert result.scores, "calibration produced no scores"
+    assert any(s.top5 > 0 for s in result.scores), (
+        "no candidate reported any retrieval signal — calibration ran "
+        "but the engine round-trip is broken across every strategy/layer"
+    )
