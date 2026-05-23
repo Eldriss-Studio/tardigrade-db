@@ -188,6 +188,24 @@ class CalibrationResult:
             scores=tuple(LayerScore.from_dict(s) for s in d["scores"]),
         )
 
+    def best_score(self) -> LayerScore:
+        """Return the [`LayerScore`] for ``(best_strategy, best_layer)``.
+
+        Looks up by the (strategy, layer) pair rather than positional
+        index. ``scores`` is enumeration-ordered, NOT keyed by layer
+        index — ``scores[best_layer]`` returns the right entry only when
+        a single strategy enumerates one score per layer, which fails
+        silently the moment multi-strategy enumeration kicks in.
+        """
+        for s in self.scores:
+            if s.layer == self.best_layer and s.strategy == self.best_strategy:
+                return s
+        raise LookupError(
+            f"no score with (layer={self.best_layer}, "
+            f"strategy={self.best_strategy!r}) found in scores — "
+            f"best_layer/best_strategy and scores got out of sync"
+        )
+
 
 class CalibrationStrategy(ABC):
     """Algorithm for finding the best retrieval-key layer.

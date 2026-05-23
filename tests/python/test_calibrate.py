@@ -50,6 +50,54 @@ def test_calibration_result_is_frozen_dataclass():
         result.best_layer = 99  # type: ignore[misc]
 
 
+def test_best_score_returns_entry_matching_best_strategy_when_layer_shared():
+    """When multiple strategies enumerate the same layer index, the
+    accessor must disambiguate by ``best_strategy`` — not by positional
+    index into the flat tuple. Positional indexing (the previous
+    ``scores[best_layer]`` foot-gun) returned the wrong strategy's entry
+    whenever the enumeration order didn't match the layer index."""
+    result = CalibrationResult(
+        model_id="x",
+        tardigrade_db_version="0.0.0",
+        timestamp_iso="2026-05-19T00:00:00",
+        n_layers=4,
+        hidden_size=8,
+        best_layer=3,
+        best_strategy="k_vector",
+        scores=(
+            LayerScore(layer=3, kind="attention", top1=5, top5=10, strategy="hidden_state"),
+            LayerScore(layer=3, kind="attention", top1=18, top5=20, strategy="k_vector"),
+        ),
+    )
+    best = result.best_score()
+    assert best.strategy == "k_vector"
+    assert best.top5 == 20
+
+
+def test_best_score_returns_entry_matching_best_layer_when_strategy_shared():
+    """When one strategy enumerates many layers, the accessor must
+    disambiguate by ``best_layer``. Verifies the lookup is the
+    intersection of (best_strategy, best_layer), not just one of them."""
+    result = CalibrationResult(
+        model_id="x",
+        tardigrade_db_version="0.0.0",
+        timestamp_iso="2026-05-19T00:00:00",
+        n_layers=4,
+        hidden_size=8,
+        best_layer=2,
+        best_strategy="hidden_state",
+        scores=(
+            LayerScore(layer=0, kind="embedding", top1=1, top5=2, strategy="hidden_state"),
+            LayerScore(layer=1, kind="attention", top1=3, top5=5, strategy="hidden_state"),
+            LayerScore(layer=2, kind="attention", top1=18, top5=20, strategy="hidden_state"),
+            LayerScore(layer=3, kind="attention", top1=12, top5=15, strategy="hidden_state"),
+        ),
+    )
+    best = result.best_score()
+    assert best.layer == 2
+    assert best.top5 == 20
+
+
 def test_calibration_result_round_trips_through_as_dict_from_dict():
     original = CalibrationResult(
         model_id="x",
@@ -271,10 +319,10 @@ def test_calibrate_on_qwen3_picks_layer_with_high_recall():
     model.train(False)
 
     result = select_query_layer(model, tok)
-    best_score = result.scores[result.best_layer]
+    best_score = result.best_score()
     assert best_score.top5 >= int(0.8 * 20), (
         f"Expected top-5 ≥ 16/20 on Qwen3-0.6B; got {best_score.top5}/20 "
-        f"at best_layer={result.best_layer}"
+        f"at best_layer={result.best_layer}, best_strategy={result.best_strategy!r}"
     )
 
 

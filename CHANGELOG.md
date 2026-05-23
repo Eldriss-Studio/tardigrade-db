@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Public API
+
+- **`CalibrationResult.best_score()`**: returns the `LayerScore` for `(best_strategy, best_layer)`. Use this instead of `result.scores[result.best_layer]` — `scores` is enumeration-ordered, not keyed by layer index, so positional indexing silently returns the wrong strategy's entry whenever multi-strategy enumeration runs (the recurrentgemma hybrid case).
+
 ## [0.7.6] — 2026-05-22
 
 Finishes the vLLM 0.19 connector port that started in v0.7.5 — two save-path crashes now eliminated.
