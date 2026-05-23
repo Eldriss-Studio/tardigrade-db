@@ -50,60 +50,10 @@ import tardigrade_db
 # Block-layout conversion now runs in Rust via Engine.flat_to_paged /
 # Engine.paged_to_flat. The Python format module is retained as the
 # numerical reference oracle for the Phase 8 parity tests.
+from tardigrade_vllm._vllm_bridge import KVCacheBlocksAdapter, RequestAdapter
 from tardigrade_vllm.slot_resolver import BatchSlice, RequestSlotResolver
 
 logger = logging.getLogger("tardigrade_vllm")
-
-
-def _first_block_id(blocks) -> Optional[int]:
-    """Extract the first block ID from vLLM's allocation result.
-
-    Adapter (GoF Structural): bridges vLLM 0.19+'s ``KVCacheBlocks``
-    dataclass to the ``fp: int`` fingerprint contract our connector and
-    engine already understand. The ``hasattr`` duck-type gate also
-    accepts older vLLM builds that passed a bare list of block IDs or
-    a tuple of lists — useful when a consumer is pinned to vLLM 0.18.
-
-    Returns ``None`` if the allocation result contains no blocks
-    (e.g. precomputed empty ``KVCacheBlocks`` for requests that didn't
-    need an allocation).
-    """
-    if hasattr(blocks, "get_block_ids"):
-        # vLLM 0.19+ — KVCacheBlocks dataclass. Returns
-        # tuple[list[int], ...] where the outer tuple is per kv cache
-        # group; we fingerprint by group 0's first block.
-        groups = blocks.get_block_ids()
-        if not groups or not groups[0]:
-            return None
-        return int(groups[0][0])
-    # Legacy: tuple of lists or bare list of block-id ints.
-    first_group = blocks[0] if isinstance(blocks, tuple) else blocks
-    if not first_group:
-        return None
-    return int(first_group[0] if isinstance(first_group, list) else first_group)
-
-
-def _extract_block_ids_list(blocks) -> list:
-    """Extract group 0's block IDs as a ``list[int]``.
-
-    Sibling to [`_first_block_id`] that returns the full list rather
-    than just the fingerprint. Used when downstream code needs to
-    iterate over allocated blocks (e.g. building per-block load
-    requests for the worker side).
-    """
-    if hasattr(blocks, "get_block_ids"):
-        groups = blocks.get_block_ids()
-        if not groups or not groups[0]:
-            return []
-        return [int(b) for b in groups[0]]
-    # Legacy: tuple of lists or bare list.
-    first_group = blocks[0] if isinstance(blocks, tuple) else blocks
-    if not first_group:
-        return []
-    if isinstance(first_group, list):
-        return [int(b) for b in first_group]
-    # Bare scalar — wrap as single-element list.
-    return [int(first_group)]
 
 
 def _parse_layer_index(layer_name: str):
@@ -429,13 +379,13 @@ if HAS_VLLM:
                 return 0, False
 
             # Get request ID for per-request state tracking
-            req_id = getattr(request, "request_id", id(request))
+            req_id = RequestAdapter.request_id(request)
 
             # Already matched this request
             if req_id in self._load_packs:
                 return self._load_packs[req_id]["seq_len"], True
 
-            prompt_ids = getattr(request, "prompt_token_ids", None)
+            prompt_ids = RequestAdapter.prompt_token_ids(request)
             if prompt_ids is None or len(prompt_ids) == 0:
                 return 0, False
 
@@ -478,7 +428,7 @@ if HAS_VLLM:
             # without this clamp, vLLM crashes with `assert
             # num_computed_tokens <= request.num_tokens` deep in the
             # scheduler. See feedback-e2e-before-each-phase-commit.
-            prompt_ids = getattr(request, "prompt_token_ids", None)
+            prompt_ids = RequestAdapter.prompt_token_ids(request)
             if prompt_ids is not None:
                 # Leave at least 1 prompt token for vLLM to compute itself.
                 max_seq_len = max(0, len(prompt_ids) - num_computed_tokens - 1)
@@ -519,24 +469,24 @@ if HAS_VLLM:
 
             ``blocks`` is vLLM 0.19+'s ``KVCacheBlocks`` dataclass (older
             vLLM passed a bare list / tuple of lists). Both shapes are
-            normalized through [`_first_block_id`] and
-            [`_extract_block_ids_list`] before crossing into our state.
+            absorbed by [`KVCacheBlocksAdapter`] before crossing into our
+            state.
             """
-            req_id = getattr(request, "request_id", id(request))
+            req_id = RequestAdapter.request_id(request)
             if req_id in self._load_packs and num_external_tokens > 0:
                 # Materialize block IDs as a list[int] here so the
                 # consumer in build_connector_meta can list(...) without
                 # needing to know about KVCacheBlocks.
                 self._load_meta[req_id] = {
-                    "block_ids": _extract_block_ids_list(blocks),
+                    "block_ids": KVCacheBlocksAdapter.block_ids(blocks),
                     "num_tokens": num_external_tokens,
                 }
 
             # Stash token IDs keyed by fingerprint for save-side retrieval key.
             # Works for ALL requests, not just load-matched ones.
-            prompt_ids = getattr(request, "prompt_token_ids", None)
+            prompt_ids = RequestAdapter.prompt_token_ids(request)
             if prompt_ids is not None:
-                fp = _first_block_id(blocks)
+                fp = KVCacheBlocksAdapter.first_block_id(blocks)
                 if fp is not None:
                     self._save_token_ids_by_fingerprint[fp] = list(prompt_ids)
 
@@ -857,14 +807,14 @@ if HAS_VLLM:
             connector instances and the save buffer lives on the worker.
             Pack coalescing happens via dedup-by-fingerprint in wait_for_save.
             """
-            req_id = getattr(request, "request_id", id(request))
+            req_id = RequestAdapter.request_id(request)
             self._load_packs.pop(req_id, None)
             self._load_meta.pop(req_id, None)
             # Defense-in-depth: clean token stash for finished requests.
             # Normally cleared per-step in build_connector_meta. Same
             # KVCacheBlocks-vs-legacy normalization as update_state_after_alloc.
             if block_ids is not None:
-                fp = _first_block_id(block_ids)
+                fp = KVCacheBlocksAdapter.first_block_id(block_ids)
                 if fp is not None:
                     self._save_token_ids_by_fingerprint.pop(fp, None)
                     # Release the engine-side fingerprint entry so a new
