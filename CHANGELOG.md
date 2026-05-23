@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.7] — 2026-05-23
+
+Closes a silent foot-gun in the calibration result API. The session also lands an internal-only vLLM connector bridge module, a forensic writeup of vLLM's prefix-cache recall divergence, and `just` recipes for the dev GPU test workflow — none of which change consumer behaviour.
+
 ### Public API
 
 - **`CalibrationResult.best_score()`**: returns the `LayerScore` for `(best_strategy, best_layer)`. Use this instead of `result.scores[result.best_layer]` — `scores` is enumeration-ordered, not keyed by layer index, so positional indexing silently returns the wrong strategy's entry whenever multi-strategy enumeration runs (the recurrentgemma hybrid case).
