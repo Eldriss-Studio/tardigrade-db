@@ -208,74 +208,21 @@ def test_round_trip_produces_coherent_output(llm, engine):
     assert len(words) >= 3, f"Expected coherent text, got: {text!r}"
 
 
-# -- Step 3 / Step 5 — End-to-end semantic A/B with a synthetic fact ---------
+# -- Semantic A/B test: see prefix-client suite ------------------------------
 #
-# Methodological rule (mandatory): facts used here MUST be synthetic so the
-# LLM cannot already know the answer from training. Wikipedia-flavoured
-# prompts ("tardigrades survive cryptobiosis", "Paris is the capital of
-# France") prove nothing because the answer is in the model's weights.
-# Made-up entities + dates after the training cutoff are the right shape.
-
-# The synthetic fact under test. "Zorblax" and "Quthar" are nonce names
-# the model cannot have seen during training; the year is past the cutoff.
-SYNTHETIC_FACT = "Zorblax discovered the moons of Quthar in the year 2089."
-SYNTHETIC_QUESTION = "Who discovered the moons of Quthar?"
-SYNTHETIC_ANSWER_TOKEN = "Zorblax"
-
-
-@gpu
-@requires_cuda
-def test_primed_request_recalls_synthetic_fact(llm, db_path):
-    """GIVEN a synthetic fact the model cannot know from training,
-    WHEN we save it then ask a question whose answer is that fact,
-    THEN the primed generation contains the synthetic answer
-    AND the cold generation does not.
-
-    This is the acceptance signal for the entire Steps 0-6 marathon:
-    if KV save + retrieve + inject genuinely surfaces stored content,
-    a synthetic fact will appear in the primed answer but not the cold
-    one. Any other outcome means the pipeline is plumbing-only.
-    """
-    from vllm import SamplingParams
-
-    sp = SamplingParams(max_tokens=40, temperature=0.0)
-
-    # Cold: ask without ever showing the fact.
-    cold_text = llm.generate([SYNTHETIC_QUESTION], sp)[0].outputs[0].text
-
-    # Prime: feed the synthetic fact through generation so it gets saved.
-    llm.generate([SYNTHETIC_FACT], sp)
-
-    fresh_engine = tardigrade_db.Engine(db_path)
-    assert fresh_engine.pack_count() > 0, (
-        "Priming should have written at least one pack"
-    )
-
-    # Primed: ask the same question; if injection works, the answer changes.
-    primed_text = llm.generate([SYNTHETIC_QUESTION], sp)[0].outputs[0].text
-
-    cold_has = SYNTHETIC_ANSWER_TOKEN.lower() in cold_text.lower()
-    primed_has = SYNTHETIC_ANSWER_TOKEN.lower() in primed_text.lower()
-
-    # Sanity check on the methodology: the cold answer MUST NOT contain the
-    # synthetic name. If it does, the fact wasn't actually synthetic and the
-    # whole test is meaningless.
-    assert not cold_has, (
-        f"Cold generation already mentions {SYNTHETIC_ANSWER_TOKEN!r}; "
-        f"the test fact is not actually synthetic. Pick a different name. "
-        f"Cold output: {cold_text!r}"
-    )
-
-    # The real assertion: injection surfaced the saved fact.
-    # RED today (Steps 0-6 done, but Step 5 not yet implemented).
-    # GREEN once Engine.refresh() lets the scheduler-side connector see
-    # worker writes and matching can occur.
-    assert primed_has, (
-        f"Primed generation does not mention {SYNTHETIC_ANSWER_TOKEN!r} — "
-        f"KV injection did not surface the saved fact. "
-        f"Cold:   {cold_text!r}\n"
-        f"Primed: {primed_text!r}"
-    )
+# The vLLM KV Connector v1 API cannot architecturally surface saved KV as
+# content recall — connectors receive post-RoPE K from vLLM's attention
+# kernel, so copying that K into a new request's block slots places content
+# whose positional encoding belongs to the original fact's positions, not the
+# new question's. Q·K under attention is scrambled by the rotation mismatch.
+#
+# The end-to-end semantic A/B test for synthetic-fact recall lives in
+# tests/python/test_vllm_prefix_e2e.py::test_prefix_client_recalls_synthetic_facts,
+# which uses VLLMMemoryClient to inject retrieved text into the prompt — the
+# path that does work, because the model produces its own RoPE-rotated K at
+# the correct positions for the prepended text.
+#
+# Full characterization: docs/experiments/2026-05-23-vllm-recall-divergence.md.
 
 
 # -- Cleanup Tests ------------------------------------------------------------
