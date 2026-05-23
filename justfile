@@ -39,6 +39,19 @@ test-ci:
 test-crate crate:
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo nextest run -p {{crate}}
 
+# Run the Python test suite (CPU-only path; safe everywhere).
+test-py:
+    pytest tests/python/ -v -m "not gpu"
+
+# Run heavy-GPU Python tests with per-file process isolation (Linux + NVIDIA GPU).
+test-gpu:
+    pytest tests/python/test_calibrate.py -v -m gpu
+    pytest tests/python/test_capture_model_swap.py -v -m gpu
+    pytest tests/python/test_kp_injector.py -v -m gpu
+    pytest tests/python/test_vllm_integration.py -v -m gpu
+    pytest tests/python/test_vllm_prefix_e2e.py -v -m gpu
+    pytest tests/python/test_vllm_cross_session.py -v -m gpu
+
 # === Evals ===
 
 # Run all release-mode evals (spec + aspirational)

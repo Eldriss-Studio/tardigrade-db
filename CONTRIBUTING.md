@@ -143,9 +143,11 @@ just ci                                                # full CI (what the pre-p
 source .venv/bin/activate
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop
 
-pytest tests/python/ -v -m "not gpu"                    # CPU-only (safe everywhere)
-pytest tests/python/test_vllm_integration.py -v -m gpu  # vLLM round-trip (Linux + NVIDIA GPU + vLLM ≥ 0.19)
+just test-py                                            # CPU-only (safe everywhere)
+just test-gpu                                           # full GPU suite, per-file isolation (Linux + NVIDIA GPU)
 ```
+
+`just test-gpu` runs each heavy-GPU file in a separate `pytest` invocation so the OS reclaims the CUDA context between files. A single invocation that loads several models accumulates VRAM — `torch.cuda.empty_cache()` returns blocks to PyTorch's allocator pool but not to the CUDA driver, so the subprocess-vLLM tests at the tail of the suite see a starved GPU and crash on init. Sequential separate invocations are the canonical fix; `pytest-forked` does *not* help because `os.fork()` copies the parent's CUDA context. Run a single file directly when iterating on one test (e.g. `pytest tests/python/test_vllm_integration.py -v -m gpu`).
 
 ## Running Benchmarks
 
