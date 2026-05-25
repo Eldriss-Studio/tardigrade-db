@@ -11,6 +11,9 @@ SER = "SER"
 Asai = "Asai"
 # Ned — dog's name in LoCoMo eval dataset Q&A pairs
 Ned = "Ned"
+# `numpy.typing.NDArray` — typos splits the dotted path and reads
+# "ND" as a typo of "AND". The class is the real numpy type name.
+ND = "ND"
 
 [default.extend-identifiers]
 # flate2 — the de-facto Rust compression crate. typos splits the

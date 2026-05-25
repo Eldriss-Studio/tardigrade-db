@@ -122,6 +122,6 @@ The full distilled answer lives in the consuming artifact (`~/.claude/plans/is-t
 
 ## Downstream uses
 
-- Plan memo: [`~/.claude/plans/is-there-anything-dreamy-pike.md`](file:///home/flagrare/.claude/plans/is-there-anything-dreamy-pike.md) — the actionable synthesis the user reads.
+- Plan memo: `~/.claude/plans/is-there-anything-dreamy-pike.md` — the actionable synthesis the user reads.
 - **Design archive: [`docs/refs/frozen-tier-design.md`](../refs/frozen-tier-design.md)** — the Frozen-tier design (state machine + on-demand-calibrated codec) extracted from this research and committed as an in-repo design reference. Scheduled-but-deferred work; rationale preserved before the code lands.
 - When any other top-3 recommendation (CacheGen-style variable-bitrate quant; refcounted read handles; head-to-head bench vs. edge-agent KV paper) is picked up, its plan and the resulting code/doc changes should back-link to this catalog entry.

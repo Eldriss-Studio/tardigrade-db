@@ -20,7 +20,7 @@ Two subagents were spawned in parallel:
 Both runs used the same environment pattern:
 
 ```bash
-cd /Users/storylight/Dev/tardigrade-db
+cd <repo-root>
 PYTHONPATH=python PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 .venv/bin/python <script>
 ```
 
@@ -95,11 +95,11 @@ Both scripts were re-run directly (outside subagents) before commit and reproduc
 Run the same two scripts in parallel terminals:
 
 ```bash
-cd /Users/storylight/Dev/tardigrade-db
+cd <repo-root>
 PYTHONPATH=python PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 .venv/bin/python experiments/sonia_real_kv_cache.py
 ```
 
 ```bash
-cd /Users/storylight/Dev/tardigrade-db
+cd <repo-root>
 PYTHONPATH=python PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 .venv/bin/python experiments/sonia_production_sim.py
 ```

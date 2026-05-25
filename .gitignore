@@ -34,3 +34,6 @@ benchmarks/datasets/**/*.jsonl
 # Claude Code session-local state
 .claude/scheduled_tasks.lock
 _session_backup/
+
+# Resumancer dev-journal logs (personal, regenerated locally)
+resumancer_logs*.txt

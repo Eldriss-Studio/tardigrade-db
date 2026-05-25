@@ -24,8 +24,9 @@ import tardigrade_db
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-MODEL_PATH = (
-    "/Users/storylight/.ollama/models/blobs/"
+MODEL_PATH = str(
+    Path.home()
+    / ".ollama/models/blobs/"
     "sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff"
 )
 MODEL_NAME = "llama3.2:3b"

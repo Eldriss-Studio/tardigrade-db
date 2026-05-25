@@ -302,19 +302,19 @@ Phase 1 therefore splits into two sub-phases. The first ships the bridge cleanup
 
 ## Critical Files
 
-- `/home/flagrare/Dev/ares-project/tardigrade-db/crates/tdb-python/src/lib.rs` — PyO3 spine; every phase touches this
-- `/home/flagrare/Dev/ares-project/tardigrade-db/crates/tdb-engine/src/engine.rs` — Engine internal API
-- `/home/flagrare/Dev/ares-project/tardigrade-db/crates/tdb-engine/benches/engine.rs` — Criterion gates
-- `/home/flagrare/Dev/ares-project/tardigrade-db/crates/tdb-retrieval/src/lib.rs` — `RetrievalKeyStrategy` trait (extended in Phase 7)
-- `/home/flagrare/Dev/ares-project/tardigrade-db/python/tardigrade_hooks/encoding.py` — stubbed in Phase 2
-- `/home/flagrare/Dev/ares-project/tardigrade-db/python/tardigrade_hooks/hf_kv_hook.py` — Phases 2, 4, 12
-- `/home/flagrare/Dev/ares-project/tardigrade-db/python/tardigrade_hooks/consolidator.py` — Phase 1 caller
-- `/home/flagrare/Dev/ares-project/tardigrade-db/python/tardigrade_hooks/chunker.py` — Phase 5 Adapter
-- `/home/flagrare/Dev/ares-project/tardigrade-db/python/tardigrade_hooks/multi_layer_query.py` — Phase 11
-- `/home/flagrare/Dev/ares-project/tardigrade-db/python/tardigrade_http/server.py` — Phase 6
-- `/home/flagrare/Dev/ares-project/tardigrade-db/python/tardigrade_vllm/connector.py` — Phases 7, 8, 9
-- `/home/flagrare/Dev/ares-project/tardigrade-db/python/tardigrade_vllm/retrieval_key.py` — Phase 7
-- `/home/flagrare/Dev/ares-project/tardigrade-db/python/tardigrade_vllm/format.py` — Phase 8
+- `crates/tdb-python/src/lib.rs` — PyO3 spine; every phase touches this
+- `crates/tdb-engine/src/engine.rs` — Engine internal API
+- `crates/tdb-engine/benches/engine.rs` — Criterion gates
+- `crates/tdb-retrieval/src/lib.rs` — `RetrievalKeyStrategy` trait (extended in Phase 7)
+- `python/tardigrade_hooks/encoding.py` — stubbed in Phase 2
+- `python/tardigrade_hooks/hf_kv_hook.py` — Phases 2, 4, 12
+- `python/tardigrade_hooks/consolidator.py` — Phase 1 caller
+- `python/tardigrade_hooks/chunker.py` — Phase 5 Adapter
+- `python/tardigrade_hooks/multi_layer_query.py` — Phase 11
+- `python/tardigrade_http/server.py` — Phase 6
+- `python/tardigrade_vllm/connector.py` — Phases 7, 8, 9
+- `python/tardigrade_vllm/retrieval_key.py` — Phase 7
+- `python/tardigrade_vllm/format.py` — Phase 8
 - New: `python/tdb_bench/` (Python microbench harnesses), `tests/python/observability/` (call-count / AST / tracemalloc checks — kept separate from ATs)
 
 ---
