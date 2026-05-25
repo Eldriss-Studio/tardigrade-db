@@ -48,3 +48,37 @@ impl Tier {
         }
     }
 }
+
+/// Read-visibility mode for retrieval APIs that participate in the
+/// confirmed-vs-unconfirmed durability contract.
+///
+/// [`ReadVisibility::Unconfirmed`] is the default and existing
+/// behaviour: the read returns immediately with whatever the
+/// retrieval pipeline currently has. [`ReadVisibility::Confirmed`]
+/// blocks until every write issued before the read became durable.
+///
+/// See CLAUDE.md's "Reliability & Consistency Rules" section for the
+/// project-canonical contract this enum surfaces, and
+/// `~/.claude/plans/spacetimedb-confirmed-reads-contract.md` for the
+/// implementation plan.
+///
+/// # Why an explicit timeout is required on `Confirmed`
+///
+/// A confirmed read with no deadline can block forever — if the
+/// underlying write fails fsync without surfacing an error, the
+/// reader's wait will never complete. Requiring an explicit deadline
+/// makes that failure path bounded: the reader sees a `ReadTimeout`
+/// instead of hanging, and the consumer's higher-level error
+/// handling can decide what to do.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ReadVisibility {
+    /// Default mode — return immediately, no durability wait.
+    #[default]
+    Unconfirmed,
+    /// Block until the snapshot offset captured at request entry is
+    /// durable, or until `timeout` elapses (whichever comes first).
+    Confirmed {
+        /// Maximum wall-clock wait before returning `ReadTimeout`.
+        timeout: std::time::Duration,
+    },
+}

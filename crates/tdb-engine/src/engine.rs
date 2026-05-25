@@ -312,6 +312,11 @@ pub struct Engine {
     /// before they can collide with a new request reusing the same
     /// block id. `None` until [`Engine::set_fingerprint_capacity`].
     fingerprint_cache: Option<lru::LruCache<u64, u64>>,
+    /// Durability boundary tracker. Bumps `issued` on every accepted
+    /// write; bumps `durable` after each fsync completes. Confirmed
+    /// reads snapshot `issued` and wait on `durable` — see
+    /// [`crate::durability`] for the contract.
+    durability: Arc<crate::durability::DurabilityTracker>,
 }
 
 /// Configuration for the optional streaming-ingest write buffer.
@@ -448,6 +453,28 @@ impl Engine {
     #[must_use]
     pub fn embedding_table_load_count(&self) -> u64 {
         self.embedding_table_loads
+    }
+
+    /// Current durable offset — monotonic counter that advances every
+    /// time an fsync completes. Consumers use this to reason about
+    /// the durability boundary, e.g., for confirmed-read semantics:
+    /// snapshot the value before issuing the read, then wait until
+    /// the tracker reports the snapshot is durable.
+    ///
+    /// See [`crate::durability::DurabilityTracker`] for the full
+    /// contract.
+    #[must_use]
+    pub fn durable_offset(&self) -> u64 {
+        self.durability.current_durable()
+    }
+
+    /// Borrow the durability tracker so callers (e.g., the Python
+    /// binding's confirmed-read path) can clone the `Arc` and wait on
+    /// it without holding the engine lock. Returns an `Arc` so the
+    /// caller decides whether to clone it.
+    #[must_use]
+    pub fn durability_tracker(&self) -> Arc<crate::durability::DurabilityTracker> {
+        Arc::clone(&self.durability)
     }
 
     /// Install a projection matrix for the `"projected"` retrieval-key
@@ -746,6 +773,7 @@ impl Engine {
             embedding_table_loads: 0,
             projection_matrix: None,
             fingerprint_cache: None,
+            durability: Arc::new(crate::durability::DurabilityTracker::new()),
         };
 
         engine.refresh()?;
@@ -1087,6 +1115,14 @@ impl Engine {
 
         // Phase 2: Persist all cells with single fsync.
         let ids = self.pool.append_batch(&cells)?;
+
+        // Durability: one logical write per cell, all landed by the
+        // single coalesced fsync above. Bump issued accordingly and
+        // publish the new high-water mark.
+        for _ in 0..ids.len() {
+            self.durability.issue_one();
+        }
+        self.durability.publish_durable(self.durability.current_issued());
 
         // Phase 3: Index all cells into retrieval + governance (in memory, fast).
         for (id, owner, key, parent_cell_id, gov) in gov_entries {
@@ -1788,6 +1824,12 @@ impl Engine {
         // Pack index.
         self.pack_directory.insert_pack(pack_id, cell_ids, pack.owner);
 
+        // Durability: acceptance and durability happen together on
+        // the non-buffered path. Bump issued and publish in one go
+        // so the durable offset matches the write that just landed.
+        let issued = self.durability.issue_one();
+        self.durability.publish_durable(issued);
+
         Ok(pack_id)
     }
 
@@ -1809,6 +1851,12 @@ impl Engine {
             buf.pending.push((pack_id, pack.clone()));
             buf.pending.len() >= buf.config.max_batch_size
         };
+
+        // Acceptance: the pack is now in the buffer and will be
+        // returned to the caller. Bump issued so a confirmed read
+        // snapshotted between enqueue and flush sees the pending
+        // write in its expected-durable set.
+        self.durability.issue_one();
 
         if should_flush {
             self.flush_buffer()?;
@@ -1869,6 +1917,10 @@ impl Engine {
             self.next_pack_id += 1;
             ids.push(id);
             id_pack_pairs.push((id, pack.clone()));
+            // Acceptance: each pack in this eager batch is committed
+            // to durability by the persist call below. Bump issued
+            // here so persist_packs_coalesced's publish covers them.
+            self.durability.issue_one();
         }
         self.persist_packs_coalesced(&id_pack_pairs)?;
         Ok(ids)
@@ -1919,6 +1971,12 @@ impl Engine {
         if self.vamana.is_none() && self.pool.cell_count() >= self.vamana_threshold {
             self.activate_vamana()?;
         }
+
+        // Durability: the coalesced fsync at line above has landed.
+        // Advance `durable` to the high water of issued so any
+        // confirmed reader waiting on a pack persisted here unblocks.
+        // No-op when issued hasn't advanced past the current durable.
+        self.durability.publish_durable(self.durability.current_issued());
         Ok(())
     }
 
@@ -2108,7 +2166,18 @@ impl Engine {
 
     /// Retrieve the top-k KV Packs matching a query key.
     ///
-    /// Returns complete packs with all layer payloads reconstructed.
+    /// This is the existing behaviour and the path every pre-existing
+    /// caller takes. Returns immediately with whatever the retrieval
+    /// pipeline currently sees — buffered writes that haven't been
+    /// fsynced yet may or may not be visible depending on indexing
+    /// timing, but the call never waits for durability.
+    ///
+    /// For the confirmed-read contract (block until in-flight writes
+    /// are durable), the Python binding composes this method with
+    /// [`Engine::durability_tracker`] and
+    /// [`crate::durability::DurabilityTracker::wait_durable`] — the
+    /// composition runs the wait outside the engine read lock so
+    /// writers can advance the offset concurrently.
     ///
     /// # Errors
     /// Returns [`TardigradeError`] propagated from the block pool when

@@ -32,19 +32,35 @@ paths:
     post:
       summary: Query
       operationId: query_mem_query_post
+      parameters:
+      - name: wait
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Wait
+      - name: timeout
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Timeout
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/QueryRequest'
-        required: true
       responses:
         '200':
           description: Successful Response
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/QueryResponse'
+              schema: {}
         '422':
           description: Validation Error
           content:
@@ -206,35 +222,6 @@ components:
       - query_text
       title: QueryRequest
       description: Body of ``POST /mem/query``.
-    QueryResponse:
-      properties:
-        results:
-          items:
-            $ref: '#/components/schemas/QueryResult'
-          type: array
-          title: Results
-      type: object
-      required:
-      - results
-      title: QueryResponse
-    QueryResult:
-      properties:
-        pack_id:
-          type: integer
-          title: Pack Id
-        score:
-          type: number
-          title: Score
-        text:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Text
-      type: object
-      required:
-      - pack_id
-      - score
-      title: QueryResult
     RestoreRequest:
       properties:
         snapshot_path:

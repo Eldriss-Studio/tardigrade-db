@@ -1055,22 +1055,80 @@ impl Engine {
     /// Retrieve the top-k KV Packs matching a query key.
     ///
     /// Returns list of dicts with pack ID, owner, score, tier, and layers.
+    ///
+    /// **Read-visibility modes.** ``mode`` selects the durability
+    /// contract for this read. Default ``"unconfirmed"`` returns
+    /// immediately with whatever the retrieval pipeline currently
+    /// sees — backwards-compatible with every existing caller.
+    /// ``mode="confirmed"`` snapshots the issued offset at request
+    /// entry, runs the retrieval, then blocks until the durable
+    /// offset catches up (every concurrent in-flight write is now
+    /// durable when the call returns). Confirmed reads MUST supply
+    /// ``timeout_ms``; raises ``ValueError`` otherwise.
+    #[pyo3(signature = (query_key, k, owner=None, *, mode="unconfirmed", timeout_ms=None))]
     fn mem_read_pack(
         &self,
         py: Python<'_>,
         query_key: PyReadonlyArray1<'_, f32>,
         k: usize,
         owner: Option<u64>,
+        mode: &str,
+        timeout_ms: Option<u64>,
     ) -> PyResult<Vec<pyo3::Py<pyo3::PyAny>>> {
+        use pyo3::exceptions::PyValueError;
+        use std::time::Duration;
+
+        // Resolve the visibility mode upfront so an invalid mode
+        // string fails fast — before any work — instead of
+        // surfacing as a confusing error mid-call.
+        let confirmed_timeout: Option<Duration> = match mode {
+            "unconfirmed" => None,
+            "confirmed" => {
+                let ms = timeout_ms.ok_or_else(|| {
+                    PyValueError::new_err(
+                        "mode='confirmed' requires timeout_ms (a confirmed read \
+                         without a deadline can hang indefinitely)",
+                    )
+                })?;
+                Some(Duration::from_millis(ms))
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown mode {other:?}: expected 'unconfirmed' or 'confirmed'"
+                )));
+            }
+        };
+
         let query_vec =
             query_key.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?.to_vec();
 
         let engine = Arc::clone(&self.inner);
-        let results = py.detach(move || {
-            read_engine(&engine)?
+        // Snapshot the issued offset under the read lock so we're
+        // ordered with respect to any concurrent writer holding the
+        // write lock. Hand back the tracker handle so the wait can
+        // run AFTER the read lock is released — otherwise we'd
+        // block writers from advancing durable.
+        let (results, snapshot, tracker) = py.detach(move || -> PyResult<_> {
+            let eng = read_engine(&engine)?;
+            let tracker = eng.durability_tracker();
+            let snapshot = tracker.current_issued();
+            let results = eng
                 .mem_read_pack(&query_vec, k, owner)
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            Ok((results, snapshot, tracker))
         })?;
+
+        // Confirmed-mode wait, outside the engine read lock.
+        if let Some(timeout) = confirmed_timeout {
+            let wait_outcome = py.detach(move || tracker.wait_durable(snapshot, timeout));
+            if let Err(err) = wait_outcome {
+                return Err(PyRuntimeError::new_err(format!(
+                    "confirmed read timeout: durability did not reach target \
+                     within {} ms",
+                    err.waited.as_millis()
+                )));
+            }
+        }
 
         let mut py_results = Vec::with_capacity(results.len());
         for r in results {
@@ -1672,6 +1730,15 @@ impl Engine {
     /// Explicit durability checkpoint — ensures all components have fsynced.
     fn flush(&self) -> PyResult<()> {
         write_engine(&self.inner)?.flush().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Current durable offset — monotonic counter that advances every
+    /// time an fsync completes. Consumers reasoning about the
+    /// durability boundary (e.g., the confirmed-read API) snapshot
+    /// this value and wait for it to reach a target. See the
+    /// "Reliability & Consistency Rules" section of CLAUDE.md.
+    fn durable_offset(&self) -> PyResult<u64> {
+        Ok(read_engine(&self.inner)?.durable_offset())
     }
 
     fn __repr__(&self) -> PyResult<String> {

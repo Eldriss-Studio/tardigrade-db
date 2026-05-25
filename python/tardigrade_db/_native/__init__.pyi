@@ -348,11 +348,21 @@ class Engine:
         Returns a dict with `pack_id` and `linked_pack_ids`.
         Threshold defaults to [`DEFAULT_AUTO_LINK_THRESHOLD`] (250.0) when omitted.
         """
-    def mem_read_pack(self, query_key: numpy.typing.NDArray[numpy.float32], k: builtins.int, owner: typing.Optional[builtins.int]) -> builtins.list[typing.Any]:
+    def mem_read_pack(self, query_key: numpy.typing.NDArray[numpy.float32], k: builtins.int, owner: typing.Optional[builtins.int] = None, *, mode: builtins.str = 'unconfirmed', timeout_ms: typing.Optional[builtins.int] = None) -> builtins.list[typing.Any]:
         r"""
         Retrieve the top-k KV Packs matching a query key.
         
         Returns list of dicts with pack ID, owner, score, tier, and layers.
+        
+        **Read-visibility modes.** ``mode`` selects the durability
+        contract for this read. Default ``"unconfirmed"`` returns
+        immediately with whatever the retrieval pipeline currently
+        sees — backwards-compatible with every existing caller.
+        ``mode="confirmed"`` snapshots the issued offset at request
+        entry, runs the retrieval, then blocks until the durable
+        offset catches up (every concurrent in-flight write is now
+        durable when the call returns). Confirmed reads MUST supply
+        ``timeout_ms``; raises ``ValueError`` otherwise.
         """
     def mem_read_pack_batch(self, queries: typing.Sequence[numpy.typing.NDArray[numpy.float32]], k: typing.Any, owner: typing.Any) -> builtins.list[builtins.list[typing.Any]]:
         r"""
@@ -557,6 +567,14 @@ class Engine:
     def flush(self) -> None:
         r"""
         Explicit durability checkpoint — ensures all components have fsynced.
+        """
+    def durable_offset(self) -> builtins.int:
+        r"""
+        Current durable offset — monotonic counter that advances every
+        time an fsync completes. Consumers reasoning about the
+        durability boundary (e.g., the confirmed-read API) snapshot
+        this value and wait for it to reach a target. See the
+        "Reliability & Consistency Rules" section of CLAUDE.md.
         """
     def __repr__(self) -> builtins.str: ...
 

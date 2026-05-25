@@ -209,6 +209,18 @@ pub enum TardigradeError {
         help("check the caller's arguments against the API contract")
     )]
     InvalidArgument(String),
+
+    #[error("confirmed read exceeded its timeout after {waited_ms} ms")]
+    #[diagnostic(
+        code(tdb::durability::read_timeout),
+        help(
+            "the confirmed-mode read waited for the durable offset to catch up to the snapshot taken at request entry, but the deadline passed first; increase the timeout, call engine.flush() before reading, or check whether a failed write is blocking durability progress"
+        )
+    )]
+    ReadTimeout {
+        /// Wall-clock milliseconds spent waiting before giving up.
+        waited_ms: u64,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, TardigradeError>;

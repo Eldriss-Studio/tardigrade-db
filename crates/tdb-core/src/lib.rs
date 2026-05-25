@@ -96,4 +96,4 @@ pub use kv_pack::{KVLayerPayload, KVPack, PackId, PackReadResult};
 pub use memory_cell::MemoryCell;
 pub use salience::{SALIENCE_CAP, SALIENCE_SCALE, SalienceMode};
 pub use synaptic_bank::SynapticBankEntry;
-pub use types::{CellId, LayerId, OwnerId, SynapticId, TagBits, Tier};
+pub use types::{CellId, LayerId, OwnerId, ReadVisibility, SynapticId, TagBits, Tier};

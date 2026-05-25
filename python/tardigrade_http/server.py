@@ -43,12 +43,17 @@ from .constants import (
     ENV_PORT,
     HASH_SEED_MODULUS,
     HTTP_STATUS_BAD_REQUEST,
+    HTTP_STATUS_GATEWAY_TIMEOUT,
     HTTP_STATUS_VALIDATION_ERROR,
+    MAX_CONFIRMED_TIMEOUT_MS,
     PROBLEM_JSON_CONTENT_TYPE,
     PROBLEM_TYPE_ABOUT_BLANK,
+    PROBLEM_TYPE_INVALID_REQUEST,
+    PROBLEM_TYPE_READ_TIMEOUT,
     STUB_KEY_DIM,
     STUB_LAYER_INDEX,
     STUB_VALUE_DIM,
+    WAIT_DURABLE,
 )
 from .models import (
     Manifest,
@@ -82,18 +87,78 @@ def _default_kv_fn(text: str) -> tuple:
     return key, [(STUB_LAYER_INDEX, value)]
 
 
-def _problem_response(status: int, title: str, detail: str | None = None) -> JSONResponse:
-    """Build an RFC 7807 problem-detail JSON response."""
+def _problem_response(
+    status: int,
+    title: str,
+    detail: str | None = None,
+    *,
+    type_uri: str = PROBLEM_TYPE_ABOUT_BLANK,
+) -> JSONResponse:
+    """Build an RFC 7807 problem-detail JSON response.
+
+    ``type_uri`` defaults to ``about:blank`` for generic errors but
+    callers handling specific failure classes (e.g. durability
+    timeout) pass a stable ``tdb:`` URI so consumers can
+    pattern-match without parsing prose.
+    """
     return JSONResponse(
         status_code=status,
         media_type=PROBLEM_JSON_CONTENT_TYPE,
         content={
-            "type": PROBLEM_TYPE_ABOUT_BLANK,
+            "type": type_uri,
             "title": title,
             "status": status,
             "detail": detail,
         },
     )
+
+
+def _parse_confirmed_read_params(
+    wait: str | None,
+    timeout: int | None,
+) -> tuple[bool, int | None] | JSONResponse:
+    """Validate the ``?wait`` / ``?timeout`` query params for ``/mem/query``.
+
+    Returns either ``(confirmed_mode: bool, timeout_ms: int | None)``
+    on success or a problem-detail ``JSONResponse`` when the params
+    are inconsistent. Confirmed mode requires ``wait="durable"`` AND
+    a ``timeout`` in ``[1, MAX_CONFIRMED_TIMEOUT_MS]``; anything else
+    is rejected with HTTP 400 + a stable ``tdb:`` problem-type URI.
+    """
+    if wait is None:
+        # Default: unconfirmed. ``?timeout=`` alone is harmless.
+        return (False, None)
+    if wait != WAIT_DURABLE:
+        return _problem_response(
+            HTTP_STATUS_BAD_REQUEST,
+            "Invalid wait mode",
+            detail=(
+                f"wait must be {WAIT_DURABLE!r} or absent; got {wait!r}"
+            ),
+            type_uri=PROBLEM_TYPE_INVALID_REQUEST,
+        )
+    if timeout is None:
+        return _problem_response(
+            HTTP_STATUS_BAD_REQUEST,
+            "Confirmed read requires a timeout",
+            detail=(
+                "wait=durable must be paired with timeout=<ms>; a confirmed "
+                "read without a deadline can block indefinitely if the "
+                "underlying write never reaches durability"
+            ),
+            type_uri=PROBLEM_TYPE_INVALID_REQUEST,
+        )
+    if timeout <= 0 or timeout > MAX_CONFIRMED_TIMEOUT_MS:
+        return _problem_response(
+            HTTP_STATUS_BAD_REQUEST,
+            "Timeout out of range",
+            detail=(
+                f"timeout must be in [1, {MAX_CONFIRMED_TIMEOUT_MS}] ms; "
+                f"got {timeout}"
+            ),
+            type_uri=PROBLEM_TYPE_INVALID_REQUEST,
+        )
+    return (True, timeout)
 
 
 def create_app(engine, kv_fn: KvCaptureFn | None = None) -> FastAPI:
@@ -133,10 +198,49 @@ def create_app(engine, kv_fn: KvCaptureFn | None = None) -> FastAPI:
         )
         return StoreResponse(pack_id=pack_id)
 
-    @app.post("/mem/query", response_model=QueryResponse)
-    def query(req: QueryRequest) -> QueryResponse:
+    @app.post("/mem/query")
+    def query(
+        req: QueryRequest,
+        wait: str | None = None,
+        timeout: int | None = None,
+    ):
+        # Confirmed-read contract: `?wait=durable&timeout=<ms>` opts
+        # in to durability-blocking semantics; bare POST is the legacy
+        # unconfirmed path (immediate return). See
+        # docs/guide/performance-contracts.md and the SpacetimeDB-
+        # research §8 status update for the rationale.
+        parsed = _parse_confirmed_read_params(wait, timeout)
+        if isinstance(parsed, JSONResponse):
+            return parsed
+        confirmed_mode, timeout_ms = parsed
+
         key, _ = app.state.kv_fn(req.query_text)
-        rows = engine.mem_read_pack(key, req.k, req.owner)
+        try:
+            if confirmed_mode:
+                rows = engine.mem_read_pack(
+                    key,
+                    req.k,
+                    req.owner,
+                    mode="confirmed",
+                    timeout_ms=timeout_ms,
+                )
+            else:
+                rows = engine.mem_read_pack(key, req.k, req.owner)
+        except RuntimeError as exc:
+            # The PyO3 binding raises `RuntimeError` for the
+            # confirmed-read timeout. Pattern-matching on the message
+            # is brittle but the alternative (a typed Python
+            # exception from PyO3) is a deeper refactor; this is the
+            # smallest change that closes the HTTP contract today.
+            if "confirmed read timeout" in str(exc).lower():
+                return _problem_response(
+                    HTTP_STATUS_GATEWAY_TIMEOUT,
+                    "Confirmed read exceeded timeout",
+                    detail=str(exc),
+                    type_uri=PROBLEM_TYPE_READ_TIMEOUT,
+                )
+            raise
+
         # `mem_read_pack` always populates the `text` field — it's the
         # pack's stored text or None. No secondary `pack_text` fetch.
         return QueryResponse(
