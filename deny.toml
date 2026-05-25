@@ -17,6 +17,11 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
+    # CC0-1.0 — Creative Commons Zero / public-domain dedication.
+    # Compatible with every license we ship; pulled in transitively
+    # via `tiny-keccak` (incremental-compile hashes) through
+    # `pyo3-stub-gen`'s proc-macro chain.
+    "CC0-1.0",
 ]
 
 [bans]
