@@ -68,443 +68,489 @@
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>std::io::{Read, Write};
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span>std::path::{Path, PathBuf};
 <a href=#35 id=35 data-nosnippet>35</a>
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>serde::{Deserialize, Serialize};
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>sha2::{Digest, Sha256};
-<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span>tar::{Archive, Builder};
-<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>tdb_core::error::{<span class="prelude-ty">Result</span>, TardigradeError};
-<a href=#40 id=40 data-nosnippet>40</a>
-<a href=#41 id=41 data-nosnippet>41</a><span class="comment">// ─── Format constants ───────────────────────────────────────────────────
-<a href=#42 id=42 data-nosnippet>42</a>
-<a href=#43 id=43 data-nosnippet>43</a></span><span class="doccomment">/// Magic marker placed at the head of every `TardigradeDB` snapshot
-<a href=#44 id=44 data-nosnippet>44</a>/// manifest. Lets external tooling (and human forensics) distinguish
-<a href=#45 id=45 data-nosnippet>45</a>/// our archives from arbitrary tarballs.
-<a href=#46 id=46 data-nosnippet>46</a></span><span class="kw">pub const </span>SNAPSHOT_MAGIC: <span class="kw-2">&amp;</span>str = <span class="string">"tdb!"</span>;
-<a href=#47 id=47 data-nosnippet>47</a>
-<a href=#48 id=48 data-nosnippet>48</a><span class="doccomment">/// Current snapshot format version. Increment on any breaking change
-<a href=#49 id=49 data-nosnippet>49</a>/// to the manifest schema, archive layout, or required state files.
-<a href=#50 id=50 data-nosnippet>50</a>/// Older readers refuse newer versions; newer readers may accept
-<a href=#51 id=51 data-nosnippet>51</a>/// older versions when the migration is trivial.
-<a href=#52 id=52 data-nosnippet>52</a></span><span class="kw">pub const </span>SNAPSHOT_FORMAT_VERSION: u8 = <span class="number">1</span>;
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>sha2::{Digest, Sha256};
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>tar::{Archive, Builder};
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span>tdb_core::error::{<span class="prelude-ty">Result</span>, TardigradeError};
+<a href=#39 id=39 data-nosnippet>39</a>
+<a href=#40 id=40 data-nosnippet>40</a><span class="comment">// ─── Format constants ───────────────────────────────────────────────────
+<a href=#41 id=41 data-nosnippet>41</a>
+<a href=#42 id=42 data-nosnippet>42</a></span><span class="doccomment">/// Magic marker placed at the head of every `TardigradeDB` snapshot
+<a href=#43 id=43 data-nosnippet>43</a>/// manifest. Lets external tooling (and human forensics) distinguish
+<a href=#44 id=44 data-nosnippet>44</a>/// our archives from arbitrary tarballs.
+<a href=#45 id=45 data-nosnippet>45</a></span><span class="kw">pub const </span>SNAPSHOT_MAGIC: <span class="kw-2">&amp;</span>str = <span class="string">"tdb!"</span>;
+<a href=#46 id=46 data-nosnippet>46</a>
+<a href=#47 id=47 data-nosnippet>47</a><span class="doccomment">/// Current snapshot format version. Re-exported from [`v1`] — every
+<a href=#48 id=48 data-nosnippet>48</a>/// snapshot the engine produces today carries this version. When a
+<a href=#49 id=49 data-nosnippet>49</a>/// breaking schema change lands, the next module (`v2`, not yet
+<a href=#50 id=50 data-nosnippet>50</a>/// defined as of this writing) introduces its own constant and the
+<a href=#51 id=51 data-nosnippet>51</a>/// engine's `current` constructor will point at it.
+<a href=#52 id=52 data-nosnippet>52</a></span><span class="kw">pub use </span>v1::SNAPSHOT_FORMAT_VERSION;
 <a href=#53 id=53 data-nosnippet>53</a>
 <a href=#54 id=54 data-nosnippet>54</a><span class="doccomment">/// Versioned identifier for the quantization codec currently in use.
-<a href=#55 id=55 data-nosnippet>55</a>/// Snapshots embed this so a future engine that drops Q4 support can
-<a href=#56 id=56 data-nosnippet>56</a>/// refuse Q4 snapshots cleanly instead of producing garbage reads.
-<a href=#57 id=57 data-nosnippet>57</a></span><span class="kw">pub const </span>SNAPSHOT_QUANT_CODEC: <span class="kw-2">&amp;</span>str = <span class="string">"q4"</span>;
+<a href=#55 id=55 data-nosnippet>55</a>/// Re-exported from [`v1`]; see [`v1::SNAPSHOT_QUANT_CODEC`] for the
+<a href=#56 id=56 data-nosnippet>56</a>/// rationale.
+<a href=#57 id=57 data-nosnippet>57</a></span><span class="kw">pub use </span>v1::SNAPSHOT_QUANT_CODEC;
 <a href=#58 id=58 data-nosnippet>58</a>
 <a href=#59 id=59 data-nosnippet>59</a><span class="doccomment">/// Versioned identifier for the per-token retrieval-key codec.
-<a href=#60 id=60 data-nosnippet>60</a></span><span class="kw">pub const </span>SNAPSHOT_KEY_CODEC: <span class="kw-2">&amp;</span>str = <span class="string">"top5avg"</span>;
-<a href=#61 id=61 data-nosnippet>61</a>
-<a href=#62 id=62 data-nosnippet>62</a><span class="doccomment">/// Top-level directory inside the tar archive holding the engine's
-<a href=#63 id=63 data-nosnippet>63</a>/// state files. Kept stable across versions so restore tooling can
-<a href=#64 id=64 data-nosnippet>64</a>/// inspect contents without parsing the manifest.
-<a href=#65 id=65 data-nosnippet>65</a></span><span class="kw">pub const </span>SNAPSHOT_PAYLOAD_DIR: <span class="kw-2">&amp;</span>str = <span class="string">"engine_state"</span>;
-<a href=#66 id=66 data-nosnippet>66</a>
-<a href=#67 id=67 data-nosnippet>67</a><span class="doccomment">/// Filename of the manifest inside the tar archive. Always at the
-<a href=#68 id=68 data-nosnippet>68</a>/// archive root, always read first.
-<a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">pub const </span>SNAPSHOT_MANIFEST_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"manifest.json"</span>;
-<a href=#70 id=70 data-nosnippet>70</a>
-<a href=#71 id=71 data-nosnippet>71</a><span class="doccomment">/// Upper bound (bytes) on the manifest size during restore. The
-<a href=#72 id=72 data-nosnippet>72</a>/// real manifest is ~500 bytes; 1 MiB is a generous ceiling that
-<a href=#73 id=73 data-nosnippet>73</a>/// guards against a corrupt or hostile archive declaring an
-<a href=#74 id=74 data-nosnippet>74</a>/// enormous entry and exhausting RAM via [`Read::read_to_end`].
-<a href=#75 id=75 data-nosnippet>75</a></span><span class="kw">const </span>MAX_MANIFEST_BYTES: u64 = <span class="number">1024 </span>* <span class="number">1024</span>;
-<a href=#76 id=76 data-nosnippet>76</a>
-<a href=#77 id=77 data-nosnippet>77</a><span class="doccomment">/// Upper bound (bytes) on a single payload file during restore.
-<a href=#78 id=78 data-nosnippet>78</a>/// 16 GiB accommodates the largest plausible `BlockPool` segment
-<a href=#79 id=79 data-nosnippet>79</a>/// (`segment_size` is 256 MiB by default; we leave 64× headroom for
-<a href=#80 id=80 data-nosnippet>80</a>/// future configurations) while still bounding worst-case RAM use.
-<a href=#81 id=81 data-nosnippet>81</a></span><span class="kw">const </span>MAX_PAYLOAD_FILE_BYTES: u64 = <span class="number">16 </span>* <span class="number">1024 </span>* <span class="number">1024 </span>* <span class="number">1024</span>;
-<a href=#82 id=82 data-nosnippet>82</a>
-<a href=#83 id=83 data-nosnippet>83</a><span class="comment">// ─── Manifest ───────────────────────────────────────────────────────────
-<a href=#84 id=84 data-nosnippet>84</a>
-<a href=#85 id=85 data-nosnippet>85</a></span><span class="doccomment">/// Versioned metadata header written at the root of every snapshot
-<a href=#86 id=86 data-nosnippet>86</a>/// archive. Read first by [`crate::engine::Engine::restore_from`] to validate
-<a href=#87 id=87 data-nosnippet>87</a>/// compatibility before extracting the payload.
-<a href=#88 id=88 data-nosnippet>88</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-<a href=#89 id=89 data-nosnippet>89</a></span><span class="kw">pub struct </span>SnapshotManifest {
-<a href=#90 id=90 data-nosnippet>90</a>    <span class="doccomment">/// Magic marker; must equal [`SNAPSHOT_MAGIC`].
-<a href=#91 id=91 data-nosnippet>91</a>    </span><span class="kw">pub </span>magic: String,
-<a href=#92 id=92 data-nosnippet>92</a>    <span class="doccomment">/// Format version; restore refuses unknown values.
-<a href=#93 id=93 data-nosnippet>93</a>    </span><span class="kw">pub </span>format_version: u8,
-<a href=#94 id=94 data-nosnippet>94</a>    <span class="doccomment">/// RFC 3339 timestamp of snapshot creation.
-<a href=#95 id=95 data-nosnippet>95</a>    </span><span class="kw">pub </span>created_at: String,
-<a href=#96 id=96 data-nosnippet>96</a>    <span class="doccomment">/// Codec identifiers for the storage formats embedded in the
-<a href=#97 id=97 data-nosnippet>97</a>    /// payload. Restore refuses snapshots whose codecs are not
-<a href=#98 id=98 data-nosnippet>98</a>    /// supported by the current engine.
-<a href=#99 id=99 data-nosnippet>99</a>    </span><span class="kw">pub </span>codecs: SnapshotCodecs,
-<a href=#100 id=100 data-nosnippet>100</a>    <span class="doccomment">/// Cheap stats useful for forensics + repository lookup.
-<a href=#101 id=101 data-nosnippet>101</a>    </span><span class="kw">pub </span>stats: SnapshotStats,
-<a href=#102 id=102 data-nosnippet>102</a>    <span class="doccomment">/// SHA-256 (hex-encoded) of the tarred ``engine_state/`` payload.
-<a href=#103 id=103 data-nosnippet>103</a>    /// Computed *over the engine state files only* — not over the
-<a href=#104 id=104 data-nosnippet>104</a>    /// manifest itself. Verified by [`crate::engine::Engine::restore_from`].
-<a href=#105 id=105 data-nosnippet>105</a>    </span><span class="kw">pub </span>sha256: String,
-<a href=#106 id=106 data-nosnippet>106</a>}
-<a href=#107 id=107 data-nosnippet>107</a>
-<a href=#108 id=108 data-nosnippet>108</a><span class="doccomment">/// Codec identifiers embedded in a snapshot manifest. Used to detect
-<a href=#109 id=109 data-nosnippet>109</a>/// format swaps between snapshot-write and snapshot-restore.
-<a href=#110 id=110 data-nosnippet>110</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-<a href=#111 id=111 data-nosnippet>111</a></span><span class="kw">pub struct </span>SnapshotCodecs {
-<a href=#112 id=112 data-nosnippet>112</a>    <span class="doccomment">/// Quantization codec (e.g. ``"q4"``).
-<a href=#113 id=113 data-nosnippet>113</a>    </span><span class="kw">pub </span>quantization: String,
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="doccomment">/// Per-token retrieval-key codec (e.g. ``"top5avg"``).
-<a href=#115 id=115 data-nosnippet>115</a>    </span><span class="kw">pub </span>key: String,
-<a href=#116 id=116 data-nosnippet>116</a>}
-<a href=#117 id=117 data-nosnippet>117</a>
-<a href=#118 id=118 data-nosnippet>118</a><span class="doccomment">/// Snapshot stats — handy for the repository's `latest()` lookup and
-<a href=#119 id=119 data-nosnippet>119</a>/// for displaying in admin UIs without unpacking the archive.
-<a href=#120 id=120 data-nosnippet>120</a></span><span class="attr">#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-<a href=#121 id=121 data-nosnippet>121</a></span><span class="kw">pub struct </span>SnapshotStats {
-<a href=#122 id=122 data-nosnippet>122</a>    <span class="doccomment">/// Total packs in the engine at snapshot time.
-<a href=#123 id=123 data-nosnippet>123</a>    </span><span class="kw">pub </span>pack_count: usize,
-<a href=#124 id=124 data-nosnippet>124</a>    <span class="doccomment">/// Distinct owners with at least one pack.
-<a href=#125 id=125 data-nosnippet>125</a>    </span><span class="kw">pub </span>owner_count: usize,
-<a href=#126 id=126 data-nosnippet>126</a>}
+<a href=#60 id=60 data-nosnippet>60</a>/// Re-exported from [`v1`].
+<a href=#61 id=61 data-nosnippet>61</a></span><span class="kw">pub use </span>v1::SNAPSHOT_KEY_CODEC;
+<a href=#62 id=62 data-nosnippet>62</a>
+<a href=#63 id=63 data-nosnippet>63</a><span class="doccomment">/// Top-level directory inside the tar archive holding the engine's
+<a href=#64 id=64 data-nosnippet>64</a>/// state files. Kept stable across versions so restore tooling can
+<a href=#65 id=65 data-nosnippet>65</a>/// inspect contents without parsing the manifest.
+<a href=#66 id=66 data-nosnippet>66</a></span><span class="kw">pub const </span>SNAPSHOT_PAYLOAD_DIR: <span class="kw-2">&amp;</span>str = <span class="string">"engine_state"</span>;
+<a href=#67 id=67 data-nosnippet>67</a>
+<a href=#68 id=68 data-nosnippet>68</a><span class="doccomment">/// Filename of the manifest inside the tar archive. Always at the
+<a href=#69 id=69 data-nosnippet>69</a>/// archive root, always read first.
+<a href=#70 id=70 data-nosnippet>70</a></span><span class="kw">pub const </span>SNAPSHOT_MANIFEST_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"manifest.json"</span>;
+<a href=#71 id=71 data-nosnippet>71</a>
+<a href=#72 id=72 data-nosnippet>72</a><span class="doccomment">/// Upper bound (bytes) on the manifest size during restore. The
+<a href=#73 id=73 data-nosnippet>73</a>/// real manifest is ~500 bytes; 1 MiB is a generous ceiling that
+<a href=#74 id=74 data-nosnippet>74</a>/// guards against a corrupt or hostile archive declaring an
+<a href=#75 id=75 data-nosnippet>75</a>/// enormous entry and exhausting RAM via [`Read::read_to_end`].
+<a href=#76 id=76 data-nosnippet>76</a></span><span class="kw">const </span>MAX_MANIFEST_BYTES: u64 = <span class="number">1024 </span>* <span class="number">1024</span>;
+<a href=#77 id=77 data-nosnippet>77</a>
+<a href=#78 id=78 data-nosnippet>78</a><span class="doccomment">/// Upper bound (bytes) on a single payload file during restore.
+<a href=#79 id=79 data-nosnippet>79</a>/// 16 GiB accommodates the largest plausible `BlockPool` segment
+<a href=#80 id=80 data-nosnippet>80</a>/// (`segment_size` is 256 MiB by default; we leave 64× headroom for
+<a href=#81 id=81 data-nosnippet>81</a>/// future configurations) while still bounding worst-case RAM use.
+<a href=#82 id=82 data-nosnippet>82</a></span><span class="kw">const </span>MAX_PAYLOAD_FILE_BYTES: u64 = <span class="number">16 </span>* <span class="number">1024 </span>* <span class="number">1024 </span>* <span class="number">1024</span>;
+<a href=#83 id=83 data-nosnippet>83</a>
+<a href=#84 id=84 data-nosnippet>84</a><span class="comment">// ─── Manifest ───────────────────────────────────────────────────────────
+<a href=#85 id=85 data-nosnippet>85</a>//
+<a href=#86 id=86 data-nosnippet>86</a>// Schema types live under [`v1`]. The top-level module re-exports
+<a href=#87 id=87 data-nosnippet>87</a>// `SnapshotManifest`, `SnapshotCodecs`, `SnapshotStats` so every
+<a href=#88 id=88 data-nosnippet>88</a>// existing consumer (`crate::engine::Engine::snapshot`, the
+<a href=#89 id=89 data-nosnippet>89</a>// `CheckpointRepository` in `crate::checkpoint`, the Python bridge,
+<a href=#90 id=90 data-nosnippet>90</a>// downstream `.tar`-inspection tools) keeps working unchanged.
+<a href=#91 id=91 data-nosnippet>91</a>//
+<a href=#92 id=92 data-nosnippet>92</a>// The convention for the next breaking schema bump: introduce
+<a href=#93 id=93 data-nosnippet>93</a>// `pub mod v2` alongside `v1`, define its own constants and types,
+<a href=#94 id=94 data-nosnippet>94</a>// and rewrite the top-level re-exports to point at v2. The reader
+<a href=#95 id=95 data-nosnippet>95</a>// dispatches on `format_version` and decodes into the right
+<a href=#96 id=96 data-nosnippet>96</a>// version's struct — `v1` and `v2` coexist in the codebase until the
+<a href=#97 id=97 data-nosnippet>97</a>// last v1 snapshot in the wild has been migrated forward.
+<a href=#98 id=98 data-nosnippet>98</a>
+<a href=#99 id=99 data-nosnippet>99</a></span><span class="kw">pub use </span>v1::{SnapshotCodecs, SnapshotManifest, SnapshotStats};
+<a href=#100 id=100 data-nosnippet>100</a>
+<a href=#101 id=101 data-nosnippet>101</a><span class="doccomment">/// Snapshot schema, version 1.
+<a href=#102 id=102 data-nosnippet>102</a>///
+<a href=#103 id=103 data-nosnippet>103</a>/// Every snapshot the engine produces today carries
+<a href=#104 id=104 data-nosnippet>104</a>/// `format_version: 1` and decodes into the structs defined here.
+<a href=#105 id=105 data-nosnippet>105</a>/// The module is intentionally self-contained — when v2 lands as a
+<a href=#106 id=106 data-nosnippet>106</a>/// sibling module, v1 stays in the codebase so old snapshots
+<a href=#107 id=107 data-nosnippet>107</a>/// produced by older engines remain restorable forward in time.
+<a href=#108 id=108 data-nosnippet>108</a>///
+<a href=#109 id=109 data-nosnippet>109</a>/// The on-disk contract this module pins:
+<a href=#110 id=110 data-nosnippet>110</a>/// - Manifest JSON layout (field names, types, ordering)
+<a href=#111 id=111 data-nosnippet>111</a>/// - `quantization = "q4"`, `key = "top5avg"` codec identifiers
+<a href=#112 id=112 data-nosnippet>112</a>/// - SHA-256 of the `engine_state/` payload as the integrity check
+<a href=#113 id=113 data-nosnippet>113</a></span><span class="kw">pub mod </span>v1 {
+<a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">use </span>serde::{Deserialize, Serialize};
+<a href=#115 id=115 data-nosnippet>115</a>
+<a href=#116 id=116 data-nosnippet>116</a>    <span class="doccomment">/// Format version constant for v1 snapshots.
+<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">pub const </span>SNAPSHOT_FORMAT_VERSION: u8 = <span class="number">1</span>;
+<a href=#118 id=118 data-nosnippet>118</a>
+<a href=#119 id=119 data-nosnippet>119</a>    <span class="doccomment">/// Quantization codec identifier embedded in v1 manifests.
+<a href=#120 id=120 data-nosnippet>120</a>    /// Snapshots embed this so a future engine that drops Q4 support
+<a href=#121 id=121 data-nosnippet>121</a>    /// can refuse Q4 snapshots cleanly instead of producing garbage
+<a href=#122 id=122 data-nosnippet>122</a>    /// reads.
+<a href=#123 id=123 data-nosnippet>123</a>    </span><span class="kw">pub const </span>SNAPSHOT_QUANT_CODEC: <span class="kw-2">&amp;</span>str = <span class="string">"q4"</span>;
+<a href=#124 id=124 data-nosnippet>124</a>
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="doccomment">/// Per-token retrieval-key codec identifier for v1 manifests.
+<a href=#126 id=126 data-nosnippet>126</a>    </span><span class="kw">pub const </span>SNAPSHOT_KEY_CODEC: <span class="kw-2">&amp;</span>str = <span class="string">"top5avg"</span>;
 <a href=#127 id=127 data-nosnippet>127</a>
-<a href=#128 id=128 data-nosnippet>128</a><span class="kw">impl </span>SnapshotManifest {
-<a href=#129 id=129 data-nosnippet>129</a>    <span class="doccomment">/// Construct a manifest with the current format constants.
-<a href=#130 id=130 data-nosnippet>130</a>    /// `sha256` and `stats` must be filled by the caller.
-<a href=#131 id=131 data-nosnippet>131</a>    </span><span class="attr">#[must_use]
-<a href=#132 id=132 data-nosnippet>132</a>    </span><span class="kw">pub fn </span>current(sha256: String, stats: SnapshotStats) -&gt; <span class="self">Self </span>{
-<a href=#133 id=133 data-nosnippet>133</a>        <span class="self">Self </span>{
-<a href=#134 id=134 data-nosnippet>134</a>            magic: SNAPSHOT_MAGIC.to_string(),
-<a href=#135 id=135 data-nosnippet>135</a>            format_version: SNAPSHOT_FORMAT_VERSION,
-<a href=#136 id=136 data-nosnippet>136</a>            created_at: rfc3339_now(),
-<a href=#137 id=137 data-nosnippet>137</a>            codecs: SnapshotCodecs {
-<a href=#138 id=138 data-nosnippet>138</a>                quantization: SNAPSHOT_QUANT_CODEC.to_string(),
-<a href=#139 id=139 data-nosnippet>139</a>                key: SNAPSHOT_KEY_CODEC.to_string(),
-<a href=#140 id=140 data-nosnippet>140</a>            },
-<a href=#141 id=141 data-nosnippet>141</a>            stats,
-<a href=#142 id=142 data-nosnippet>142</a>            sha256,
-<a href=#143 id=143 data-nosnippet>143</a>        }
-<a href=#144 id=144 data-nosnippet>144</a>    }
-<a href=#145 id=145 data-nosnippet>145</a>}
-<a href=#146 id=146 data-nosnippet>146</a>
-<a href=#147 id=147 data-nosnippet>147</a><span class="doccomment">/// Format an RFC 3339 timestamp without pulling in `chrono`. Returns
-<a href=#148 id=148 data-nosnippet>148</a>/// seconds since the Unix epoch as a string; sufficient for forensic
-<a href=#149 id=149 data-nosnippet>149</a>/// ordering and human readability inside admin tooling.
-<a href=#150 id=150 data-nosnippet>150</a></span><span class="kw">fn </span>rfc3339_now() -&gt; String {
-<a href=#151 id=151 data-nosnippet>151</a>    <span class="kw">let </span>secs = std::time::SystemTime::now()
-<a href=#152 id=152 data-nosnippet>152</a>        .duration_since(std::time::UNIX_EPOCH)
-<a href=#153 id=153 data-nosnippet>153</a>        .map_or(<span class="number">0</span>, |d| d.as_secs());
-<a href=#154 id=154 data-nosnippet>154</a>    <span class="comment">// Compact ISO-ish: ``1970-01-01T00:00:00Z + N seconds``. We do
-<a href=#155 id=155 data-nosnippet>155</a>    // not need calendar conversion at this layer; downstream tooling
-<a href=#156 id=156 data-nosnippet>156</a>    // can pretty-print if needed.
-<a href=#157 id=157 data-nosnippet>157</a>    </span><span class="macro">format!</span>(<span class="string">"@{secs}"</span>)
-<a href=#158 id=158 data-nosnippet>158</a>}
-<a href=#159 id=159 data-nosnippet>159</a>
-<a href=#160 id=160 data-nosnippet>160</a><span class="comment">// ─── Public snapshot/restore functions ──────────────────────────────────
+<a href=#128 id=128 data-nosnippet>128</a>    <span class="doccomment">/// Versioned metadata header written at the root of every v1
+<a href=#129 id=129 data-nosnippet>129</a>    /// snapshot archive. Read first by
+<a href=#130 id=130 data-nosnippet>130</a>    /// [`crate::engine::Engine::restore_from`] to validate
+<a href=#131 id=131 data-nosnippet>131</a>    /// compatibility before extracting the payload.
+<a href=#132 id=132 data-nosnippet>132</a>    </span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+<a href=#133 id=133 data-nosnippet>133</a>    </span><span class="kw">pub struct </span>SnapshotManifest {
+<a href=#134 id=134 data-nosnippet>134</a>        <span class="doccomment">/// Magic marker; must equal [`super::SNAPSHOT_MAGIC`].
+<a href=#135 id=135 data-nosnippet>135</a>        </span><span class="kw">pub </span>magic: String,
+<a href=#136 id=136 data-nosnippet>136</a>        <span class="doccomment">/// Format version; restore refuses unknown values.
+<a href=#137 id=137 data-nosnippet>137</a>        </span><span class="kw">pub </span>format_version: u8,
+<a href=#138 id=138 data-nosnippet>138</a>        <span class="doccomment">/// RFC 3339 timestamp of snapshot creation.
+<a href=#139 id=139 data-nosnippet>139</a>        </span><span class="kw">pub </span>created_at: String,
+<a href=#140 id=140 data-nosnippet>140</a>        <span class="doccomment">/// Codec identifiers for the storage formats embedded in the
+<a href=#141 id=141 data-nosnippet>141</a>        /// payload. Restore refuses snapshots whose codecs are not
+<a href=#142 id=142 data-nosnippet>142</a>        /// supported by the current engine.
+<a href=#143 id=143 data-nosnippet>143</a>        </span><span class="kw">pub </span>codecs: SnapshotCodecs,
+<a href=#144 id=144 data-nosnippet>144</a>        <span class="doccomment">/// Cheap stats useful for forensics + repository lookup.
+<a href=#145 id=145 data-nosnippet>145</a>        </span><span class="kw">pub </span>stats: SnapshotStats,
+<a href=#146 id=146 data-nosnippet>146</a>        <span class="doccomment">/// SHA-256 (hex-encoded) of the tarred ``engine_state/``
+<a href=#147 id=147 data-nosnippet>147</a>        /// payload. Computed *over the engine state files only* —
+<a href=#148 id=148 data-nosnippet>148</a>        /// not over the manifest itself. Verified by
+<a href=#149 id=149 data-nosnippet>149</a>        /// [`crate::engine::Engine::restore_from`].
+<a href=#150 id=150 data-nosnippet>150</a>        </span><span class="kw">pub </span>sha256: String,
+<a href=#151 id=151 data-nosnippet>151</a>    }
+<a href=#152 id=152 data-nosnippet>152</a>
+<a href=#153 id=153 data-nosnippet>153</a>    <span class="doccomment">/// Codec identifiers embedded in a v1 snapshot manifest.
+<a href=#154 id=154 data-nosnippet>154</a>    </span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+<a href=#155 id=155 data-nosnippet>155</a>    </span><span class="kw">pub struct </span>SnapshotCodecs {
+<a href=#156 id=156 data-nosnippet>156</a>        <span class="doccomment">/// Quantization codec (e.g. ``"q4"``).
+<a href=#157 id=157 data-nosnippet>157</a>        </span><span class="kw">pub </span>quantization: String,
+<a href=#158 id=158 data-nosnippet>158</a>        <span class="doccomment">/// Per-token retrieval-key codec (e.g. ``"top5avg"``).
+<a href=#159 id=159 data-nosnippet>159</a>        </span><span class="kw">pub </span>key: String,
+<a href=#160 id=160 data-nosnippet>160</a>    }
 <a href=#161 id=161 data-nosnippet>161</a>
-<a href=#162 id=162 data-nosnippet>162</a></span><span class="doccomment">/// Bundle the engine's working directory into a tar archive at
-<a href=#163 id=163 data-nosnippet>163</a>/// ``out_path``. Returns the manifest by value so callers can log or
-<a href=#164 id=164 data-nosnippet>164</a>/// persist it without re-reading the archive.
-<a href=#165 id=165 data-nosnippet>165</a>///
-<a href=#166 id=166 data-nosnippet>166</a>/// The caller must have already flushed the engine. [`crate::engine::Engine::snapshot`]
-<a href=#167 id=167 data-nosnippet>167</a>/// in `engine.rs` is the proper public entry point and handles flush.
-<a href=#168 id=168 data-nosnippet>168</a>///
-<a href=#169 id=169 data-nosnippet>169</a>/// # Errors
-<a href=#170 id=170 data-nosnippet>170</a>///
-<a href=#171 id=171 data-nosnippet>171</a>/// Returns [`TardigradeError::Io`] on disk failures and a
-<a href=#172 id=172 data-nosnippet>172</a>/// [`TardigradeError::SnapshotIntegrity`] if the manifest cannot be
-<a href=#173 id=173 data-nosnippet>173</a>/// serialized (which would indicate a bug, not user input).
-<a href=#174 id=174 data-nosnippet>174</a></span><span class="kw">pub fn </span>write_snapshot(
-<a href=#175 id=175 data-nosnippet>175</a>    engine_dir: <span class="kw-2">&amp;</span>Path,
-<a href=#176 id=176 data-nosnippet>176</a>    out_path: <span class="kw-2">&amp;</span>Path,
-<a href=#177 id=177 data-nosnippet>177</a>    stats: SnapshotStats,
-<a href=#178 id=178 data-nosnippet>178</a>) -&gt; <span class="prelude-ty">Result</span>&lt;SnapshotManifest&gt; {
-<a href=#179 id=179 data-nosnippet>179</a>    <span class="comment">// Refuse the foot-gun where ``out_path`` sits inside
-<a href=#180 id=180 data-nosnippet>180</a>    // ``engine_dir`` — the tar walker would read its own growing
-<a href=#181 id=181 data-nosnippet>181</a>    // output and exhaust disk. Caller must write the snapshot
-<a href=#182 id=182 data-nosnippet>182</a>    // somewhere outside the engine state.
-<a href=#183 id=183 data-nosnippet>183</a>    </span><span class="kw">if let </span>(<span class="prelude-val">Ok</span>(out_abs), <span class="prelude-val">Ok</span>(engine_abs)) = (
-<a href=#184 id=184 data-nosnippet>184</a>        out_path.canonicalize().or_else(|<span class="kw">_</span>| {
-<a href=#185 id=185 data-nosnippet>185</a>            <span class="comment">// The output usually doesn't exist yet; resolve its parent.
-<a href=#186 id=186 data-nosnippet>186</a>            </span>out_path.parent().map_or_else(
-<a href=#187 id=187 data-nosnippet>187</a>                || <span class="prelude-val">Ok</span>(out_path.to_path_buf()),
-<a href=#188 id=188 data-nosnippet>188</a>                |p| p.canonicalize().map(|abs| abs.join(out_path.file_name().unwrap_or_default())),
-<a href=#189 id=189 data-nosnippet>189</a>            )
-<a href=#190 id=190 data-nosnippet>190</a>        }),
-<a href=#191 id=191 data-nosnippet>191</a>        engine_dir.canonicalize(),
-<a href=#192 id=192 data-nosnippet>192</a>    ) &amp;&amp; out_abs.starts_with(<span class="kw-2">&amp;</span>engine_abs)
-<a href=#193 id=193 data-nosnippet>193</a>    {
-<a href=#194 id=194 data-nosnippet>194</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotIntegrity(<span class="macro">format!</span>(
-<a href=#195 id=195 data-nosnippet>195</a>            <span class="string">"out_path ({}) is inside engine_dir ({}); pick a path outside the engine directory"</span>,
-<a href=#196 id=196 data-nosnippet>196</a>            out_path.display(),
-<a href=#197 id=197 data-nosnippet>197</a>            engine_dir.display(),
-<a href=#198 id=198 data-nosnippet>198</a>        )));
-<a href=#199 id=199 data-nosnippet>199</a>    }
-<a href=#200 id=200 data-nosnippet>200</a>
-<a href=#201 id=201 data-nosnippet>201</a>    <span class="kw">let </span><span class="kw-2">mut </span>hasher = Sha256::new();
-<a href=#202 id=202 data-nosnippet>202</a>
-<a href=#203 id=203 data-nosnippet>203</a>    <span class="comment">// Step 1: hash the payload first so we can include the digest
-<a href=#204 id=204 data-nosnippet>204</a>    // in the manifest. We walk the same set of files we'll
-<a href=#205 id=205 data-nosnippet>205</a>    // subsequently tar so the digest matches what restore will see.
-<a href=#206 id=206 data-nosnippet>206</a>    </span>walk_files_for_hash(engine_dir, <span class="kw-2">&amp;mut </span>hasher)<span class="question-mark">?</span>;
-<a href=#207 id=207 data-nosnippet>207</a>    <span class="kw">let </span>sha256 = hex_lower(<span class="kw-2">&amp;</span>hasher.finalize());
-<a href=#208 id=208 data-nosnippet>208</a>
-<a href=#209 id=209 data-nosnippet>209</a>    <span class="kw">let </span>manifest = SnapshotManifest::current(sha256, stats);
-<a href=#210 id=210 data-nosnippet>210</a>    <span class="kw">let </span>manifest_json = serde_json::to_vec_pretty(<span class="kw-2">&amp;</span>manifest)
-<a href=#211 id=211 data-nosnippet>211</a>        .map_err(|e| TardigradeError::SnapshotIntegrity(<span class="macro">format!</span>(<span class="string">"manifest serialize: {e}"</span>)))<span class="question-mark">?</span>;
-<a href=#212 id=212 data-nosnippet>212</a>
-<a href=#213 id=213 data-nosnippet>213</a>    <span class="comment">// Step 2: write the tar archive: manifest.json first, then the
-<a href=#214 id=214 data-nosnippet>214</a>    // engine_state/ payload.
-<a href=#215 id=215 data-nosnippet>215</a>    </span><span class="kw">let </span>file = File::create(out_path).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#216 id=216 data-nosnippet>216</a>    <span class="kw">let </span><span class="kw-2">mut </span>tar = Builder::new(file);
-<a href=#217 id=217 data-nosnippet>217</a>    tar.mode(tar::HeaderMode::Deterministic);
-<a href=#218 id=218 data-nosnippet>218</a>
-<a href=#219 id=219 data-nosnippet>219</a>    <span class="comment">// Manifest entry.
-<a href=#220 id=220 data-nosnippet>220</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>header = tar::Header::new_gnu();
-<a href=#221 id=221 data-nosnippet>221</a>    header.set_path(SNAPSHOT_MANIFEST_NAME).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#222 id=222 data-nosnippet>222</a>    header.set_size(manifest_json.len() <span class="kw">as </span>u64);
-<a href=#223 id=223 data-nosnippet>223</a>    header.set_mode(<span class="number">0o644</span>);
-<a href=#224 id=224 data-nosnippet>224</a>    header.set_cksum();
-<a href=#225 id=225 data-nosnippet>225</a>    tar.append(<span class="kw-2">&amp;</span>header, <span class="kw-2">&amp;</span>manifest_json[..]).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#226 id=226 data-nosnippet>226</a>
-<a href=#227 id=227 data-nosnippet>227</a>    <span class="comment">// Payload: copy every regular file under engine_dir into
-<a href=#228 id=228 data-nosnippet>228</a>    // engine_state/ inside the archive.
-<a href=#229 id=229 data-nosnippet>229</a>    </span>tar.append_dir_all(SNAPSHOT_PAYLOAD_DIR, engine_dir)
-<a href=#230 id=230 data-nosnippet>230</a>        .map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#231 id=231 data-nosnippet>231</a>
-<a href=#232 id=232 data-nosnippet>232</a>    tar.finish().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#233 id=233 data-nosnippet>233</a>    <span class="prelude-val">Ok</span>(manifest)
-<a href=#234 id=234 data-nosnippet>234</a>}
-<a href=#235 id=235 data-nosnippet>235</a>
-<a href=#236 id=236 data-nosnippet>236</a><span class="doccomment">/// Read just the manifest from a snapshot archive without
-<a href=#237 id=237 data-nosnippet>237</a>/// extracting the payload or verifying the integrity hash.
-<a href=#238 id=238 data-nosnippet>238</a>///
-<a href=#239 id=239 data-nosnippet>239</a>/// Useful for listing operations that only need metadata (label
-<a href=#240 id=240 data-nosnippet>240</a>/// directories, repository enumeration). Magic and format version
-<a href=#241 id=241 data-nosnippet>241</a>/// are still validated — a tar that lies about being a
-<a href=#242 id=242 data-nosnippet>242</a>/// `TardigradeDB` snapshot is refused here too.
-<a href=#243 id=243 data-nosnippet>243</a>///
-<a href=#244 id=244 data-nosnippet>244</a>/// # Errors
-<a href=#245 id=245 data-nosnippet>245</a>///
-<a href=#246 id=246 data-nosnippet>246</a>/// - [`TardigradeError::NotATardigradeSnapshot`] — magic missing.
-<a href=#247 id=247 data-nosnippet>247</a>/// - [`TardigradeError::UnsupportedFormatVersion`] — unknown version.
-<a href=#248 id=248 data-nosnippet>248</a>/// - [`TardigradeError::Io`] — disk failure.
-<a href=#249 id=249 data-nosnippet>249</a></span><span class="kw">pub fn </span>read_manifest_only(in_path: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;SnapshotManifest&gt; {
-<a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">let </span>file = File::open(in_path).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">let </span><span class="kw-2">mut </span>archive = Archive::new(file);
-<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">for </span>entry <span class="kw">in </span>archive.entries().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">? </span>{
-<a href=#253 id=253 data-nosnippet>253</a>        <span class="kw">let </span><span class="kw-2">mut </span>entry = entry.map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">let </span>path = entry.path().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>.to_path_buf();
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">if </span>path.as_os_str() != SNAPSHOT_MANIFEST_NAME {
-<a href=#256 id=256 data-nosnippet>256</a>            <span class="kw">continue</span>;
-<a href=#257 id=257 data-nosnippet>257</a>        }
-<a href=#258 id=258 data-nosnippet>258</a>        <span class="kw">let </span>buf = read_entry_bounded(<span class="kw-2">&amp;mut </span>entry, MAX_MANIFEST_BYTES)<span class="question-mark">?</span>;
-<a href=#259 id=259 data-nosnippet>259</a>        <span class="kw">let </span>manifest: SnapshotManifest = serde_json::from_slice(<span class="kw-2">&amp;</span>buf).map_err(|e| {
-<a href=#260 id=260 data-nosnippet>260</a>            TardigradeError::NotATardigradeSnapshot { reason: <span class="macro">format!</span>(<span class="string">"manifest parse: {e}"</span>) }
-<a href=#261 id=261 data-nosnippet>261</a>        })<span class="question-mark">?</span>;
-<a href=#262 id=262 data-nosnippet>262</a>        <span class="kw">if </span>manifest.magic != SNAPSHOT_MAGIC {
-<a href=#263 id=263 data-nosnippet>263</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::NotATardigradeSnapshot {
-<a href=#264 id=264 data-nosnippet>264</a>                reason: <span class="macro">format!</span>(<span class="string">"unexpected magic: {:?}"</span>, manifest.magic),
-<a href=#265 id=265 data-nosnippet>265</a>            });
-<a href=#266 id=266 data-nosnippet>266</a>        }
-<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">if </span>manifest.format_version != SNAPSHOT_FORMAT_VERSION {
-<a href=#268 id=268 data-nosnippet>268</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::UnsupportedFormatVersion {
-<a href=#269 id=269 data-nosnippet>269</a>                found: manifest.format_version,
-<a href=#270 id=270 data-nosnippet>270</a>                supported: SNAPSHOT_FORMAT_VERSION,
-<a href=#271 id=271 data-nosnippet>271</a>            });
-<a href=#272 id=272 data-nosnippet>272</a>        }
-<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(manifest);
-<a href=#274 id=274 data-nosnippet>274</a>    }
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="prelude-val">Err</span>(TardigradeError::NotATardigradeSnapshot { reason: <span class="string">"manifest.json missing"</span>.to_string() })
-<a href=#276 id=276 data-nosnippet>276</a>}
+<a href=#162 id=162 data-nosnippet>162</a>    <span class="doccomment">/// V1 snapshot stats — handy for the repository's `latest()`
+<a href=#163 id=163 data-nosnippet>163</a>    /// lookup and for displaying in admin UIs without unpacking the
+<a href=#164 id=164 data-nosnippet>164</a>    /// archive.
+<a href=#165 id=165 data-nosnippet>165</a>    </span><span class="attr">#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+<a href=#166 id=166 data-nosnippet>166</a>    </span><span class="kw">pub struct </span>SnapshotStats {
+<a href=#167 id=167 data-nosnippet>167</a>        <span class="doccomment">/// Total packs in the engine at snapshot time.
+<a href=#168 id=168 data-nosnippet>168</a>        </span><span class="kw">pub </span>pack_count: usize,
+<a href=#169 id=169 data-nosnippet>169</a>        <span class="doccomment">/// Distinct owners with at least one pack.
+<a href=#170 id=170 data-nosnippet>170</a>        </span><span class="kw">pub </span>owner_count: usize,
+<a href=#171 id=171 data-nosnippet>171</a>    }
+<a href=#172 id=172 data-nosnippet>172</a>
+<a href=#173 id=173 data-nosnippet>173</a>    <span class="kw">impl </span>SnapshotManifest {
+<a href=#174 id=174 data-nosnippet>174</a>        <span class="doccomment">/// Construct a v1 manifest. `sha256` and `stats` are caller-
+<a href=#175 id=175 data-nosnippet>175</a>        /// provided; the rest come from v1's format constants.
+<a href=#176 id=176 data-nosnippet>176</a>        </span><span class="attr">#[must_use]
+<a href=#177 id=177 data-nosnippet>177</a>        </span><span class="kw">pub fn </span>current(sha256: String, stats: SnapshotStats) -&gt; <span class="self">Self </span>{
+<a href=#178 id=178 data-nosnippet>178</a>            <span class="self">Self </span>{
+<a href=#179 id=179 data-nosnippet>179</a>                magic: <span class="kw">super</span>::SNAPSHOT_MAGIC.to_string(),
+<a href=#180 id=180 data-nosnippet>180</a>                format_version: SNAPSHOT_FORMAT_VERSION,
+<a href=#181 id=181 data-nosnippet>181</a>                created_at: <span class="kw">super</span>::rfc3339_now(),
+<a href=#182 id=182 data-nosnippet>182</a>                codecs: SnapshotCodecs {
+<a href=#183 id=183 data-nosnippet>183</a>                    quantization: SNAPSHOT_QUANT_CODEC.to_string(),
+<a href=#184 id=184 data-nosnippet>184</a>                    key: SNAPSHOT_KEY_CODEC.to_string(),
+<a href=#185 id=185 data-nosnippet>185</a>                },
+<a href=#186 id=186 data-nosnippet>186</a>                stats,
+<a href=#187 id=187 data-nosnippet>187</a>                sha256,
+<a href=#188 id=188 data-nosnippet>188</a>            }
+<a href=#189 id=189 data-nosnippet>189</a>        }
+<a href=#190 id=190 data-nosnippet>190</a>    }
+<a href=#191 id=191 data-nosnippet>191</a>}
+<a href=#192 id=192 data-nosnippet>192</a>
+<a href=#193 id=193 data-nosnippet>193</a><span class="doccomment">/// Format an RFC 3339 timestamp without pulling in `chrono`. Returns
+<a href=#194 id=194 data-nosnippet>194</a>/// seconds since the Unix epoch as a string; sufficient for forensic
+<a href=#195 id=195 data-nosnippet>195</a>/// ordering and human readability inside admin tooling.
+<a href=#196 id=196 data-nosnippet>196</a></span><span class="kw">fn </span>rfc3339_now() -&gt; String {
+<a href=#197 id=197 data-nosnippet>197</a>    <span class="kw">let </span>secs = std::time::SystemTime::now()
+<a href=#198 id=198 data-nosnippet>198</a>        .duration_since(std::time::UNIX_EPOCH)
+<a href=#199 id=199 data-nosnippet>199</a>        .map_or(<span class="number">0</span>, |d| d.as_secs());
+<a href=#200 id=200 data-nosnippet>200</a>    <span class="comment">// Compact ISO-ish: ``1970-01-01T00:00:00Z + N seconds``. We do
+<a href=#201 id=201 data-nosnippet>201</a>    // not need calendar conversion at this layer; downstream tooling
+<a href=#202 id=202 data-nosnippet>202</a>    // can pretty-print if needed.
+<a href=#203 id=203 data-nosnippet>203</a>    </span><span class="macro">format!</span>(<span class="string">"@{secs}"</span>)
+<a href=#204 id=204 data-nosnippet>204</a>}
+<a href=#205 id=205 data-nosnippet>205</a>
+<a href=#206 id=206 data-nosnippet>206</a><span class="comment">// ─── Public snapshot/restore functions ──────────────────────────────────
+<a href=#207 id=207 data-nosnippet>207</a>
+<a href=#208 id=208 data-nosnippet>208</a></span><span class="doccomment">/// Bundle the engine's working directory into a tar archive at
+<a href=#209 id=209 data-nosnippet>209</a>/// ``out_path``. Returns the manifest by value so callers can log or
+<a href=#210 id=210 data-nosnippet>210</a>/// persist it without re-reading the archive.
+<a href=#211 id=211 data-nosnippet>211</a>///
+<a href=#212 id=212 data-nosnippet>212</a>/// The caller must have already flushed the engine. [`crate::engine::Engine::snapshot`]
+<a href=#213 id=213 data-nosnippet>213</a>/// in `engine.rs` is the proper public entry point and handles flush.
+<a href=#214 id=214 data-nosnippet>214</a>///
+<a href=#215 id=215 data-nosnippet>215</a>/// # Errors
+<a href=#216 id=216 data-nosnippet>216</a>///
+<a href=#217 id=217 data-nosnippet>217</a>/// Returns [`TardigradeError::Io`] on disk failures and a
+<a href=#218 id=218 data-nosnippet>218</a>/// [`TardigradeError::SnapshotIntegrity`] if the manifest cannot be
+<a href=#219 id=219 data-nosnippet>219</a>/// serialized (which would indicate a bug, not user input).
+<a href=#220 id=220 data-nosnippet>220</a></span><span class="kw">pub fn </span>write_snapshot(
+<a href=#221 id=221 data-nosnippet>221</a>    engine_dir: <span class="kw-2">&amp;</span>Path,
+<a href=#222 id=222 data-nosnippet>222</a>    out_path: <span class="kw-2">&amp;</span>Path,
+<a href=#223 id=223 data-nosnippet>223</a>    stats: SnapshotStats,
+<a href=#224 id=224 data-nosnippet>224</a>) -&gt; <span class="prelude-ty">Result</span>&lt;SnapshotManifest&gt; {
+<a href=#225 id=225 data-nosnippet>225</a>    <span class="comment">// Refuse the foot-gun where ``out_path`` sits inside
+<a href=#226 id=226 data-nosnippet>226</a>    // ``engine_dir`` — the tar walker would read its own growing
+<a href=#227 id=227 data-nosnippet>227</a>    // output and exhaust disk. Caller must write the snapshot
+<a href=#228 id=228 data-nosnippet>228</a>    // somewhere outside the engine state.
+<a href=#229 id=229 data-nosnippet>229</a>    </span><span class="kw">if let </span>(<span class="prelude-val">Ok</span>(out_abs), <span class="prelude-val">Ok</span>(engine_abs)) = (
+<a href=#230 id=230 data-nosnippet>230</a>        out_path.canonicalize().or_else(|<span class="kw">_</span>| {
+<a href=#231 id=231 data-nosnippet>231</a>            <span class="comment">// The output usually doesn't exist yet; resolve its parent.
+<a href=#232 id=232 data-nosnippet>232</a>            </span>out_path.parent().map_or_else(
+<a href=#233 id=233 data-nosnippet>233</a>                || <span class="prelude-val">Ok</span>(out_path.to_path_buf()),
+<a href=#234 id=234 data-nosnippet>234</a>                |p| p.canonicalize().map(|abs| abs.join(out_path.file_name().unwrap_or_default())),
+<a href=#235 id=235 data-nosnippet>235</a>            )
+<a href=#236 id=236 data-nosnippet>236</a>        }),
+<a href=#237 id=237 data-nosnippet>237</a>        engine_dir.canonicalize(),
+<a href=#238 id=238 data-nosnippet>238</a>    ) &amp;&amp; out_abs.starts_with(<span class="kw-2">&amp;</span>engine_abs)
+<a href=#239 id=239 data-nosnippet>239</a>    {
+<a href=#240 id=240 data-nosnippet>240</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotIntegrity(<span class="macro">format!</span>(
+<a href=#241 id=241 data-nosnippet>241</a>            <span class="string">"out_path ({}) is inside engine_dir ({}); pick a path outside the engine directory"</span>,
+<a href=#242 id=242 data-nosnippet>242</a>            out_path.display(),
+<a href=#243 id=243 data-nosnippet>243</a>            engine_dir.display(),
+<a href=#244 id=244 data-nosnippet>244</a>        )));
+<a href=#245 id=245 data-nosnippet>245</a>    }
+<a href=#246 id=246 data-nosnippet>246</a>
+<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">let </span><span class="kw-2">mut </span>hasher = Sha256::new();
+<a href=#248 id=248 data-nosnippet>248</a>
+<a href=#249 id=249 data-nosnippet>249</a>    <span class="comment">// Step 1: hash the payload first so we can include the digest
+<a href=#250 id=250 data-nosnippet>250</a>    // in the manifest. We walk the same set of files we'll
+<a href=#251 id=251 data-nosnippet>251</a>    // subsequently tar so the digest matches what restore will see.
+<a href=#252 id=252 data-nosnippet>252</a>    </span>walk_files_for_hash(engine_dir, <span class="kw-2">&amp;mut </span>hasher)<span class="question-mark">?</span>;
+<a href=#253 id=253 data-nosnippet>253</a>    <span class="kw">let </span>sha256 = hex_lower(<span class="kw-2">&amp;</span>hasher.finalize());
+<a href=#254 id=254 data-nosnippet>254</a>
+<a href=#255 id=255 data-nosnippet>255</a>    <span class="kw">let </span>manifest = SnapshotManifest::current(sha256, stats);
+<a href=#256 id=256 data-nosnippet>256</a>    <span class="kw">let </span>manifest_json = serde_json::to_vec_pretty(<span class="kw-2">&amp;</span>manifest)
+<a href=#257 id=257 data-nosnippet>257</a>        .map_err(|e| TardigradeError::SnapshotIntegrity(<span class="macro">format!</span>(<span class="string">"manifest serialize: {e}"</span>)))<span class="question-mark">?</span>;
+<a href=#258 id=258 data-nosnippet>258</a>
+<a href=#259 id=259 data-nosnippet>259</a>    <span class="comment">// Step 2: write the tar archive: manifest.json first, then the
+<a href=#260 id=260 data-nosnippet>260</a>    // engine_state/ payload.
+<a href=#261 id=261 data-nosnippet>261</a>    </span><span class="kw">let </span>file = File::create(out_path).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">let </span><span class="kw-2">mut </span>tar = Builder::new(file);
+<a href=#263 id=263 data-nosnippet>263</a>    tar.mode(tar::HeaderMode::Deterministic);
+<a href=#264 id=264 data-nosnippet>264</a>
+<a href=#265 id=265 data-nosnippet>265</a>    <span class="comment">// Manifest entry.
+<a href=#266 id=266 data-nosnippet>266</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>header = tar::Header::new_gnu();
+<a href=#267 id=267 data-nosnippet>267</a>    header.set_path(SNAPSHOT_MANIFEST_NAME).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#268 id=268 data-nosnippet>268</a>    header.set_size(manifest_json.len() <span class="kw">as </span>u64);
+<a href=#269 id=269 data-nosnippet>269</a>    header.set_mode(<span class="number">0o644</span>);
+<a href=#270 id=270 data-nosnippet>270</a>    header.set_cksum();
+<a href=#271 id=271 data-nosnippet>271</a>    tar.append(<span class="kw-2">&amp;</span>header, <span class="kw-2">&amp;</span>manifest_json[..]).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#272 id=272 data-nosnippet>272</a>
+<a href=#273 id=273 data-nosnippet>273</a>    <span class="comment">// Payload: copy every regular file under engine_dir into
+<a href=#274 id=274 data-nosnippet>274</a>    // engine_state/ inside the archive.
+<a href=#275 id=275 data-nosnippet>275</a>    </span>tar.append_dir_all(SNAPSHOT_PAYLOAD_DIR, engine_dir)
+<a href=#276 id=276 data-nosnippet>276</a>        .map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
 <a href=#277 id=277 data-nosnippet>277</a>
-<a href=#278 id=278 data-nosnippet>278</a><span class="doccomment">/// Restore a snapshot archive into ``target_dir`` (which must be
-<a href=#279 id=279 data-nosnippet>279</a>/// empty or non-existent) and validate its manifest. The caller
-<a href=#280 id=280 data-nosnippet>280</a>/// invokes [`crate::engine::Engine::open`] on ``target_dir`` afterwards.
-<a href=#281 id=281 data-nosnippet>281</a>///
-<a href=#282 id=282 data-nosnippet>282</a>/// Returns the parsed manifest so callers can inspect or log the
-<a href=#283 id=283 data-nosnippet>283</a>/// snapshot's metadata.
+<a href=#278 id=278 data-nosnippet>278</a>    tar.finish().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#279 id=279 data-nosnippet>279</a>    <span class="prelude-val">Ok</span>(manifest)
+<a href=#280 id=280 data-nosnippet>280</a>}
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a><span class="doccomment">/// Read just the manifest from a snapshot archive without
+<a href=#283 id=283 data-nosnippet>283</a>/// extracting the payload or verifying the integrity hash.
 <a href=#284 id=284 data-nosnippet>284</a>///
-<a href=#285 id=285 data-nosnippet>285</a>/// # Errors
-<a href=#286 id=286 data-nosnippet>286</a>///
-<a href=#287 id=287 data-nosnippet>287</a>/// - [`TardigradeError::NotATardigradeSnapshot`] — magic missing.
-<a href=#288 id=288 data-nosnippet>288</a>/// - [`TardigradeError::UnsupportedFormatVersion`] — unknown version.
-<a href=#289 id=289 data-nosnippet>289</a>/// - [`TardigradeError::SnapshotCodecMismatch`] — codec incompatible.
-<a href=#290 id=290 data-nosnippet>290</a>/// - [`TardigradeError::SnapshotIntegrity`] — SHA-256 mismatch.
-<a href=#291 id=291 data-nosnippet>291</a>/// - [`TardigradeError::Io`] — disk failure.
-<a href=#292 id=292 data-nosnippet>292</a></span><span class="kw">pub fn </span>read_snapshot(in_path: <span class="kw-2">&amp;</span>Path, target_dir: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;SnapshotManifest&gt; {
-<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">let </span>file = File::open(in_path).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">let </span><span class="kw-2">mut </span>archive = Archive::new(file);
-<a href=#295 id=295 data-nosnippet>295</a>
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="comment">// First entry: manifest. Pull it out independently so we can
-<a href=#297 id=297 data-nosnippet>297</a>    // refuse the snapshot before extracting any payload.
-<a href=#298 id=298 data-nosnippet>298</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>manifest_bytes: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = <span class="prelude-val">None</span>;
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">let </span><span class="kw-2">mut </span>payload_entries: Vec&lt;(PathBuf, Vec&lt;u8&gt;)&gt; = Vec::new();
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">for </span>entry <span class="kw">in </span>archive.entries().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">? </span>{
-<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span><span class="kw-2">mut </span>entry = entry.map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">let </span>path = entry.path().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>.to_path_buf();
-<a href=#304 id=304 data-nosnippet>304</a>
-<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">if </span>path.as_os_str() == SNAPSHOT_MANIFEST_NAME {
-<a href=#306 id=306 data-nosnippet>306</a>            <span class="kw">let </span>buf = read_entry_bounded(<span class="kw-2">&amp;mut </span>entry, MAX_MANIFEST_BYTES)<span class="question-mark">?</span>;
-<a href=#307 id=307 data-nosnippet>307</a>            manifest_bytes = <span class="prelude-val">Some</span>(buf);
-<a href=#308 id=308 data-nosnippet>308</a>            <span class="kw">continue</span>;
-<a href=#309 id=309 data-nosnippet>309</a>        }
-<a href=#310 id=310 data-nosnippet>310</a>        <span class="comment">// Only regular files inside engine_state/ are part of the
-<a href=#311 id=311 data-nosnippet>311</a>        // payload; tar Directory entries are skipped (we re-create
-<a href=#312 id=312 data-nosnippet>312</a>        // dirs on extract).
-<a href=#313 id=313 data-nosnippet>313</a>        </span><span class="kw">if </span>!entry.header().entry_type().is_file() {
-<a href=#314 id=314 data-nosnippet>314</a>            <span class="kw">continue</span>;
-<a href=#315 id=315 data-nosnippet>315</a>        }
-<a href=#316 id=316 data-nosnippet>316</a>        <span class="kw">if </span>!path.starts_with(SNAPSHOT_PAYLOAD_DIR) {
-<a href=#317 id=317 data-nosnippet>317</a>            <span class="kw">continue</span>;
+<a href=#285 id=285 data-nosnippet>285</a>/// Useful for listing operations that only need metadata (label
+<a href=#286 id=286 data-nosnippet>286</a>/// directories, repository enumeration). Magic and format version
+<a href=#287 id=287 data-nosnippet>287</a>/// are still validated — a tar that lies about being a
+<a href=#288 id=288 data-nosnippet>288</a>/// `TardigradeDB` snapshot is refused here too.
+<a href=#289 id=289 data-nosnippet>289</a>///
+<a href=#290 id=290 data-nosnippet>290</a>/// # Errors
+<a href=#291 id=291 data-nosnippet>291</a>///
+<a href=#292 id=292 data-nosnippet>292</a>/// - [`TardigradeError::NotATardigradeSnapshot`] — magic missing.
+<a href=#293 id=293 data-nosnippet>293</a>/// - [`TardigradeError::UnsupportedFormatVersion`] — unknown version.
+<a href=#294 id=294 data-nosnippet>294</a>/// - [`TardigradeError::Io`] — disk failure.
+<a href=#295 id=295 data-nosnippet>295</a></span><span class="kw">pub fn </span>read_manifest_only(in_path: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;SnapshotManifest&gt; {
+<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">let </span>file = File::open(in_path).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">let </span><span class="kw-2">mut </span>archive = Archive::new(file);
+<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">for </span>entry <span class="kw">in </span>archive.entries().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">? </span>{
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw">let </span><span class="kw-2">mut </span>entry = entry.map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">let </span>path = entry.path().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>.to_path_buf();
+<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">if </span>path.as_os_str() != SNAPSHOT_MANIFEST_NAME {
+<a href=#302 id=302 data-nosnippet>302</a>            <span class="kw">continue</span>;
+<a href=#303 id=303 data-nosnippet>303</a>        }
+<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">let </span>buf = read_entry_bounded(<span class="kw-2">&amp;mut </span>entry, MAX_MANIFEST_BYTES)<span class="question-mark">?</span>;
+<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">let </span>manifest: SnapshotManifest = serde_json::from_slice(<span class="kw-2">&amp;</span>buf).map_err(|e| {
+<a href=#306 id=306 data-nosnippet>306</a>            TardigradeError::NotATardigradeSnapshot { reason: <span class="macro">format!</span>(<span class="string">"manifest parse: {e}"</span>) }
+<a href=#307 id=307 data-nosnippet>307</a>        })<span class="question-mark">?</span>;
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">if </span>manifest.magic != SNAPSHOT_MAGIC {
+<a href=#309 id=309 data-nosnippet>309</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::NotATardigradeSnapshot {
+<a href=#310 id=310 data-nosnippet>310</a>                reason: <span class="macro">format!</span>(<span class="string">"unexpected magic: {:?}"</span>, manifest.magic),
+<a href=#311 id=311 data-nosnippet>311</a>            });
+<a href=#312 id=312 data-nosnippet>312</a>        }
+<a href=#313 id=313 data-nosnippet>313</a>        <span class="kw">if </span>manifest.format_version != SNAPSHOT_FORMAT_VERSION {
+<a href=#314 id=314 data-nosnippet>314</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::UnsupportedFormatVersion {
+<a href=#315 id=315 data-nosnippet>315</a>                found: manifest.format_version,
+<a href=#316 id=316 data-nosnippet>316</a>                supported: SNAPSHOT_FORMAT_VERSION,
+<a href=#317 id=317 data-nosnippet>317</a>            });
 <a href=#318 id=318 data-nosnippet>318</a>        }
-<a href=#319 id=319 data-nosnippet>319</a>        <span class="kw">let </span>buf = read_entry_bounded(<span class="kw-2">&amp;mut </span>entry, MAX_PAYLOAD_FILE_BYTES)<span class="question-mark">?</span>;
-<a href=#320 id=320 data-nosnippet>320</a>        payload_entries.push((path, buf));
-<a href=#321 id=321 data-nosnippet>321</a>    }
-<a href=#322 id=322 data-nosnippet>322</a>
-<a href=#323 id=323 data-nosnippet>323</a>    <span class="kw">let </span>manifest_bytes = manifest_bytes.ok_or_else(|| TardigradeError::NotATardigradeSnapshot {
-<a href=#324 id=324 data-nosnippet>324</a>        reason: <span class="string">"manifest.json missing"</span>.to_string(),
-<a href=#325 id=325 data-nosnippet>325</a>    })<span class="question-mark">?</span>;
-<a href=#326 id=326 data-nosnippet>326</a>    <span class="kw">let </span>manifest: SnapshotManifest = serde_json::from_slice(<span class="kw-2">&amp;</span>manifest_bytes).map_err(|e| {
-<a href=#327 id=327 data-nosnippet>327</a>        TardigradeError::NotATardigradeSnapshot { reason: <span class="macro">format!</span>(<span class="string">"manifest parse: {e}"</span>) }
-<a href=#328 id=328 data-nosnippet>328</a>    })<span class="question-mark">?</span>;
-<a href=#329 id=329 data-nosnippet>329</a>
-<a href=#330 id=330 data-nosnippet>330</a>    <span class="kw">if </span>manifest.magic != SNAPSHOT_MAGIC {
-<a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::NotATardigradeSnapshot {
-<a href=#332 id=332 data-nosnippet>332</a>            reason: <span class="macro">format!</span>(<span class="string">"unexpected magic: {:?}"</span>, manifest.magic),
-<a href=#333 id=333 data-nosnippet>333</a>        });
-<a href=#334 id=334 data-nosnippet>334</a>    }
-<a href=#335 id=335 data-nosnippet>335</a>    <span class="kw">if </span>manifest.format_version != SNAPSHOT_FORMAT_VERSION {
-<a href=#336 id=336 data-nosnippet>336</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::UnsupportedFormatVersion {
-<a href=#337 id=337 data-nosnippet>337</a>            found: manifest.format_version,
-<a href=#338 id=338 data-nosnippet>338</a>            supported: SNAPSHOT_FORMAT_VERSION,
-<a href=#339 id=339 data-nosnippet>339</a>        });
-<a href=#340 id=340 data-nosnippet>340</a>    }
-<a href=#341 id=341 data-nosnippet>341</a>    <span class="kw">if </span>manifest.codecs.quantization != SNAPSHOT_QUANT_CODEC {
-<a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotCodecMismatch {
-<a href=#343 id=343 data-nosnippet>343</a>            field: <span class="string">"quantization"</span>.to_string(),
-<a href=#344 id=344 data-nosnippet>344</a>            snapshot: manifest.codecs.quantization.clone(),
-<a href=#345 id=345 data-nosnippet>345</a>            engine: SNAPSHOT_QUANT_CODEC.to_string(),
-<a href=#346 id=346 data-nosnippet>346</a>        });
-<a href=#347 id=347 data-nosnippet>347</a>    }
-<a href=#348 id=348 data-nosnippet>348</a>    <span class="kw">if </span>manifest.codecs.key != SNAPSHOT_KEY_CODEC {
-<a href=#349 id=349 data-nosnippet>349</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotCodecMismatch {
-<a href=#350 id=350 data-nosnippet>350</a>            field: <span class="string">"key"</span>.to_string(),
-<a href=#351 id=351 data-nosnippet>351</a>            snapshot: manifest.codecs.key.clone(),
-<a href=#352 id=352 data-nosnippet>352</a>            engine: SNAPSHOT_KEY_CODEC.to_string(),
-<a href=#353 id=353 data-nosnippet>353</a>        });
-<a href=#354 id=354 data-nosnippet>354</a>    }
-<a href=#355 id=355 data-nosnippet>355</a>
-<a href=#356 id=356 data-nosnippet>356</a>    <span class="comment">// Verify the payload SHA-256 against the manifest. Both write
-<a href=#357 id=357 data-nosnippet>357</a>    // and read sides hash in *lexicographic* order of the relative
-<a href=#358 id=358 data-nosnippet>358</a>    // path so the digest is order-independent of the underlying
-<a href=#359 id=359 data-nosnippet>359</a>    // filesystem (OS readdir order leaked through tar entries
-<a href=#360 id=360 data-nosnippet>360</a>    // otherwise and produced spurious mismatches).
-<a href=#361 id=361 data-nosnippet>361</a>    </span>payload_entries.sort_by(|a, b| a.<span class="number">0</span>.cmp(<span class="kw-2">&amp;</span>b.<span class="number">0</span>));
-<a href=#362 id=362 data-nosnippet>362</a>    <span class="kw">let </span><span class="kw-2">mut </span>hasher = Sha256::new();
-<a href=#363 id=363 data-nosnippet>363</a>    <span class="kw">for </span>(path, bytes) <span class="kw">in </span><span class="kw-2">&amp;</span>payload_entries {
-<a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span>rel = strip_payload_prefix(path);
-<a href=#365 id=365 data-nosnippet>365</a>        hash_one(<span class="kw-2">&amp;mut </span>hasher, rel.as_os_str(), bytes);
-<a href=#366 id=366 data-nosnippet>366</a>    }
-<a href=#367 id=367 data-nosnippet>367</a>    <span class="kw">let </span>computed = hex_lower(<span class="kw-2">&amp;</span>hasher.finalize());
-<a href=#368 id=368 data-nosnippet>368</a>    <span class="kw">if </span>computed != manifest.sha256 {
-<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotIntegrity(<span class="macro">format!</span>(
-<a href=#370 id=370 data-nosnippet>370</a>            <span class="string">"sha256 mismatch: manifest={}, computed={}"</span>,
-<a href=#371 id=371 data-nosnippet>371</a>            manifest.sha256, computed
-<a href=#372 id=372 data-nosnippet>372</a>        )));
-<a href=#373 id=373 data-nosnippet>373</a>    }
-<a href=#374 id=374 data-nosnippet>374</a>
-<a href=#375 id=375 data-nosnippet>375</a>    <span class="comment">// Extract payload into target_dir.
-<a href=#376 id=376 data-nosnippet>376</a>    </span>fs::create_dir_all(target_dir).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#377 id=377 data-nosnippet>377</a>    <span class="kw">for </span>(path, bytes) <span class="kw">in </span>payload_entries {
-<a href=#378 id=378 data-nosnippet>378</a>        <span class="kw">let </span>rel = strip_payload_prefix(<span class="kw-2">&amp;</span>path);
-<a href=#379 id=379 data-nosnippet>379</a>        <span class="kw">let </span>dest = target_dir.join(rel);
-<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(parent) = dest.parent() {
-<a href=#381 id=381 data-nosnippet>381</a>            fs::create_dir_all(parent).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#382 id=382 data-nosnippet>382</a>        }
-<a href=#383 id=383 data-nosnippet>383</a>        <span class="kw">let </span><span class="kw-2">mut </span>f = File::create(<span class="kw-2">&amp;</span>dest).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#384 id=384 data-nosnippet>384</a>        f.write_all(<span class="kw-2">&amp;</span>bytes).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#385 id=385 data-nosnippet>385</a>    }
-<a href=#386 id=386 data-nosnippet>386</a>
-<a href=#387 id=387 data-nosnippet>387</a>    <span class="prelude-val">Ok</span>(manifest)
-<a href=#388 id=388 data-nosnippet>388</a>}
-<a href=#389 id=389 data-nosnippet>389</a>
-<a href=#390 id=390 data-nosnippet>390</a><span class="comment">// ─── Internal helpers ───────────────────────────────────────────────────
-<a href=#391 id=391 data-nosnippet>391</a>
-<a href=#392 id=392 data-nosnippet>392</a></span><span class="doccomment">/// Walk every regular file under ``engine_dir`` in a stable order
-<a href=#393 id=393 data-nosnippet>393</a>/// (lexicographic by relative path) and feed each path + contents
-<a href=#394 id=394 data-nosnippet>394</a>/// into ``hasher``. The order must match the equivalent walk on the
-<a href=#395 id=395 data-nosnippet>395</a>/// read side, otherwise the digest will mismatch.
-<a href=#396 id=396 data-nosnippet>396</a></span><span class="kw">fn </span>walk_files_for_hash(engine_dir: <span class="kw-2">&amp;</span>Path, hasher: <span class="kw-2">&amp;mut </span>Sha256) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#397 id=397 data-nosnippet>397</a>    <span class="kw">let </span><span class="kw-2">mut </span>entries: Vec&lt;PathBuf&gt; = Vec::new();
-<a href=#398 id=398 data-nosnippet>398</a>    collect_files(engine_dir, engine_dir, <span class="kw-2">&amp;mut </span>entries)<span class="question-mark">?</span>;
-<a href=#399 id=399 data-nosnippet>399</a>    entries.sort();
-<a href=#400 id=400 data-nosnippet>400</a>    <span class="kw">for </span>rel <span class="kw">in </span>entries {
-<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw">let </span>abs = engine_dir.join(<span class="kw-2">&amp;</span>rel);
-<a href=#402 id=402 data-nosnippet>402</a>        <span class="kw">let </span>bytes = fs::read(<span class="kw-2">&amp;</span>abs).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#403 id=403 data-nosnippet>403</a>        hash_one(hasher, rel.as_os_str(), <span class="kw-2">&amp;</span>bytes);
-<a href=#404 id=404 data-nosnippet>404</a>    }
-<a href=#405 id=405 data-nosnippet>405</a>    <span class="prelude-val">Ok</span>(())
-<a href=#406 id=406 data-nosnippet>406</a>}
-<a href=#407 id=407 data-nosnippet>407</a>
-<a href=#408 id=408 data-nosnippet>408</a><span class="kw">fn </span>collect_files(root: <span class="kw-2">&amp;</span>Path, dir: <span class="kw-2">&amp;</span>Path, out: <span class="kw-2">&amp;mut </span>Vec&lt;PathBuf&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#409 id=409 data-nosnippet>409</a>    <span class="kw">for </span>entry <span class="kw">in </span>fs::read_dir(dir).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">? </span>{
-<a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">let </span>entry = entry.map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#411 id=411 data-nosnippet>411</a>        <span class="kw">let </span>path = entry.path();
-<a href=#412 id=412 data-nosnippet>412</a>        <span class="kw">if </span>path.is_dir() {
-<a href=#413 id=413 data-nosnippet>413</a>            collect_files(root, <span class="kw-2">&amp;</span>path, out)<span class="question-mark">?</span>;
-<a href=#414 id=414 data-nosnippet>414</a>        } <span class="kw">else if </span>path.is_file() {
-<a href=#415 id=415 data-nosnippet>415</a>            <span class="kw">let </span>rel = path.strip_prefix(root).unwrap_or(<span class="kw-2">&amp;</span>path).to_path_buf();
-<a href=#416 id=416 data-nosnippet>416</a>            out.push(rel);
-<a href=#417 id=417 data-nosnippet>417</a>        }
-<a href=#418 id=418 data-nosnippet>418</a>    }
-<a href=#419 id=419 data-nosnippet>419</a>    <span class="prelude-val">Ok</span>(())
-<a href=#420 id=420 data-nosnippet>420</a>}
-<a href=#421 id=421 data-nosnippet>421</a>
-<a href=#422 id=422 data-nosnippet>422</a><span class="kw">fn </span>strip_payload_prefix(path: <span class="kw-2">&amp;</span>Path) -&gt; PathBuf {
-<a href=#423 id=423 data-nosnippet>423</a>    path.strip_prefix(SNAPSHOT_PAYLOAD_DIR).unwrap_or(path).to_path_buf()
-<a href=#424 id=424 data-nosnippet>424</a>}
-<a href=#425 id=425 data-nosnippet>425</a>
-<a href=#426 id=426 data-nosnippet>426</a><span class="doccomment">/// Read up to `max_bytes` from `r` into a fresh `Vec&lt;u8&gt;`, erroring
-<a href=#427 id=427 data-nosnippet>427</a>/// if more bytes are available. Provides the [`Read::read_to_end`]
-<a href=#428 id=428 data-nosnippet>428</a>/// convenience without the OOM exposure on corrupt archives that
-<a href=#429 id=429 data-nosnippet>429</a>/// declare absurdly large entry sizes.
-<a href=#430 id=430 data-nosnippet>430</a></span><span class="kw">fn </span>read_entry_bounded&lt;R: Read&gt;(r: <span class="kw-2">&amp;mut </span>R, max_bytes: u64) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;&gt; {
-<a href=#431 id=431 data-nosnippet>431</a>    <span class="comment">// Drain the entry into a Vec via a fixed scratch buffer; refuses
-<a href=#432 id=432 data-nosnippet>432</a>    // (with a typed integrity error) any entry that exceeds
-<a href=#433 id=433 data-nosnippet>433</a>    // `max_bytes`. Hand-rolled rather than `Read::read_to_end` so we
-<a href=#434 id=434 data-nosnippet>434</a>    // never allocate beyond the cap on a corrupt or hostile archive.
-<a href=#435 id=435 data-nosnippet>435</a>    </span><span class="kw">const </span>CHUNK: usize = <span class="number">64 </span>* <span class="number">1024</span>;
-<a href=#436 id=436 data-nosnippet>436</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf: Vec&lt;u8&gt; = Vec::new();
-<a href=#437 id=437 data-nosnippet>437</a>    <span class="kw">let </span><span class="kw-2">mut </span>scratch = <span class="macro">vec!</span>[<span class="number">0u8</span>; CHUNK];
-<a href=#438 id=438 data-nosnippet>438</a>    <span class="comment">// Reason: callers pass `max_bytes` as a hard cap from snapshot constants
-<a href=#439 id=439 data-nosnippet>439</a>    // (≤ 16 GiB). On 64-bit usize the cast is lossless; on 32-bit a value
-<a href=#440 id=440 data-nosnippet>440</a>    // above usize::MAX clamps to usize::MAX, which still upholds the cap
-<a href=#441 id=441 data-nosnippet>441</a>    // semantics (the bound just becomes the platform's address space limit).
-<a href=#442 id=442 data-nosnippet>442</a>    </span><span class="attr">#[allow(clippy::cast_possible_truncation)]
-<a href=#443 id=443 data-nosnippet>443</a>    </span><span class="kw">let </span>max = max_bytes <span class="kw">as </span>usize;
-<a href=#444 id=444 data-nosnippet>444</a>    <span class="kw">loop </span>{
-<a href=#445 id=445 data-nosnippet>445</a>        <span class="kw">let </span>n = r.read(<span class="kw-2">&amp;mut </span>scratch).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
-<a href=#446 id=446 data-nosnippet>446</a>        <span class="kw">if </span>n == <span class="number">0 </span>{
-<a href=#447 id=447 data-nosnippet>447</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(buf);
-<a href=#448 id=448 data-nosnippet>448</a>        }
-<a href=#449 id=449 data-nosnippet>449</a>        <span class="kw">if </span>buf.len().saturating_add(n) &gt; max {
-<a href=#450 id=450 data-nosnippet>450</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotIntegrity(<span class="macro">format!</span>(
-<a href=#451 id=451 data-nosnippet>451</a>                <span class="string">"entry exceeds maximum allowed size of {max_bytes} bytes"</span>,
-<a href=#452 id=452 data-nosnippet>452</a>            )));
-<a href=#453 id=453 data-nosnippet>453</a>        }
-<a href=#454 id=454 data-nosnippet>454</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>scratch[..n]);
-<a href=#455 id=455 data-nosnippet>455</a>    }
-<a href=#456 id=456 data-nosnippet>456</a>}
-<a href=#457 id=457 data-nosnippet>457</a>
-<a href=#458 id=458 data-nosnippet>458</a><span class="kw">fn </span>hash_one(hasher: <span class="kw-2">&amp;mut </span>Sha256, name: <span class="kw-2">&amp;</span>std::ffi::OsStr, bytes: <span class="kw-2">&amp;</span>[u8]) {
-<a href=#459 id=459 data-nosnippet>459</a>    <span class="comment">// Mix the path into the hash so reordered renames cannot collide
-<a href=#460 id=460 data-nosnippet>460</a>    // with each other.
-<a href=#461 id=461 data-nosnippet>461</a>    </span>hasher.update(name.as_encoded_bytes());
-<a href=#462 id=462 data-nosnippet>462</a>    hasher.update(<span class="string">b"\0"</span>);
-<a href=#463 id=463 data-nosnippet>463</a>    hasher.update((bytes.len() <span class="kw">as </span>u64).to_le_bytes());
-<a href=#464 id=464 data-nosnippet>464</a>    hasher.update(bytes);
-<a href=#465 id=465 data-nosnippet>465</a>}
-<a href=#466 id=466 data-nosnippet>466</a>
-<a href=#467 id=467 data-nosnippet>467</a><span class="kw">fn </span>hex_lower(bytes: <span class="kw-2">&amp;</span>[u8]) -&gt; String {
-<a href=#468 id=468 data-nosnippet>468</a>    <span class="kw">use </span>std::fmt::Write;
-<a href=#469 id=469 data-nosnippet>469</a>    <span class="kw">let </span><span class="kw-2">mut </span>s = String::with_capacity(bytes.len() * <span class="number">2</span>);
-<a href=#470 id=470 data-nosnippet>470</a>    <span class="kw">for </span>b <span class="kw">in </span>bytes {
-<a href=#471 id=471 data-nosnippet>471</a>        <span class="kw">let _ </span>= <span class="macro">write!</span>(s, <span class="string">"{b:02x}"</span>);
-<a href=#472 id=472 data-nosnippet>472</a>    }
-<a href=#473 id=473 data-nosnippet>473</a>    s
-<a href=#474 id=474 data-nosnippet>474</a>}
+<a href=#319 id=319 data-nosnippet>319</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(manifest);
+<a href=#320 id=320 data-nosnippet>320</a>    }
+<a href=#321 id=321 data-nosnippet>321</a>    <span class="prelude-val">Err</span>(TardigradeError::NotATardigradeSnapshot { reason: <span class="string">"manifest.json missing"</span>.to_string() })
+<a href=#322 id=322 data-nosnippet>322</a>}
+<a href=#323 id=323 data-nosnippet>323</a>
+<a href=#324 id=324 data-nosnippet>324</a><span class="doccomment">/// Restore a snapshot archive into ``target_dir`` (which must be
+<a href=#325 id=325 data-nosnippet>325</a>/// empty or non-existent) and validate its manifest. The caller
+<a href=#326 id=326 data-nosnippet>326</a>/// invokes [`crate::engine::Engine::open`] on ``target_dir`` afterwards.
+<a href=#327 id=327 data-nosnippet>327</a>///
+<a href=#328 id=328 data-nosnippet>328</a>/// Returns the parsed manifest so callers can inspect or log the
+<a href=#329 id=329 data-nosnippet>329</a>/// snapshot's metadata.
+<a href=#330 id=330 data-nosnippet>330</a>///
+<a href=#331 id=331 data-nosnippet>331</a>/// # Errors
+<a href=#332 id=332 data-nosnippet>332</a>///
+<a href=#333 id=333 data-nosnippet>333</a>/// - [`TardigradeError::NotATardigradeSnapshot`] — magic missing.
+<a href=#334 id=334 data-nosnippet>334</a>/// - [`TardigradeError::UnsupportedFormatVersion`] — unknown version.
+<a href=#335 id=335 data-nosnippet>335</a>/// - [`TardigradeError::SnapshotCodecMismatch`] — codec incompatible.
+<a href=#336 id=336 data-nosnippet>336</a>/// - [`TardigradeError::SnapshotIntegrity`] — SHA-256 mismatch.
+<a href=#337 id=337 data-nosnippet>337</a>/// - [`TardigradeError::Io`] — disk failure.
+<a href=#338 id=338 data-nosnippet>338</a></span><span class="kw">pub fn </span>read_snapshot(in_path: <span class="kw-2">&amp;</span>Path, target_dir: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;SnapshotManifest&gt; {
+<a href=#339 id=339 data-nosnippet>339</a>    <span class="kw">let </span>file = File::open(in_path).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#340 id=340 data-nosnippet>340</a>    <span class="kw">let </span><span class="kw-2">mut </span>archive = Archive::new(file);
+<a href=#341 id=341 data-nosnippet>341</a>
+<a href=#342 id=342 data-nosnippet>342</a>    <span class="comment">// First entry: manifest. Pull it out independently so we can
+<a href=#343 id=343 data-nosnippet>343</a>    // refuse the snapshot before extracting any payload.
+<a href=#344 id=344 data-nosnippet>344</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>manifest_bytes: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = <span class="prelude-val">None</span>;
+<a href=#345 id=345 data-nosnippet>345</a>    <span class="kw">let </span><span class="kw-2">mut </span>payload_entries: Vec&lt;(PathBuf, Vec&lt;u8&gt;)&gt; = Vec::new();
+<a href=#346 id=346 data-nosnippet>346</a>
+<a href=#347 id=347 data-nosnippet>347</a>    <span class="kw">for </span>entry <span class="kw">in </span>archive.entries().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">? </span>{
+<a href=#348 id=348 data-nosnippet>348</a>        <span class="kw">let </span><span class="kw-2">mut </span>entry = entry.map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#349 id=349 data-nosnippet>349</a>        <span class="kw">let </span>path = entry.path().map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>.to_path_buf();
+<a href=#350 id=350 data-nosnippet>350</a>
+<a href=#351 id=351 data-nosnippet>351</a>        <span class="kw">if </span>path.as_os_str() == SNAPSHOT_MANIFEST_NAME {
+<a href=#352 id=352 data-nosnippet>352</a>            <span class="kw">let </span>buf = read_entry_bounded(<span class="kw-2">&amp;mut </span>entry, MAX_MANIFEST_BYTES)<span class="question-mark">?</span>;
+<a href=#353 id=353 data-nosnippet>353</a>            manifest_bytes = <span class="prelude-val">Some</span>(buf);
+<a href=#354 id=354 data-nosnippet>354</a>            <span class="kw">continue</span>;
+<a href=#355 id=355 data-nosnippet>355</a>        }
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="comment">// Only regular files inside engine_state/ are part of the
+<a href=#357 id=357 data-nosnippet>357</a>        // payload; tar Directory entries are skipped (we re-create
+<a href=#358 id=358 data-nosnippet>358</a>        // dirs on extract).
+<a href=#359 id=359 data-nosnippet>359</a>        </span><span class="kw">if </span>!entry.header().entry_type().is_file() {
+<a href=#360 id=360 data-nosnippet>360</a>            <span class="kw">continue</span>;
+<a href=#361 id=361 data-nosnippet>361</a>        }
+<a href=#362 id=362 data-nosnippet>362</a>        <span class="kw">if </span>!path.starts_with(SNAPSHOT_PAYLOAD_DIR) {
+<a href=#363 id=363 data-nosnippet>363</a>            <span class="kw">continue</span>;
+<a href=#364 id=364 data-nosnippet>364</a>        }
+<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>buf = read_entry_bounded(<span class="kw-2">&amp;mut </span>entry, MAX_PAYLOAD_FILE_BYTES)<span class="question-mark">?</span>;
+<a href=#366 id=366 data-nosnippet>366</a>        payload_entries.push((path, buf));
+<a href=#367 id=367 data-nosnippet>367</a>    }
+<a href=#368 id=368 data-nosnippet>368</a>
+<a href=#369 id=369 data-nosnippet>369</a>    <span class="kw">let </span>manifest_bytes = manifest_bytes.ok_or_else(|| TardigradeError::NotATardigradeSnapshot {
+<a href=#370 id=370 data-nosnippet>370</a>        reason: <span class="string">"manifest.json missing"</span>.to_string(),
+<a href=#371 id=371 data-nosnippet>371</a>    })<span class="question-mark">?</span>;
+<a href=#372 id=372 data-nosnippet>372</a>    <span class="kw">let </span>manifest: SnapshotManifest = serde_json::from_slice(<span class="kw-2">&amp;</span>manifest_bytes).map_err(|e| {
+<a href=#373 id=373 data-nosnippet>373</a>        TardigradeError::NotATardigradeSnapshot { reason: <span class="macro">format!</span>(<span class="string">"manifest parse: {e}"</span>) }
+<a href=#374 id=374 data-nosnippet>374</a>    })<span class="question-mark">?</span>;
+<a href=#375 id=375 data-nosnippet>375</a>
+<a href=#376 id=376 data-nosnippet>376</a>    <span class="kw">if </span>manifest.magic != SNAPSHOT_MAGIC {
+<a href=#377 id=377 data-nosnippet>377</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::NotATardigradeSnapshot {
+<a href=#378 id=378 data-nosnippet>378</a>            reason: <span class="macro">format!</span>(<span class="string">"unexpected magic: {:?}"</span>, manifest.magic),
+<a href=#379 id=379 data-nosnippet>379</a>        });
+<a href=#380 id=380 data-nosnippet>380</a>    }
+<a href=#381 id=381 data-nosnippet>381</a>    <span class="kw">if </span>manifest.format_version != SNAPSHOT_FORMAT_VERSION {
+<a href=#382 id=382 data-nosnippet>382</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::UnsupportedFormatVersion {
+<a href=#383 id=383 data-nosnippet>383</a>            found: manifest.format_version,
+<a href=#384 id=384 data-nosnippet>384</a>            supported: SNAPSHOT_FORMAT_VERSION,
+<a href=#385 id=385 data-nosnippet>385</a>        });
+<a href=#386 id=386 data-nosnippet>386</a>    }
+<a href=#387 id=387 data-nosnippet>387</a>    <span class="kw">if </span>manifest.codecs.quantization != SNAPSHOT_QUANT_CODEC {
+<a href=#388 id=388 data-nosnippet>388</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotCodecMismatch {
+<a href=#389 id=389 data-nosnippet>389</a>            field: <span class="string">"quantization"</span>.to_string(),
+<a href=#390 id=390 data-nosnippet>390</a>            snapshot: manifest.codecs.quantization.clone(),
+<a href=#391 id=391 data-nosnippet>391</a>            engine: SNAPSHOT_QUANT_CODEC.to_string(),
+<a href=#392 id=392 data-nosnippet>392</a>        });
+<a href=#393 id=393 data-nosnippet>393</a>    }
+<a href=#394 id=394 data-nosnippet>394</a>    <span class="kw">if </span>manifest.codecs.key != SNAPSHOT_KEY_CODEC {
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotCodecMismatch {
+<a href=#396 id=396 data-nosnippet>396</a>            field: <span class="string">"key"</span>.to_string(),
+<a href=#397 id=397 data-nosnippet>397</a>            snapshot: manifest.codecs.key.clone(),
+<a href=#398 id=398 data-nosnippet>398</a>            engine: SNAPSHOT_KEY_CODEC.to_string(),
+<a href=#399 id=399 data-nosnippet>399</a>        });
+<a href=#400 id=400 data-nosnippet>400</a>    }
+<a href=#401 id=401 data-nosnippet>401</a>
+<a href=#402 id=402 data-nosnippet>402</a>    <span class="comment">// Verify the payload SHA-256 against the manifest. Both write
+<a href=#403 id=403 data-nosnippet>403</a>    // and read sides hash in *lexicographic* order of the relative
+<a href=#404 id=404 data-nosnippet>404</a>    // path so the digest is order-independent of the underlying
+<a href=#405 id=405 data-nosnippet>405</a>    // filesystem (OS readdir order leaked through tar entries
+<a href=#406 id=406 data-nosnippet>406</a>    // otherwise and produced spurious mismatches).
+<a href=#407 id=407 data-nosnippet>407</a>    </span>payload_entries.sort_by(|a, b| a.<span class="number">0</span>.cmp(<span class="kw-2">&amp;</span>b.<span class="number">0</span>));
+<a href=#408 id=408 data-nosnippet>408</a>    <span class="kw">let </span><span class="kw-2">mut </span>hasher = Sha256::new();
+<a href=#409 id=409 data-nosnippet>409</a>    <span class="kw">for </span>(path, bytes) <span class="kw">in </span><span class="kw-2">&amp;</span>payload_entries {
+<a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">let </span>rel = strip_payload_prefix(path);
+<a href=#411 id=411 data-nosnippet>411</a>        hash_one(<span class="kw-2">&amp;mut </span>hasher, rel.as_os_str(), bytes);
+<a href=#412 id=412 data-nosnippet>412</a>    }
+<a href=#413 id=413 data-nosnippet>413</a>    <span class="kw">let </span>computed = hex_lower(<span class="kw-2">&amp;</span>hasher.finalize());
+<a href=#414 id=414 data-nosnippet>414</a>    <span class="kw">if </span>computed != manifest.sha256 {
+<a href=#415 id=415 data-nosnippet>415</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotIntegrity(<span class="macro">format!</span>(
+<a href=#416 id=416 data-nosnippet>416</a>            <span class="string">"sha256 mismatch: manifest={}, computed={}"</span>,
+<a href=#417 id=417 data-nosnippet>417</a>            manifest.sha256, computed
+<a href=#418 id=418 data-nosnippet>418</a>        )));
+<a href=#419 id=419 data-nosnippet>419</a>    }
+<a href=#420 id=420 data-nosnippet>420</a>
+<a href=#421 id=421 data-nosnippet>421</a>    <span class="comment">// Extract payload into target_dir.
+<a href=#422 id=422 data-nosnippet>422</a>    </span>fs::create_dir_all(target_dir).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#423 id=423 data-nosnippet>423</a>    <span class="kw">for </span>(path, bytes) <span class="kw">in </span>payload_entries {
+<a href=#424 id=424 data-nosnippet>424</a>        <span class="kw">let </span>rel = strip_payload_prefix(<span class="kw-2">&amp;</span>path);
+<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">let </span>dest = target_dir.join(rel);
+<a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(parent) = dest.parent() {
+<a href=#427 id=427 data-nosnippet>427</a>            fs::create_dir_all(parent).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#428 id=428 data-nosnippet>428</a>        }
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span><span class="kw-2">mut </span>f = File::create(<span class="kw-2">&amp;</span>dest).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#430 id=430 data-nosnippet>430</a>        f.write_all(<span class="kw-2">&amp;</span>bytes).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#431 id=431 data-nosnippet>431</a>    }
+<a href=#432 id=432 data-nosnippet>432</a>
+<a href=#433 id=433 data-nosnippet>433</a>    <span class="prelude-val">Ok</span>(manifest)
+<a href=#434 id=434 data-nosnippet>434</a>}
+<a href=#435 id=435 data-nosnippet>435</a>
+<a href=#436 id=436 data-nosnippet>436</a><span class="comment">// ─── Internal helpers ───────────────────────────────────────────────────
+<a href=#437 id=437 data-nosnippet>437</a>
+<a href=#438 id=438 data-nosnippet>438</a></span><span class="doccomment">/// Walk every regular file under ``engine_dir`` in a stable order
+<a href=#439 id=439 data-nosnippet>439</a>/// (lexicographic by relative path) and feed each path + contents
+<a href=#440 id=440 data-nosnippet>440</a>/// into ``hasher``. The order must match the equivalent walk on the
+<a href=#441 id=441 data-nosnippet>441</a>/// read side, otherwise the digest will mismatch.
+<a href=#442 id=442 data-nosnippet>442</a></span><span class="kw">fn </span>walk_files_for_hash(engine_dir: <span class="kw-2">&amp;</span>Path, hasher: <span class="kw-2">&amp;mut </span>Sha256) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#443 id=443 data-nosnippet>443</a>    <span class="kw">let </span><span class="kw-2">mut </span>entries: Vec&lt;PathBuf&gt; = Vec::new();
+<a href=#444 id=444 data-nosnippet>444</a>    collect_files(engine_dir, engine_dir, <span class="kw-2">&amp;mut </span>entries)<span class="question-mark">?</span>;
+<a href=#445 id=445 data-nosnippet>445</a>    entries.sort();
+<a href=#446 id=446 data-nosnippet>446</a>    <span class="kw">for </span>rel <span class="kw">in </span>entries {
+<a href=#447 id=447 data-nosnippet>447</a>        <span class="kw">let </span>abs = engine_dir.join(<span class="kw-2">&amp;</span>rel);
+<a href=#448 id=448 data-nosnippet>448</a>        <span class="kw">let </span>bytes = fs::read(<span class="kw-2">&amp;</span>abs).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#449 id=449 data-nosnippet>449</a>        hash_one(hasher, rel.as_os_str(), <span class="kw-2">&amp;</span>bytes);
+<a href=#450 id=450 data-nosnippet>450</a>    }
+<a href=#451 id=451 data-nosnippet>451</a>    <span class="prelude-val">Ok</span>(())
+<a href=#452 id=452 data-nosnippet>452</a>}
+<a href=#453 id=453 data-nosnippet>453</a>
+<a href=#454 id=454 data-nosnippet>454</a><span class="kw">fn </span>collect_files(root: <span class="kw-2">&amp;</span>Path, dir: <span class="kw-2">&amp;</span>Path, out: <span class="kw-2">&amp;mut </span>Vec&lt;PathBuf&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#455 id=455 data-nosnippet>455</a>    <span class="kw">for </span>entry <span class="kw">in </span>fs::read_dir(dir).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">? </span>{
+<a href=#456 id=456 data-nosnippet>456</a>        <span class="kw">let </span>entry = entry.map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#457 id=457 data-nosnippet>457</a>        <span class="kw">let </span>path = entry.path();
+<a href=#458 id=458 data-nosnippet>458</a>        <span class="kw">if </span>path.is_dir() {
+<a href=#459 id=459 data-nosnippet>459</a>            collect_files(root, <span class="kw-2">&amp;</span>path, out)<span class="question-mark">?</span>;
+<a href=#460 id=460 data-nosnippet>460</a>        } <span class="kw">else if </span>path.is_file() {
+<a href=#461 id=461 data-nosnippet>461</a>            <span class="kw">let </span>rel = path.strip_prefix(root).unwrap_or(<span class="kw-2">&amp;</span>path).to_path_buf();
+<a href=#462 id=462 data-nosnippet>462</a>            out.push(rel);
+<a href=#463 id=463 data-nosnippet>463</a>        }
+<a href=#464 id=464 data-nosnippet>464</a>    }
+<a href=#465 id=465 data-nosnippet>465</a>    <span class="prelude-val">Ok</span>(())
+<a href=#466 id=466 data-nosnippet>466</a>}
+<a href=#467 id=467 data-nosnippet>467</a>
+<a href=#468 id=468 data-nosnippet>468</a><span class="kw">fn </span>strip_payload_prefix(path: <span class="kw-2">&amp;</span>Path) -&gt; PathBuf {
+<a href=#469 id=469 data-nosnippet>469</a>    path.strip_prefix(SNAPSHOT_PAYLOAD_DIR).unwrap_or(path).to_path_buf()
+<a href=#470 id=470 data-nosnippet>470</a>}
+<a href=#471 id=471 data-nosnippet>471</a>
+<a href=#472 id=472 data-nosnippet>472</a><span class="doccomment">/// Read up to `max_bytes` from `r` into a fresh `Vec&lt;u8&gt;`, erroring
+<a href=#473 id=473 data-nosnippet>473</a>/// if more bytes are available. Provides the [`Read::read_to_end`]
+<a href=#474 id=474 data-nosnippet>474</a>/// convenience without the OOM exposure on corrupt archives that
+<a href=#475 id=475 data-nosnippet>475</a>/// declare absurdly large entry sizes.
+<a href=#476 id=476 data-nosnippet>476</a></span><span class="kw">fn </span>read_entry_bounded&lt;R: Read&gt;(r: <span class="kw-2">&amp;mut </span>R, max_bytes: u64) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;&gt; {
+<a href=#477 id=477 data-nosnippet>477</a>    <span class="comment">// Drain the entry into a Vec via a fixed scratch buffer; refuses
+<a href=#478 id=478 data-nosnippet>478</a>    // (with a typed integrity error) any entry that exceeds
+<a href=#479 id=479 data-nosnippet>479</a>    // `max_bytes`. Hand-rolled rather than `Read::read_to_end` so we
+<a href=#480 id=480 data-nosnippet>480</a>    // never allocate beyond the cap on a corrupt or hostile archive.
+<a href=#481 id=481 data-nosnippet>481</a>    </span><span class="kw">const </span>CHUNK: usize = <span class="number">64 </span>* <span class="number">1024</span>;
+<a href=#482 id=482 data-nosnippet>482</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf: Vec&lt;u8&gt; = Vec::new();
+<a href=#483 id=483 data-nosnippet>483</a>    <span class="kw">let </span><span class="kw-2">mut </span>scratch = <span class="macro">vec!</span>[<span class="number">0u8</span>; CHUNK];
+<a href=#484 id=484 data-nosnippet>484</a>    <span class="comment">// Reason: callers pass `max_bytes` as a hard cap from snapshot constants
+<a href=#485 id=485 data-nosnippet>485</a>    // (≤ 16 GiB). On 64-bit usize the cast is lossless; on 32-bit a value
+<a href=#486 id=486 data-nosnippet>486</a>    // above usize::MAX clamps to usize::MAX, which still upholds the cap
+<a href=#487 id=487 data-nosnippet>487</a>    // semantics (the bound just becomes the platform's address space limit).
+<a href=#488 id=488 data-nosnippet>488</a>    </span><span class="attr">#[allow(clippy::cast_possible_truncation)]
+<a href=#489 id=489 data-nosnippet>489</a>    </span><span class="kw">let </span>max = max_bytes <span class="kw">as </span>usize;
+<a href=#490 id=490 data-nosnippet>490</a>    <span class="kw">loop </span>{
+<a href=#491 id=491 data-nosnippet>491</a>        <span class="kw">let </span>n = r.read(<span class="kw-2">&amp;mut </span>scratch).map_err(|e| TardigradeError::Io { source: e })<span class="question-mark">?</span>;
+<a href=#492 id=492 data-nosnippet>492</a>        <span class="kw">if </span>n == <span class="number">0 </span>{
+<a href=#493 id=493 data-nosnippet>493</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(buf);
+<a href=#494 id=494 data-nosnippet>494</a>        }
+<a href=#495 id=495 data-nosnippet>495</a>        <span class="kw">if </span>buf.len().saturating_add(n) &gt; max {
+<a href=#496 id=496 data-nosnippet>496</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(TardigradeError::SnapshotIntegrity(<span class="macro">format!</span>(
+<a href=#497 id=497 data-nosnippet>497</a>                <span class="string">"entry exceeds maximum allowed size of {max_bytes} bytes"</span>,
+<a href=#498 id=498 data-nosnippet>498</a>            )));
+<a href=#499 id=499 data-nosnippet>499</a>        }
+<a href=#500 id=500 data-nosnippet>500</a>        buf.extend_from_slice(<span class="kw-2">&amp;</span>scratch[..n]);
+<a href=#501 id=501 data-nosnippet>501</a>    }
+<a href=#502 id=502 data-nosnippet>502</a>}
+<a href=#503 id=503 data-nosnippet>503</a>
+<a href=#504 id=504 data-nosnippet>504</a><span class="kw">fn </span>hash_one(hasher: <span class="kw-2">&amp;mut </span>Sha256, name: <span class="kw-2">&amp;</span>std::ffi::OsStr, bytes: <span class="kw-2">&amp;</span>[u8]) {
+<a href=#505 id=505 data-nosnippet>505</a>    <span class="comment">// Mix the path into the hash so reordered renames cannot collide
+<a href=#506 id=506 data-nosnippet>506</a>    // with each other.
+<a href=#507 id=507 data-nosnippet>507</a>    </span>hasher.update(name.as_encoded_bytes());
+<a href=#508 id=508 data-nosnippet>508</a>    hasher.update(<span class="string">b"\0"</span>);
+<a href=#509 id=509 data-nosnippet>509</a>    hasher.update((bytes.len() <span class="kw">as </span>u64).to_le_bytes());
+<a href=#510 id=510 data-nosnippet>510</a>    hasher.update(bytes);
+<a href=#511 id=511 data-nosnippet>511</a>}
+<a href=#512 id=512 data-nosnippet>512</a>
+<a href=#513 id=513 data-nosnippet>513</a><span class="kw">fn </span>hex_lower(bytes: <span class="kw-2">&amp;</span>[u8]) -&gt; String {
+<a href=#514 id=514 data-nosnippet>514</a>    <span class="kw">use </span>std::fmt::Write;
+<a href=#515 id=515 data-nosnippet>515</a>    <span class="kw">let </span><span class="kw-2">mut </span>s = String::with_capacity(bytes.len() * <span class="number">2</span>);
+<a href=#516 id=516 data-nosnippet>516</a>    <span class="kw">for </span>b <span class="kw">in </span>bytes {
+<a href=#517 id=517 data-nosnippet>517</a>        <span class="kw">let _ </span>= <span class="macro">write!</span>(s, <span class="string">"{b:02x}"</span>);
+<a href=#518 id=518 data-nosnippet>518</a>    }
+<a href=#519 id=519 data-nosnippet>519</a>    s
+<a href=#520 id=520 data-nosnippet>520</a>}
 </code></pre></div></section></main></body></html>

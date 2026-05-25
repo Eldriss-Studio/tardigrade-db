@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SNAPSHOT_FORMAT_VERSION","SNAPSHOT_KEY_CODEC","SNAPSHOT_QUANT_CODEC"],"struct":["SnapshotCodecs","SnapshotManifest","SnapshotStats"]};

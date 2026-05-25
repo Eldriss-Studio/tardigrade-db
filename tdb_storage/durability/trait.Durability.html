@@ -1,0 +1,84 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="The durability boundary contract."><title>Durability in tdb_storage::durability - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_storage" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc trait"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Durability</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_storage/index.html">tdb_<wbr>storage</a><span class="version">0.8.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Durability</a></h2><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.current_durable" title="current_durable">current_durable</a></li><li><a href="#tymethod.current_issued" title="current_issued">current_issued</a></li><li><a href="#tymethod.issue_one" title="issue_one">issue_one</a></li><li><a href="#tymethod.publish_durable" title="publish_durable">publish_durable</a></li><li><a href="#tymethod.wait_durable" title="wait_durable">wait_durable</a></li></ul><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In tdb_<wbr>storage::<wbr>durability</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_storage</a>::<wbr><a href="index.html">durability</a></div><h1>Trait <span class="trait">Durability</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_storage/durability.rs.html#69-104">Source</a> </span></div><pre class="rust item-decl"><code>pub trait Durability:
+    <a class="trait" href="https://doc.rust-lang.org/1.95.0/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a>
+    + <a class="trait" href="https://doc.rust-lang.org/1.95.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a>
+    + <a class="trait" href="https://doc.rust-lang.org/1.95.0/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> {
+    // Required methods
+    fn <a href="#tymethod.current_durable" class="fn">current_durable</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.current_issued" class="fn">current_issued</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.issue_one" class="fn">issue_one</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.publish_durable" class="fn">publish_durable</a>(&amp;self, offset: <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a>);
+<span class="item-spacer"></span>    fn <a href="#tymethod.wait_durable" class="fn">wait_durable</a>(
+        &amp;self,
+        target: <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a>,
+        deadline: <a class="struct" href="https://doc.rust-lang.org/1.95.0/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.95.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.unit.html">()</a>, <a class="struct" href="struct.WaitTimedOut.html" title="struct tdb_storage::durability::WaitTimedOut">WaitTimedOut</a>&gt;;
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The durability boundary contract.</p>
+<p>Every concrete durability impl provides the same four observable
+facts: the current durable offset, the current issued offset, a
+way to bump issued, and a way to block until durable catches up
+to a target. Engine consumers depend on this trait so a future
+replicated / async-batched / metric-instrumented impl can plug in
+without touching the engine’s write or read paths.</p>
+<p>Object-safe by construction — methods are <code>&amp;self</code>, no generics,
+no <code>Self</code> return types. Stored in the engine as
+<code>Arc&lt;dyn Durability + Send + Sync&gt;</code>.</p>
+</div></details><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="tymethod.current_durable" class="method"><a class="src rightside" href="../../src/tdb_storage/durability.rs.html#72">Source</a><h4 class="code-header">fn <a href="#tymethod.current_durable" class="fn">current_durable</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a></h4></section></summary><div class="docblock"><p>Current durable offset — every write at or below this offset
+has reached stable storage.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.current_issued" class="method"><a class="src rightside" href="../../src/tdb_storage/durability.rs.html#76">Source</a><h4 class="code-header">fn <a href="#tymethod.current_issued" class="fn">current_issued</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a></h4></section></summary><div class="docblock"><p>Current issued offset — every accepted write up to and
+including this offset is in flight or durable.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.issue_one" class="method"><a class="src rightside" href="../../src/tdb_storage/durability.rs.html#83">Source</a><h4 class="code-header">fn <a href="#tymethod.issue_one" class="fn">issue_one</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a></h4></section></summary><div class="docblock"><p>Atomically bump <code>issued</code> and return the new value.</p>
+<p>Called from every write path the moment the engine accepts
+the write. Distinct from durability — the write may sit in a
+buffer for an arbitrary time before its fsync lands.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.publish_durable" class="method"><a class="src rightside" href="../../src/tdb_storage/durability.rs.html#91">Source</a><h4 class="code-header">fn <a href="#tymethod.publish_durable" class="fn">publish_durable</a>(&amp;self, offset: <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a>)</h4></section></summary><div class="docblock"><p>Mark every issued offset up to and including <code>offset</code> as
+durable. Idempotent: a second call with the same or lower
+value is a no-op.</p>
+<p>Implementations <strong>must</strong> clamp <code>offset</code> to <code>current_issued()</code>
+so <code>durable &lt;= issued</code> is an unconditional invariant.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.wait_durable" class="method"><a class="src rightside" href="../../src/tdb_storage/durability.rs.html#103">Source</a><h4 class="code-header">fn <a href="#tymethod.wait_durable" class="fn">wait_durable</a>(
+    &amp;self,
+    target: <a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.u64.html">u64</a>,
+    deadline: <a class="struct" href="https://doc.rust-lang.org/1.95.0/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.95.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.95.0/std/primitive.unit.html">()</a>, <a class="struct" href="struct.WaitTimedOut.html" title="struct tdb_storage::durability::WaitTimedOut">WaitTimedOut</a>&gt;</h4></section></summary><div class="docblock"><p>Block until <code>current_durable() &gt;= target</code> or <code>deadline</code>
+elapses.</p>
+<p>Callers should drop the engine lock before invoking this so
+writers can advance the offset concurrently.</p>
+<h5 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h5>
+<p>Returns <a href="struct.WaitTimedOut.html" title="struct tdb_storage::durability::WaitTimedOut"><code>WaitTimedOut</code></a> if <code>current_durable()</code> does not reach
+<code>target</code> within <code>deadline</code>.</p>
+</div></details></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"><div class="negative-marker"></div><section id="impl-Durability-for-DurabilityTracker" class="impl"><a class="src rightside" href="../../src/tdb_storage/durability.rs.html#137-209">Source</a><a href="#impl-Durability-for-DurabilityTracker" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.Durability.html" title="trait tdb_storage::durability::Durability">Durability</a> for <a class="struct" href="struct.DurabilityTracker.html" title="struct tdb_storage::durability::DurabilityTracker">DurabilityTracker</a></h3></section></div><script src="../../trait.impl/tdb_storage/durability/trait.Durability.js" async></script></section></div></main></body></html>

@@ -108,7 +108,7 @@
 <a href=#73 id=73 data-nosnippet>73</a>}
 <a href=#74 id=74 data-nosnippet>74</a>
 <a href=#75 id=75 data-nosnippet>75</a><span class="doccomment">/// Wait for `snapshot` to become durable, emitting metrics for the
-<a href=#76 id=76 data-nosnippet>76</a>/// outcome. Wraps [`crate::durability::DurabilityTracker::wait_durable`]
+<a href=#76 id=76 data-nosnippet>76</a>/// outcome. Wraps [`crate::durability::Durability::wait_durable`]
 <a href=#77 id=77 data-nosnippet>77</a>/// so the confirmed-read call site doesn't need to duplicate the
 <a href=#78 id=78 data-nosnippet>78</a>/// counter+histogram boilerplate.
 <a href=#79 id=79 data-nosnippet>79</a>///
@@ -122,7 +122,7 @@
 <a href=#87 id=87 data-nosnippet>87</a>/// Returns [`crate::durability::WaitTimedOut`] when the underlying
 <a href=#88 id=88 data-nosnippet>88</a>/// tracker's deadline passes before durability catches up.
 <a href=#89 id=89 data-nosnippet>89</a></span><span class="kw">pub fn </span>wait_durable_with_metrics(
-<a href=#90 id=90 data-nosnippet>90</a>    tracker: <span class="kw-2">&amp;</span><span class="kw">crate</span>::durability::DurabilityTracker,
+<a href=#90 id=90 data-nosnippet>90</a>    tracker: <span class="kw-2">&amp;</span><span class="kw">dyn </span><span class="kw">crate</span>::durability::Durability,
 <a href=#91 id=91 data-nosnippet>91</a>    snapshot: u64,
 <a href=#92 id=92 data-nosnippet>92</a>    timeout: std::time::Duration,
 <a href=#93 id=93 data-nosnippet>93</a>) -&gt; <span class="prelude-ty">Result</span>&lt;std::time::Duration, <span class="kw">crate</span>::durability::WaitTimedOut&gt; {

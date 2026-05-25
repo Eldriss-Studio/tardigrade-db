@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["block_pool","compression","deletion_log","quantization","segment","synaptic_store","text_store"]};
+window.SIDEBAR_ITEMS = {"mod":["block_pool","compression","deletion_log","durability","quantization","segment","synaptic_store","text_store"]};
