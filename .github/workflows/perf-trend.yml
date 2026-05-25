@@ -1,0 +1,83 @@
+name: Perf Trend
+
+# Daily observational measurement of the cp313t parallel-read
+# speedup. Same script as pre-release-perf.yml but with no assertion
+# — this job's purpose is trend visibility, not gating. Erosion that
+# wouldn't trip the pre-release gate (a 2% drop per week is silent
+# over a single measurement but 20% over two months) shows up as a
+# sloped trend across the 7-day rolling median.
+#
+# Runs 07:00 UTC daily so the result is fresh by the time anyone
+# looks at it in the EU/US workday. Single run per day — the trend is
+# the signal, not any individual measurement. Outputs are uploaded as
+# a workflow artifact and rendered into the run's step summary; no
+# repo commits, no comments, no notifications.
+#
+# Security note: only ${{ github.run_id }} (a system variable) is
+# interpolated, and only into a `with:` artifact-name input — never
+# into a `run:` shell command. Matches the safe pattern.
+#
+# See ~/.claude/plans/ci-perf-measurement-restructure.md §"Phase 3"
+# for the design rationale.
+
+on:
+  schedule:
+    # 07:00 UTC every day. GitHub may delay scheduled runs during
+    # high load; the trend tolerates that.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: perf-trend
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  measure:
+    name: Measure cp313t scaling and append to history
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install free-threaded Python 3.13t
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13t'
+
+      - name: Install maturin + numpy (free-threaded)
+        run: pip install maturin 'numpy>=2.1'
+
+      - name: Build cp313t wheel
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: '0'
+        run: |
+          maturin build --release --out dist --interpreter "$(which python3.13t)"
+          pip install dist/*.whl
+
+      - name: Run scaling diagnostic
+        run: |
+          mkdir -p target/perf
+          python3.13t experiments/concurrent_reads_scaling.py \
+            | tee target/perf/trend.log
+
+      - name: Append today's median to history and render summary
+        run: python3.13t .github/workflows/scripts/perf_trend_append.py
+
+      - name: Upload trend history artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-trend-history
+          path: target/perf/cp313t-history.jsonl
+          if-no-files-found: warn
+
+      - name: Upload today's raw log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-trend-log-${{ github.run_id }}
+          path: target/perf/trend.log
+          if-no-files-found: warn

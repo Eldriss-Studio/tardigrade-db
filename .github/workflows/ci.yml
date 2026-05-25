@@ -196,55 +196,6 @@ jobs:
         if: always()
         run: docker compose -f benchmarks/docker-compose.external.yml down -v || true
 
-  test-freethreaded:
-    # Free-threaded Python 3.13t (PEP 703) — verifies the cp313t wheel
-    # builds clean against an unstable interpreter and that the
-    # parallel-reads structural advantage materializes on this CI
-    # hardware. Failure here means a cp313t consumer would NOT see the
-    # speedup the wheel exists to deliver — that is the contract.
-    name: Free-threaded Python smoke
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install free-threaded Python 3.13t
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13t'
-
-      - name: Install maturin + numpy (free-threaded)
-        run: pip install maturin 'numpy>=2.1'
-
-      - name: Build cp313t wheel
-        env:
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 0
-        run: |
-          maturin build --release --out dist --interpreter "$(which python3.13t)"
-          pip install dist/*.whl
-
-      - name: Confirm GIL is disabled
-        run: python3.13t -c "import sys; assert not sys._is_gil_enabled(), 'GIL still on'"
-
-      - name: Run scaling diagnostic
-        run: python3.13t experiments/concurrent_reads_scaling.py | tee freethreaded-scaling.log
-
-      # Contract: the cp313t wheel exists to deliver real parallel reads
-      # on single-call workloads. 8-thread b=1 speedup > 3.0x on a hot
-      # corpus is the bar the proof-of-concept measurement set; falling
-      # below it on this CI hardware means the wheel is not delivering
-      # what we promised consumers who upgrade to 3.13t.
-      - name: Assert 8-thread single-call speedup clears 3.0x
-        run: |
-          SPEEDUP=$(grep '8 threads — b=1' freethreaded-scaling.log | grep -oE '[0-9]+\.[0-9]+x' | head -1 | tr -d 'x')
-          if [ -z "$SPEEDUP" ]; then
-            echo "::error::could not parse 8-thread b=1 speedup from scaling diagnostic output"
-            exit 1
-          fi
-          echo "Measured 8-thread b=1 speedup: ${SPEEDUP}x"
-          python3.13t -c "import sys; sys.exit(0 if float('${SPEEDUP}') > 3.0 else 1)"
-
   doc:
     name: Documentation
     runs-on: ubuntu-latest

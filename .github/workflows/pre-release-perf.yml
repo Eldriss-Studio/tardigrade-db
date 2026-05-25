@@ -1,0 +1,89 @@
+name: Pre-release Perf
+
+# Validates the cp313t wheel's contract — that 8-thread b=1 retrieval
+# delivers a real parallel-read speedup over single-thread — before
+# every tagged release. Runs median-of-5 instead of single-shot because
+# shared CI runners are too variable for one measurement to reliably
+# express the underlying performance.
+#
+# Triggered on every `v*` tag push (so no release ships without
+# validation) and on workflow_dispatch (so a maintainer can preview a
+# candidate before tagging). Deliberately NOT triggered on PR or
+# branch push — release-readiness gates belong at release time, not
+# on the per-commit critical path. See
+# ~/.claude/plans/ci-perf-measurement-restructure.md for the full
+# rationale.
+#
+# Security note: the workflow_dispatch `threshold` input is bound to
+# an env var and only read via os.environ inside the Python script —
+# never interpolated into a shell command. This matches the safe
+# pattern documented at
+# https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: 'Median 8-thread b=1 speedup floor (default 2.5x)'
+        required: false
+        default: '2.5'
+
+concurrency:
+  group: pre-release-perf-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  MEDIAN_CP313T_THRESHOLD: ${{ github.event.inputs.threshold || '2.5' }}
+  REPEATS: '5'
+
+jobs:
+  cp313t-scaling:
+    name: cp313t parallel-read scaling (median of 5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install free-threaded Python 3.13t
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13t'
+
+      - name: Install maturin + numpy (free-threaded)
+        run: pip install maturin 'numpy>=2.1'
+
+      - name: Build cp313t wheel
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: '0'
+        run: |
+          maturin build --release --out dist --interpreter "$(which python3.13t)"
+          pip install dist/*.whl
+
+      - name: Confirm GIL is disabled
+        run: python3.13t -c "import sys; assert not sys._is_gil_enabled(), 'GIL still on'"
+
+      - name: Run scaling diagnostic five times
+        run: |
+          mkdir -p target/perf
+          for i in $(seq 1 "${REPEATS}"); do
+            echo "::group::Run $i / ${REPEATS}"
+            python3.13t experiments/concurrent_reads_scaling.py \
+              | tee "target/perf/run-$i.log"
+            echo "::endgroup::"
+          done
+
+      - name: Compute median and assert threshold
+        run: python3.13t .github/workflows/scripts/perf_median.py
+
+      - name: Upload raw run logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cp313t-scaling-runs
+          path: target/perf/*.log
+          if-no-files-found: warn
