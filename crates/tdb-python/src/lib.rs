@@ -1120,10 +1120,12 @@ impl Engine {
 
         // Confirmed-mode wait, outside the engine read lock. Use
         // the metric-emitting wrapper so the outcome counter and
-        // wait-latency histogram update automatically.
+        // wait-latency histogram update automatically. `&*tracker`
+        // derefs the `Arc<dyn Durability>` to `&dyn Durability` —
+        // the wrapper takes the trait object, not the Arc.
         if let Some(timeout) = confirmed_timeout {
             let wait_outcome = py.detach(move || {
-                tdb_engine::metrics::wait_durable_with_metrics(&tracker, snapshot, timeout)
+                tdb_engine::metrics::wait_durable_with_metrics(&*tracker, snapshot, timeout)
             });
             if let Err(err) = wait_outcome {
                 return Err(PyRuntimeError::new_err(format!(

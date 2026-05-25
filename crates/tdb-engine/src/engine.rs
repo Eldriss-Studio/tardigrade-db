@@ -315,8 +315,12 @@ pub struct Engine {
     /// Durability boundary tracker. Bumps `issued` on every accepted
     /// write; bumps `durable` after each fsync completes. Confirmed
     /// reads snapshot `issued` and wait on `durable` — see
-    /// [`crate::durability`] for the contract.
-    durability: Arc<crate::durability::DurabilityTracker>,
+    /// [`crate::durability`] (re-exporting [`tdb_storage::durability`])
+    /// for the contract. Stored as `Arc<dyn Durability>` so a future
+    /// replicated / async-batched impl can replace the default
+    /// [`tdb_storage::durability::DurabilityTracker`] without touching
+    /// the engine's write or read paths.
+    durability: Arc<dyn crate::durability::Durability>,
     /// Render handle for the process-wide Prometheus recorder.
     /// Cloned from [`crate::metrics::install_or_get_prometheus_handle`]
     /// at engine open — every engine instance in this process feeds
@@ -475,10 +479,11 @@ impl Engine {
 
     /// Borrow the durability tracker so callers (e.g., the Python
     /// binding's confirmed-read path) can clone the `Arc` and wait on
-    /// it without holding the engine lock. Returns an `Arc` so the
-    /// caller decides whether to clone it.
+    /// it without holding the engine lock. Returns a `dyn Durability`
+    /// trait object so callers depend on the contract, not the
+    /// concrete in-process tracker.
     #[must_use]
-    pub fn durability_tracker(&self) -> Arc<crate::durability::DurabilityTracker> {
+    pub fn durability_tracker(&self) -> Arc<dyn crate::durability::Durability> {
         Arc::clone(&self.durability)
     }
 
@@ -826,7 +831,8 @@ impl Engine {
             embedding_table_loads: 0,
             projection_matrix: None,
             fingerprint_cache: None,
-            durability: Arc::new(crate::durability::DurabilityTracker::new()),
+            durability: Arc::new(crate::durability::DurabilityTracker::new())
+                as Arc<dyn crate::durability::Durability>,
             metrics_handle: crate::metrics::install_or_get_prometheus_handle(),
         };
 
@@ -2241,7 +2247,7 @@ impl Engine {
     /// For the confirmed-read contract (block until in-flight writes
     /// are durable), the Python binding composes this method with
     /// [`Engine::durability_tracker`] and
-    /// [`crate::durability::DurabilityTracker::wait_durable`] — the
+    /// [`crate::durability::Durability::wait_durable`] — the
     /// composition runs the wait outside the engine read lock so
     /// writers can advance the offset concurrently.
     ///

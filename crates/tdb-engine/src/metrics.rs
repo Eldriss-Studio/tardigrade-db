@@ -73,7 +73,7 @@ pub fn install_or_get_prometheus_handle() -> PrometheusHandle {
 }
 
 /// Wait for `snapshot` to become durable, emitting metrics for the
-/// outcome. Wraps [`crate::durability::DurabilityTracker::wait_durable`]
+/// outcome. Wraps [`crate::durability::Durability::wait_durable`]
 /// so the confirmed-read call site doesn't need to duplicate the
 /// counter+histogram boilerplate.
 ///
@@ -87,7 +87,7 @@ pub fn install_or_get_prometheus_handle() -> PrometheusHandle {
 /// Returns [`crate::durability::WaitTimedOut`] when the underlying
 /// tracker's deadline passes before durability catches up.
 pub fn wait_durable_with_metrics(
-    tracker: &crate::durability::DurabilityTracker,
+    tracker: &dyn crate::durability::Durability,
     snapshot: u64,
     timeout: std::time::Duration,
 ) -> Result<std::time::Duration, crate::durability::WaitTimedOut> {

@@ -22,7 +22,7 @@
 
 use proptest::prelude::*;
 use std::time::Duration;
-use tdb_engine::durability::DurabilityTracker;
+use tdb_engine::durability::{Durability, DurabilityTracker};
 
 /// Operations the model supports — same surface as the real tracker.
 #[derive(Debug, Clone, Copy)]

@@ -107,6 +107,7 @@
 pub mod block_pool;
 pub mod compression;
 pub mod deletion_log;
+pub mod durability;
 pub mod quantization;
 pub mod segment;
 pub mod synaptic_store;

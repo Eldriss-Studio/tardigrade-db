@@ -33,7 +33,6 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::{Archive, Builder};
 use tdb_core::error::{Result, TardigradeError};
@@ -45,19 +44,21 @@ use tdb_core::error::{Result, TardigradeError};
 /// our archives from arbitrary tarballs.
 pub const SNAPSHOT_MAGIC: &str = "tdb!";
 
-/// Current snapshot format version. Increment on any breaking change
-/// to the manifest schema, archive layout, or required state files.
-/// Older readers refuse newer versions; newer readers may accept
-/// older versions when the migration is trivial.
-pub const SNAPSHOT_FORMAT_VERSION: u8 = 1;
+/// Current snapshot format version. Re-exported from [`v1`] — every
+/// snapshot the engine produces today carries this version. When a
+/// breaking schema change lands, the next module (`v2`, not yet
+/// defined as of this writing) introduces its own constant and the
+/// engine's `current` constructor will point at it.
+pub use v1::SNAPSHOT_FORMAT_VERSION;
 
 /// Versioned identifier for the quantization codec currently in use.
-/// Snapshots embed this so a future engine that drops Q4 support can
-/// refuse Q4 snapshots cleanly instead of producing garbage reads.
-pub const SNAPSHOT_QUANT_CODEC: &str = "q4";
+/// Re-exported from [`v1`]; see [`v1::SNAPSHOT_QUANT_CODEC`] for the
+/// rationale.
+pub use v1::SNAPSHOT_QUANT_CODEC;
 
 /// Versioned identifier for the per-token retrieval-key codec.
-pub const SNAPSHOT_KEY_CODEC: &str = "top5avg";
+/// Re-exported from [`v1`].
+pub use v1::SNAPSHOT_KEY_CODEC;
 
 /// Top-level directory inside the tar archive holding the engine's
 /// state files. Kept stable across versions so restore tooling can
@@ -81,65 +82,110 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_PAYLOAD_FILE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
 // ─── Manifest ───────────────────────────────────────────────────────────
+//
+// Schema types live under [`v1`]. The top-level module re-exports
+// `SnapshotManifest`, `SnapshotCodecs`, `SnapshotStats` so every
+// existing consumer (`crate::engine::Engine::snapshot`, the
+// `CheckpointRepository` in `crate::checkpoint`, the Python bridge,
+// downstream `.tar`-inspection tools) keeps working unchanged.
+//
+// The convention for the next breaking schema bump: introduce
+// `pub mod v2` alongside `v1`, define its own constants and types,
+// and rewrite the top-level re-exports to point at v2. The reader
+// dispatches on `format_version` and decodes into the right
+// version's struct — `v1` and `v2` coexist in the codebase until the
+// last v1 snapshot in the wild has been migrated forward.
 
-/// Versioned metadata header written at the root of every snapshot
-/// archive. Read first by [`crate::engine::Engine::restore_from`] to validate
-/// compatibility before extracting the payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotManifest {
-    /// Magic marker; must equal [`SNAPSHOT_MAGIC`].
-    pub magic: String,
-    /// Format version; restore refuses unknown values.
-    pub format_version: u8,
-    /// RFC 3339 timestamp of snapshot creation.
-    pub created_at: String,
-    /// Codec identifiers for the storage formats embedded in the
-    /// payload. Restore refuses snapshots whose codecs are not
-    /// supported by the current engine.
-    pub codecs: SnapshotCodecs,
-    /// Cheap stats useful for forensics + repository lookup.
-    pub stats: SnapshotStats,
-    /// SHA-256 (hex-encoded) of the tarred ``engine_state/`` payload.
-    /// Computed *over the engine state files only* — not over the
-    /// manifest itself. Verified by [`crate::engine::Engine::restore_from`].
-    pub sha256: String,
-}
+pub use v1::{SnapshotCodecs, SnapshotManifest, SnapshotStats};
 
-/// Codec identifiers embedded in a snapshot manifest. Used to detect
-/// format swaps between snapshot-write and snapshot-restore.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotCodecs {
-    /// Quantization codec (e.g. ``"q4"``).
-    pub quantization: String,
-    /// Per-token retrieval-key codec (e.g. ``"top5avg"``).
-    pub key: String,
-}
+/// Snapshot schema, version 1.
+///
+/// Every snapshot the engine produces today carries
+/// `format_version: 1` and decodes into the structs defined here.
+/// The module is intentionally self-contained — when v2 lands as a
+/// sibling module, v1 stays in the codebase so old snapshots
+/// produced by older engines remain restorable forward in time.
+///
+/// The on-disk contract this module pins:
+/// - Manifest JSON layout (field names, types, ordering)
+/// - `quantization = "q4"`, `key = "top5avg"` codec identifiers
+/// - SHA-256 of the `engine_state/` payload as the integrity check
+pub mod v1 {
+    use serde::{Deserialize, Serialize};
 
-/// Snapshot stats — handy for the repository's `latest()` lookup and
-/// for displaying in admin UIs without unpacking the archive.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SnapshotStats {
-    /// Total packs in the engine at snapshot time.
-    pub pack_count: usize,
-    /// Distinct owners with at least one pack.
-    pub owner_count: usize,
-}
+    /// Format version constant for v1 snapshots.
+    pub const SNAPSHOT_FORMAT_VERSION: u8 = 1;
 
-impl SnapshotManifest {
-    /// Construct a manifest with the current format constants.
-    /// `sha256` and `stats` must be filled by the caller.
-    #[must_use]
-    pub fn current(sha256: String, stats: SnapshotStats) -> Self {
-        Self {
-            magic: SNAPSHOT_MAGIC.to_string(),
-            format_version: SNAPSHOT_FORMAT_VERSION,
-            created_at: rfc3339_now(),
-            codecs: SnapshotCodecs {
-                quantization: SNAPSHOT_QUANT_CODEC.to_string(),
-                key: SNAPSHOT_KEY_CODEC.to_string(),
-            },
-            stats,
-            sha256,
+    /// Quantization codec identifier embedded in v1 manifests.
+    /// Snapshots embed this so a future engine that drops Q4 support
+    /// can refuse Q4 snapshots cleanly instead of producing garbage
+    /// reads.
+    pub const SNAPSHOT_QUANT_CODEC: &str = "q4";
+
+    /// Per-token retrieval-key codec identifier for v1 manifests.
+    pub const SNAPSHOT_KEY_CODEC: &str = "top5avg";
+
+    /// Versioned metadata header written at the root of every v1
+    /// snapshot archive. Read first by
+    /// [`crate::engine::Engine::restore_from`] to validate
+    /// compatibility before extracting the payload.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SnapshotManifest {
+        /// Magic marker; must equal [`super::SNAPSHOT_MAGIC`].
+        pub magic: String,
+        /// Format version; restore refuses unknown values.
+        pub format_version: u8,
+        /// RFC 3339 timestamp of snapshot creation.
+        pub created_at: String,
+        /// Codec identifiers for the storage formats embedded in the
+        /// payload. Restore refuses snapshots whose codecs are not
+        /// supported by the current engine.
+        pub codecs: SnapshotCodecs,
+        /// Cheap stats useful for forensics + repository lookup.
+        pub stats: SnapshotStats,
+        /// SHA-256 (hex-encoded) of the tarred ``engine_state/``
+        /// payload. Computed *over the engine state files only* —
+        /// not over the manifest itself. Verified by
+        /// [`crate::engine::Engine::restore_from`].
+        pub sha256: String,
+    }
+
+    /// Codec identifiers embedded in a v1 snapshot manifest.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SnapshotCodecs {
+        /// Quantization codec (e.g. ``"q4"``).
+        pub quantization: String,
+        /// Per-token retrieval-key codec (e.g. ``"top5avg"``).
+        pub key: String,
+    }
+
+    /// V1 snapshot stats — handy for the repository's `latest()`
+    /// lookup and for displaying in admin UIs without unpacking the
+    /// archive.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    pub struct SnapshotStats {
+        /// Total packs in the engine at snapshot time.
+        pub pack_count: usize,
+        /// Distinct owners with at least one pack.
+        pub owner_count: usize,
+    }
+
+    impl SnapshotManifest {
+        /// Construct a v1 manifest. `sha256` and `stats` are caller-
+        /// provided; the rest come from v1's format constants.
+        #[must_use]
+        pub fn current(sha256: String, stats: SnapshotStats) -> Self {
+            Self {
+                magic: super::SNAPSHOT_MAGIC.to_string(),
+                format_version: SNAPSHOT_FORMAT_VERSION,
+                created_at: super::rfc3339_now(),
+                codecs: SnapshotCodecs {
+                    quantization: SNAPSHOT_QUANT_CODEC.to_string(),
+                    key: SNAPSHOT_KEY_CODEC.to_string(),
+                },
+                stats,
+                sha256,
+            }
         }
     }
 }

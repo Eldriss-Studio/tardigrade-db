@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-05-25
+
+Two architectural cleanup items left over after the v0.8.0 feature batch. Pure hardening: no new consumer capability, no behaviour change, no breaking signatures. Existing imports and call sites keep working unchanged via re-exports.
+
+### Internal Architecture
+
+- **`Durability` trait extracted to `tdb-storage`**: the durability boundary (the `issued` / `durable` counter pair plus `wait_durable`) is now a trait in `tdb_storage::durability`, with the default in-process [`DurabilityTracker`] as one impl. The engine holds `Arc<dyn Durability + Send + Sync>` so a future replicated / async-batched / metric-only durability impl plugs in without touching engine read or write paths. `tdb_engine::durability` is now a thin re-export shim for back-compat.
+- **Snapshot schema types live under `snapshot::v1`**: `SnapshotManifest`, `SnapshotCodecs`, `SnapshotStats`, plus the version-specific constants (`SNAPSHOT_FORMAT_VERSION`, `SNAPSHOT_QUANT_CODEC`, `SNAPSHOT_KEY_CODEC`) and `SnapshotManifest::current()` constructor. The top-level `snapshot` module re-exports v1 so every existing consumer keeps working. The convention is documented inline: when the next breaking schema change lands, introduce a sibling `pub mod v2`, write its own constants and structs, and the reader dispatches on `format_version` to decode into the correct version's struct. `v1` stays in the codebase forever so old snapshots remain restorable.
+
 ## [0.8.0] — 2026-05-25
 
 Production-grade durability semantics, observability, and a discoverable contract surface. Consumers reading the engine through an IDE now see real signatures; reading through Prometheus see real metrics; reading after a write see a real durability boundary they can wait on.
