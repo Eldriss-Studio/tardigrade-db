@@ -18,7 +18,11 @@ print_stderr = "deny"
 
 [lib]
 name = "_native"
-crate-type = ["cdylib"]
+# `rlib` alongside `cdylib` lets the in-crate `stub_gen` binary import
+# the library to walk its `#[pyclass]`/`#[pyfunction]` items. The
+# `cdylib` is what maturin packages into the wheel; `rlib` exists only
+# so the stub-gen tooling can run.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 tdb-core = { workspace = true }
@@ -31,3 +35,14 @@ tdb-storage = { workspace = true }
 half = { workspace = true }
 pyo3 = "0.28"
 numpy = "0.28"
+# Stub generator. The `numpy` feature teaches it to map
+# `PyReadonlyArray1<f32>` and friends to `numpy.typing.NDArray[...]`
+# in generated .pyi instead of falling silently to `typing.Any`.
+pyo3-stub-gen = { version = "0.22", features = ["numpy"] }
+
+# Binary target that walks the PyO3 surface and emits .pyi files.
+# Invoked from the maturin build pipeline (see ../../pyproject.toml).
+[[bin]]
+name = "stub_gen"
+path = "src/bin/stub_gen.rs"
+required-features = []

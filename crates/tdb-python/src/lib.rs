@@ -15,6 +15,8 @@ use std::sync::{Arc, RwLock};
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3_stub_gen::define_stub_info_gatherer;
+use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyfunction, gen_stub_pymethods};
 
 use tdb_engine::engine::Engine as RustEngine;
 
@@ -23,7 +25,15 @@ use tdb_engine::engine::Engine as RustEngine;
 type BatchPackInput<'py> =
     (u64, PyReadonlyArray1<'py, f32>, Vec<(u16, PyReadonlyArray1<'py, f32>)>, f32, Option<String>);
 
+/// Output of `flat_to_paged` / `flat_to_paged_torch`: paired K and V
+/// 1-D float32 numpy arrays handed back to Python. Typed (not
+/// `Py<PyAny>`) so generated `.pyi` stubs describe them as
+/// `numpy.typing.NDArray[numpy.float32]` instead of falling silently
+/// to `typing.Any`.
+type PagedKVOutput = (pyo3::Py<numpy::PyArray1<f32>>, pyo3::Py<numpy::PyArray1<f32>>);
+
 /// A single retrieval result returned from `mem_read`.
+#[gen_stub_pyclass]
 #[pyclass]
 #[derive(Debug)]
 struct ReadResult {
@@ -43,6 +53,7 @@ struct ReadResult {
     value_data: Vec<f32>,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl ReadResult {
     /// Get the key vector as a list of floats.
@@ -72,6 +83,7 @@ impl ReadResult {
 /// A few read-only handles to internal substores are cached outside the
 /// lock (currently the text store) so the corresponding fast-path methods
 /// can serve without acquiring any guard at all.
+#[gen_stub_pyclass]
 #[pyclass]
 struct Engine {
     inner: Arc<RwLock<RustEngine>>,
@@ -117,6 +129,7 @@ fn read_engine(inner: &RwLock<RustEngine>) -> PyResult<std::sync::RwLockReadGuar
     inner.read().map_err(|_| PyRuntimeError::new_err("engine lock poisoned"))
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl Engine {
     /// Open or create a `TardigradeDB` engine at the given directory path.
@@ -1377,13 +1390,13 @@ impl Engine {
         py: Python<'_>,
         token_ids: Vec<i64>,
         strategy: &str,
-    ) -> PyResult<Option<pyo3::Py<pyo3::PyAny>>> {
+    ) -> PyResult<Option<pyo3::Py<numpy::PyArray1<f32>>>> {
         use pyo3::exceptions::PyValueError;
         let eng = read_engine(&self.inner)?;
         let key = eng
             .compute_retrieval_key(&token_ids, strategy)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(key.map(|v| numpy::PyArray1::from_vec(py, v).into_any().unbind()))
+        Ok(key.map(|v| numpy::PyArray1::from_vec(py, v).unbind()))
     }
 
     /// Configure (or resize) the engine-side fingerprint LRU cache.
@@ -1673,6 +1686,7 @@ impl Engine {
 /// can save engine snapshots under string labels with a
 /// monotonically increasing sequence per label, list / find latest,
 /// and restore the latest into a fresh directory.
+#[gen_stub_pyclass]
 #[pyclass]
 struct CheckpointRepository {
     inner: tdb_engine::checkpoint::CheckpointRepository,
@@ -1699,6 +1713,7 @@ fn entry_to_dict(
     Ok(dict.into())
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl CheckpointRepository {
     /// Open a repository rooted at ``root`` (created lazily).
@@ -1791,6 +1806,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// tensors, non-contiguous views, and non-f32 dtypes get rejected
 /// with a clear error — converting them is a Python-side responsibility
 /// (`tensor.cpu().contiguous().to(torch.float32)`).
+#[gen_stub_pyfunction]
 #[pyfunction]
 fn flat_to_paged_torch(
     py: Python<'_>,
@@ -1798,7 +1814,7 @@ fn flat_to_paged_torch(
     num_kv_heads: usize,
     head_dim: usize,
     block_size: usize,
-) -> PyResult<(pyo3::Py<pyo3::PyAny>, pyo3::Py<pyo3::PyAny>)> {
+) -> PyResult<PagedKVOutput> {
     use pyo3::exceptions::PyValueError;
 
     // Detach from autograd graph before any data access — a grad-tracking
@@ -1855,10 +1871,7 @@ fn flat_to_paged_torch(
     let (k, v) =
         tdb_engine::engine::Engine::flat_to_paged(slice, num_kv_heads, head_dim, block_size)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok((
-        numpy::PyArray1::from_vec(py, k).into_any().unbind(),
-        numpy::PyArray1::from_vec(py, v).into_any().unbind(),
-    ))
+    Ok((numpy::PyArray1::from_vec(py, k).unbind(), numpy::PyArray1::from_vec(py, v).unbind()))
 }
 
 /// Convert a flat `[K_flat | V_flat]` ndarray into vLLM paged blocks.
@@ -1867,6 +1880,7 @@ fn flat_to_paged_torch(
 /// `num_blocks * block_size * num_kv_heads * head_dim`. Reshape in
 /// Python with `.reshape(num_blocks, block_size, num_kv_heads, head_dim)`
 /// to recover the four-axis layout. Stateless — does not touch the engine.
+#[gen_stub_pyfunction]
 #[pyfunction]
 fn flat_to_paged(
     py: Python<'_>,
@@ -1874,7 +1888,7 @@ fn flat_to_paged(
     num_kv_heads: usize,
     head_dim: usize,
     block_size: usize,
-) -> PyResult<(pyo3::Py<pyo3::PyAny>, pyo3::Py<pyo3::PyAny>)> {
+) -> PyResult<PagedKVOutput> {
     use pyo3::exceptions::PyValueError;
     let arr = flat_kv.as_array();
     let owned;
@@ -1887,14 +1901,12 @@ fn flat_to_paged(
     let (k, v) =
         tdb_engine::engine::Engine::flat_to_paged(slice, num_kv_heads, head_dim, block_size)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok((
-        numpy::PyArray1::from_vec(py, k).into_any().unbind(),
-        numpy::PyArray1::from_vec(py, v).into_any().unbind(),
-    ))
+    Ok((numpy::PyArray1::from_vec(py, k).unbind(), numpy::PyArray1::from_vec(py, v).unbind()))
 }
 
 /// Convert vLLM paged K/V blocks back into a flat `[K_flat | V_flat]`
 /// float32 ndarray. Stateless — does not touch the engine.
+#[gen_stub_pyfunction]
 #[pyfunction]
 fn paged_to_flat(
     py: Python<'_>,
@@ -1903,7 +1915,7 @@ fn paged_to_flat(
     seq_len: usize,
     num_kv_heads: usize,
     head_dim: usize,
-) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+) -> PyResult<pyo3::Py<numpy::PyArray1<f32>>> {
     use pyo3::exceptions::PyValueError;
     let k = k_blocks.as_array();
     let v = v_blocks.as_array();
@@ -1929,7 +1941,7 @@ fn paged_to_flat(
         head_dim,
     )
     .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(numpy::PyArray1::from_vec(py, out).into_any().unbind())
+    Ok(numpy::PyArray1::from_vec(py, out).unbind())
 }
 
 /// Find a byte position `<= max_pos` to split `text` at, preferring the
@@ -1938,6 +1950,7 @@ fn paged_to_flat(
 /// `strategy` is one of `"whitespace"`, `"sentence"`, or `"paragraph"`.
 /// See `tdb_engine::chunk_boundary` for the precise semantics — this is
 /// a direct `PyO3` surface over the Rust function.
+#[gen_stub_pyfunction]
 #[pyfunction]
 fn find_chunk_boundary(text: &str, max_pos: usize, strategy: &str) -> PyResult<usize> {
     use tdb_engine::chunk_boundary::{BoundaryStrategy, find_chunk_boundary as inner};
@@ -1945,3 +1958,10 @@ fn find_chunk_boundary(text: &str, max_pos: usize, strategy: &str) -> PyResult<u
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     Ok(inner(text, max_pos, parsed))
 }
+
+// Stub-generator entry point. Walks every `#[gen_stub_*]`-annotated
+// item in this crate and exposes a `stub_info()` function the
+// `stub_gen` binary calls to emit `.pyi` files. The macro must live in
+// the library crate (not in the binary) so it can introspect the full
+// PyO3 surface.
+define_stub_info_gatherer!(stub_info);

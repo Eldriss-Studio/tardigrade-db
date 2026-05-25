@@ -121,6 +121,21 @@ build:
 release:
     cargo build --workspace --release
 
+# Regenerate Python type stubs from the PyO3 source. Reads
+# `crates/tdb-python/pyproject.toml` to find the mixed layout and
+# emits stubs into `python/tardigrade_db/_native/__init__.pyi`. Run
+# this after any change to the PyO3 surface — CI's drift-guard fails
+# the build if committed stubs lag the source.
+stubs:
+    cargo run -p tdb-python --bin stub_gen
+
+# Build the extension AND regenerate stubs in one step — the standard
+# developer loop after editing `crates/tdb-python/src/lib.rs`. Mirrors
+# what CI does on a fresh checkout.
+develop:
+    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 .venv/bin/maturin develop
+    just stubs
+
 # Build documentation
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --exclude tdb-python

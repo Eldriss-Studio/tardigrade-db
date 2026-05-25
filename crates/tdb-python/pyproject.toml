@@ -1,35 +1,28 @@
+# Crate-local pyproject.toml — read by `pyo3-stub-gen` only.
+#
+# The canonical pyproject.toml that drives `maturin build` and
+# `pip install` lives at the workspace root. We deliberately don't try
+# to be that — wheel builds always invoke maturin from the project root.
+#
+# `pyo3-stub-gen`'s `define_stub_info_gatherer!` macro resolves
+# `pyproject.toml` relative to `CARGO_MANIFEST_DIR` (i.e. this
+# directory). It needs `python-source` set to the mixed-layout flag so
+# stubs land inside the Python package directory instead of next to the
+# crate. The path is expressed relative to this file, hence `../../python`.
+#
+# Keep the values that pyo3-stub-gen actually reads in sync with the
+# workspace-root pyproject.toml: `module-name`, `python-source`, and the
+# package `name`. Other fields (version, dependencies, classifiers) live
+# only at the root.
+
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "tardigrade-db"
-version = "0.7.1"
-description = "LLM-native database kernel — persistent KV cache memory for autonomous AI agents"
-license = { file = "../../LICENSE" }
-requires-python = ">=3.10"
-keywords = ["llm", "kv-cache", "agent-memory", "database", "transformers"]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Topic :: Database",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
-dependencies = ["numpy>=1.24"]
-
-[project.optional-dependencies]
-torch = ["torch>=2.0"]
-transformers = ["torch>=2.0", "transformers>=4.30"]
-
-[project.urls]
-Repository = "https://github.com/Eldriss-Studio/tardigrade-db"
-Documentation = "https://eldriss-studio.github.io/tardigrade-db"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
 manifest-path = "Cargo.toml"
-module-name = "tardigrade_db"
+module-name = "tardigrade_db._native"
+python-source = "../../python"
