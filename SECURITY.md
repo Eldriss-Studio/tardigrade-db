@@ -6,8 +6,8 @@ TardigradeDB follows a 0.x.y release cadence pre-1.0. Only the most recent minor
 
 | Version | Supported |
 |---------|-----------|
-| 0.7.x   | ✅ Yes    |
-| < 0.7   | ❌ No     |
+| 0.8.x   | ✅ Yes    |
+| < 0.8   | ❌ No     |
 
 ## Reporting a Vulnerability
 

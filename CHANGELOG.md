@@ -8,6 +8,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-25
+
+Production-grade durability semantics, observability, and a discoverable contract surface. Consumers reading the engine through an IDE now see real signatures; reading through Prometheus see real metrics; reading after a write see a real durability boundary they can wait on.
+
+### General
+
+- **Confirmed-read contract enforced.** CLAUDE.md's "Reliability & Consistency Rules" mandate — every externally visible read must declare confirmed vs unconfirmed semantics — was declared in v0.7.0 and policy-without-implementation since. Now it actually works.
+- **Type stubs ship with the wheel.** PEP 561 `.pyi` files generated from PyO3 source. `mypy`, `pyright`, and IDE autocomplete see the full `tardigrade_db.Engine` surface — previously every method appeared as opaque `(*args, **kwargs)`.
+
+### Public API
+
+- **`engine.mem_read_pack(...)`**: new keyword args `mode="unconfirmed"|"confirmed"` and `timeout_ms=int`. Default unchanged — every existing caller behaves identically. `mode="confirmed"` snapshots the issued offset at request entry, runs the retrieval, releases the engine read lock, then blocks until `durable_offset` catches up — or raises `RuntimeError` naming `"confirmed read timeout"` if `timeout_ms` exceeds. `mode="confirmed"` without `timeout_ms` raises `ValueError`.
+- **`engine.durable_offset() -> int`**: new — monotonic durability boundary. Snapshot it before issuing writes to reason about confirmed-read targets externally.
+- **`engine.metrics_prometheus_text() -> str`**: new — render the process-wide Prometheus registry to text exposition format. Embedded consumers can scrape directly without going through HTTP.
+- **`TardigradeError::ReadTimeout { waited_ms }`**: new miette variant with code `tdb::durability::read_timeout`.
+
+### HTTP API
+
+- **`POST /mem/query?wait=durable&timeout=<ms>`**: new — opt-in confirmed read over HTTP. Server-side cap at 5 minutes (`MAX_CONFIRMED_TIMEOUT_MS=300_000`) prevents resource exhaustion. Timeout exhaustion returns HTTP 504 with RFC 7807 `application/problem+json`, `type="tdb:durability:read_timeout"`. Missing / zero / oversized `timeout` returns HTTP 400 with `type="tdb:request:invalid_argument"`. Default (no `?wait`) is unchanged.
+- **`GET /metrics`**: new — Prometheus text exposition format, `Content-Type: text/plain; version=0.0.4`. Standard scrapers consume directly.
+
+### Observability
+
+Six contract-grade Prometheus metrics, all prefixed `tdb_*`:
+
+- **`tdb_durable_offset`** (gauge): monotonic durability boundary.
+- **`tdb_issued_offset`** (gauge): monotonic acceptance counter. The gap to `durable_offset` is "writes in flight."
+- **`tdb_confirmed_read_total{outcome=ok|timeout}`** (counter): confirmed-read outcomes split by category. Alert when the `timeout` rate climbs.
+- **`tdb_confirmed_read_wait_seconds`** (histogram): wait latency for successful confirmed reads.
+- **`tdb_engine_open_seconds`** (histogram): open + replay duration.
+- **`tdb_snapshot_write_seconds`** (histogram): snapshot wall-clock.
+
+### Test Infrastructure
+
+- **Property-based tests** via proptest 1.6: 5 properties on Q4 quantization (round-trip bounded, deterministic, idempotent past one cycle, length-preserving, zero-vector-exact); 4 on `DurabilityTracker` invariants (`durable ≤ issued` holds under any operation interleaving, monotonicity, publish idempotence, fast-path latency); 1 on snapshot round-trip with 16 random pack sequences. The durability properties caught a real API hardening opportunity — see `Bug Fixes`.
+- **Cross-surface parity gate**: `tests/python/test_pyo3_http_parity.py` asserts every engine method named by the HTTP bridge resolves on `tardigrade_db.Engine`, and every Pydantic model resolves in `tardigrade_http.models`. A meta-test class verifies the gate actually fails on deliberate drift.
+- **Stub drift-guard**: new CI step regenerates Python `.pyi` from PyO3 source and fails the build if committed stubs lag. Mirrors the existing OpenAPI schema drift-guard.
+
+### CI
+
+- **`test-freethreaded` removed from per-PR CI**: shared GitHub runners produce too much variance for single-shot speedup thresholds to gate release-blocking work. The v0.7.7 release tripped the 3.0× bar at 2.81× on a runner-rotation artifact rather than real perf erosion.
+- **`pre-release-perf.yml`** (new): fires on `v*` tag pushes and `workflow_dispatch`. Runs the cp313t scaling diagnostic 5 times, asserts the median against a configurable threshold (default 2.5× with documented headroom below the observed runner band).
+- **`perf-trend.yml`** (new): nightly observational measurement appended to a JSONL history artifact. No assertion — multi-week erosion shows up as a sloped trend.
+
+### Bug Fixes
+
+- **`DurabilityTracker::publish_durable`**: now clamps the publish target to `current_issued()`, so `durable ≤ issued` is an unconditional invariant. Caught by the new durability property test — engine call sites already respected the invariant, but the API permitted misuse. No observable change for existing callers.
+
+### Community Standards
+
+- **`SECURITY.md`**: supported-versions table bumped to `0.8.x` ✅, `< 0.8` ❌.
+
 ## [0.7.7] — 2026-05-23
 
 Closes a silent foot-gun in the calibration result API. The session also lands an internal-only vLLM connector bridge module, a forensic writeup of vLLM's prefix-cache recall divergence, and `just` recipes for the dev GPU test workflow — none of which change consumer behaviour.
