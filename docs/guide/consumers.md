@@ -121,10 +121,25 @@ Consumers that rely on replay testing (snapshot a session, run again, expect bit
 
 ---
 
+## Type stubs and contract enforcement
+
+The Python wheel ships PEP 561 type information for the entire engine surface. If your project uses `mypy`, `pyright`, or any IDE that reads type stubs, you get autocomplete, signature popups, and edit-time type-checking for every `tardigrade_db.Engine` method without any extra setup — `pip install tardigrade-db` and your tooling lights up.
+
+Concretely, the wheel includes:
+
+- `tardigrade_db/_native/__init__.pyi` — generated from the PyO3 source on every release, so the stubs cannot drift from the actual surface.
+- `tardigrade_db/py.typed` — the PEP 561 marker that tells type-checkers this package ships type info.
+
+If you spot a wrong type or a missing method in the stubs, that's a bug. The release pipeline regenerates them from Rust source and a CI drift-guard fails the build when committed stubs lag the source, so issues are catchable upstream.
+
+For the HTTP bridge, the OpenAPI schema serves the same role — the schema is generated from the FastAPI route definitions and committed to the repo, and a separate drift-guard test fails the build if `schema.yaml` falls behind the actual routes.
+
 ## What lives where
 
 - HTTP contract: `python/tardigrade_http/schema.yaml` (OpenAPI 3.1)
 - TypeScript types: `python/tardigrade_http/types.ts` (generated)
+- Python type stubs: `python/tardigrade_db/_native/__init__.pyi` (generated from PyO3 source)
+- PEP 561 marker: `python/tardigrade_db/py.typed`
 - Python facade: `tardigrade_hooks.TardigradeClient`
 - CLI: `tardigrade init|store|query|status|consolidate`
 - Reference Node.js consumer: `examples/nodejs_consumer/`

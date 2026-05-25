@@ -31,6 +31,20 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Stub drift-guard
+        # Regenerate Python type stubs from the PyO3 source. If the
+        # committed `.pyi` differs from what the generator just
+        # produced, the Rust surface and the published stubs are out
+        # of sync — fail with a clear message. No user-controlled
+        # input enters the run script.
+        run: |
+          cargo run -p tdb-python --bin stub_gen
+          if ! git diff --exit-code python/tardigrade_db/_native/__init__.pyi; then
+            echo "::error::Committed Python stubs are stale."
+            echo "::error::Run 'just stubs' locally and commit the regenerated file."
+            exit 1
+          fi
+
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
 
