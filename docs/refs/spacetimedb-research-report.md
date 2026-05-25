@@ -2,7 +2,7 @@
 
 Research scope:
 - Online-first validation from official SpacetimeDB sources.
-- Local exploration of `/Users/storylight/Dev/labs/SpacetimeDB`.
+- Local exploration of the SpacetimeDB tree (commit pinned in §3).
 - Practical lessons for TardigradeDB architecture decisions.
 
 ---
@@ -35,7 +35,7 @@ Latest validated release context:
 
 ---
 
-## 3. Local Repo Exploration (`/Users/storylight/Dev/labs/SpacetimeDB`)
+## 3. Local Repo Exploration (SpacetimeDB tree, commit pinned below)
 
 Local checkout metadata:
 - Commit: `d5c1738c1`
@@ -206,21 +206,93 @@ Official/public:
 - https://spacetimedb.com/docs/http/database/
 - https://spacetimedb.com/docs/how-to/deploy/self-hosting/
 
-Local code exploration:
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/durability/src/lib.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/durability/src/imp/local.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/commitlog/src/lib.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/commitlog/src/repo/fs.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/snapshot/src/lib.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/core/src/db/snapshot.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/core/src/db/relational_db.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/datastore/src/locking_tx_datastore/datastore.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/datastore/src/locking_tx_datastore/replay.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/client-api/src/lib.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/client-api/src/routes/subscribe.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/core/src/client/client_connection.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/subscription/src/lib.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/schema/tests/ensure_same_schema.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/testing/src/sdk.rs`
-- `/Users/storylight/Dev/labs/SpacetimeDB/crates/bench/README.md`
-- `/Users/storylight/Dev/labs/SpacetimeDB/TESTING.md`
+Local code exploration (paths within the SpacetimeDB tree at the commit pinned in §3):
+- `crates/durability/src/lib.rs`
+- `crates/durability/src/imp/local.rs`
+- `crates/commitlog/src/lib.rs`
+- `crates/commitlog/src/repo/fs.rs`
+- `crates/snapshot/src/lib.rs`
+- `crates/core/src/db/snapshot.rs`
+- `crates/core/src/db/relational_db.rs`
+- `crates/datastore/src/locking_tx_datastore/datastore.rs`
+- `crates/datastore/src/locking_tx_datastore/replay.rs`
+- `crates/client-api/src/lib.rs`
+- `crates/client-api/src/routes/subscribe.rs`
+- `crates/core/src/client/client_connection.rs`
+- `crates/subscription/src/lib.rs`
+- `crates/schema/tests/ensure_same_schema.rs`
+- `crates/testing/src/sdk.rs`
+- `crates/bench/README.md`
+- `TESTING.md`
+
+---
+
+## 8. Status Update — 2026-05-21
+
+Re-audited against SpacetimeDB commit `93a68ade0` (2026-05-21). The April §5.1 "Adopt Now" list has aged unevenly — two items shipped cleanly, two are partial, one is policy-without-implementation — and the broader workspace survey raised gaps the original report didn't enumerate. A second-pass meta-audit of engineering style and philosophy also revealed that on most of those axes TardigradeDB now meets or exceeds SpacetimeDB's discipline, so the action items are tighter than they would have been a year ago.
+
+### 8.1 Original "Adopt Now" list — status
+
+1. **Durability trait** (`append` / `durable_offset` / `history_from`) — *partial*. WAL and segment-based append behavior exist, but the trait abstraction proposed in §5.1 never crystallized. `rg durable_offset` finds one hit, in `crates/tdb-engine/src/snapshot.rs`. The contract lives in code but isn't a formalized boundary.
+2. **Snapshot + WAL suffix replay** — **shipped**. Crash-recovery ATs cover segment + WAL truncation and multi-component atomicity.
+3. **Confirmed vs unconfirmed read modes** — **policy without implementation**. CLAUDE.md's "Reliability & Consistency Rules" mandates that "Any API or externally visible read/update behavior must explicitly declare `confirmed` vs `unconfirmed` semantics," but no API surface exposes the choice today. This is the most consequential rule-vs-reality gap in the foundation.
+4. **Startup/replay metrics** — **not shipped as a metrics layer**. `Engine::status()` provides coarse monitoring; there's no Prometheus-style instrumentation. `rg prometheus|histogram!|counter!` returns zero matches across `crates/`.
+5. **Replay tests for corrupted/incomplete logs** — **shipped** in `tdb-engine` crash-recovery ATs.
+
+### 8.2 Broader workspace gaps — features the April audit didn't raise
+
+A wider sweep of the SpacetimeDB workspace surfaced patterns worth knowing about even though they sit outside the original durability-focused brief:
+
+- **Energy / budget model** — `EnergyMonitor` trait with pluggable backends tracks per-call execution time, disk, memory. Relevant for multi-owner or per-tenant rate limiting in a memory engine.
+- **Async snapshot worker** — snapshotting runs as a background actor with watch-channel completion. Ours is synchronous against the engine mutex; not a problem today but a latency cliff at scale.
+- **Incremental subscription / live-query engine** — compiled plan fragments, view maintenance with join-delta semantics. We have no push/subscribe surface; HTTP is strictly request-response. Worth revisiting if downstream consumers want "tell me when owner X gets a new pack."
+- **DurableOffset watch-channel for clients** — companion to the confirmed-read gap above. Lets clients `await` durability without polling.
+- **Algebraic Type System + codegen (`sats`)** — schema-driven Rust/C#/TS codegen. We've gone OpenAPI for the HTTP bridge; `sats`-style codegen would matter if we ship typed client SDKs in additional languages.
+- **MVCC-style transaction isolation** (`locking_tx_datastore`) — separate locks for committed vs active state. Our `Arc<Mutex<>>` is coarser; readers block writers. Probably fine for the current call frequency, becomes relevant if we add concurrent retrieval paths.
+
+### 8.3 Engineering philosophy — where TardigradeDB already exceeds SpacetimeDB
+
+The April report focused on what to adopt. The follow-up audit looked one layer down — at lint policy, error handling, documentation discipline, operational rules — and the honest read is that the foundation-completion phase pushed past SpacetimeDB on several of these. Important to record so future readers don't reflexively copy patterns we've already improved on:
+
+- **Lint policy.** SpacetimeDB allows `result_large_err` workspace-wide (FIXME). TardigradeDB enforces `-D warnings` and requires a `// Reason:` comment on every site-level `#[allow]`.
+- **Error handling.** They hybrid-use `thiserror` + `anyhow`. We use `miette::Diagnostic` with stable `tdb::<area>::<name>` codes and `#[help(...)]` annotations on every variant.
+- **Reliability rules as written policy.** They keep durability invariants implicit in the code. We have CLAUDE.md's "Reliability & Consistency Rules (Canonical)" as explicit canonical policy.
+- **Documentation standards.** They write pragmatic SAFETY comments but skip rustdoc examples. We mandate first-class crate-level `//!` docs with diagrams and worked examples.
+- **API surface size.** They expose a large generated multi-language API. We deliberately keep the embedded engine surface small.
+
+### 8.4 Engineering philosophy — what's worth borrowing
+
+Four items the deeper audit surfaced that aren't on the §5.1 list and would tighten the engine independently of the formal durability gaps:
+
+- **Cross-language schema parity test** — `crates/schema/tests/ensure_same_schema.rs` in the SpacetimeDB tree is a single test that fails if Rust schemas drift from generated client schemas. We enforce Python↔Rust parity via parallel test suites, which is harder to bypass than a single gate but also easier to forget to add when a new binding surface appears.
+- **Property-based tests** (proptest/quickcheck) — SpacetimeDB has the dependencies but uses them sparingly. Our ATDD coverage is example-based; storage code (Q4 quantization round-trips, segment compaction invariants, snapshot restore) is the natural fit for property tests.
+- **Replay-determinism as a property** — they're built so the same log always produces the same state. We have crash-recovery ATs but no test that asserts replay determinism over a corpus of generated logs.
+- **Versioned schema modules** (their `raw_def::v9` namespace) — our snapshot format carries a `format_version` integer but doesn't version the public type modules. Becomes load-bearing the first time we change the on-disk pack layout and want old snapshots to load on new binaries.
+
+A fifth observation, less actionable but worth recording: SpacetimeDB's code culture attributes magic constants to a person and a date (`// chosen completely arbitrarily by pgoldman 2025-04-10`). That kind of honesty makes future archaeology possible. We have constants in the workspace whose values aren't justified anywhere — a low-cost discipline gap.
+
+### 8.5 Updated punch list
+
+Carrying forward from §5.1, dropping shipped items, adding §8.2 and §8.4 entries:
+
+**Formal foundation gaps (high impact):**
+
+1. Close the confirmed-vs-unconfirmed read API gap — the rule exists in CLAUDE.md, no implementation enforces it.
+2. Formalize the `Durability` trait (`append` / `durable_offset` / `history_from`) in `tdb-storage`.
+3. Add a Prometheus-style metrics layer (startup time, replay time, queue depth, snapshot timings).
+
+**Opportunistic discipline borrows (each independent, each cheap):**
+
+4. Cross-language schema parity gate (Rust↔Python single test).
+5. Property-based tests on storage round-trips.
+6. Replay-determinism property test.
+7. Versioned schema modules for forward-compat on the on-disk pack layout.
+
+**Lower priority / depends-on-consumer-demand:**
+
+8. Energy/budget trait for per-owner rate limiting.
+9. Async background snapshot worker.
+10. Subscription / live-query surface.
+11. MVCC-style reader/writer isolation.
+
+Items 1–7 are the realistic v0.8.x scope. Items 8–11 wait for a real consumer to ask for them.
