@@ -244,7 +244,19 @@
 <a href=#209 id=209 data-nosnippet>209</a>        help(<span class="string">"check the caller's arguments against the API contract"</span>)
 <a href=#210 id=210 data-nosnippet>210</a>    )]
 <a href=#211 id=211 data-nosnippet>211</a>    </span>InvalidArgument(String),
-<a href=#212 id=212 data-nosnippet>212</a>}
-<a href=#213 id=213 data-nosnippet>213</a>
-<a href=#214 id=214 data-nosnippet>214</a><span class="kw">pub type </span><span class="prelude-ty">Result</span>&lt;T&gt; = std::result::Result&lt;T, TardigradeError&gt;;
+<a href=#212 id=212 data-nosnippet>212</a>
+<a href=#213 id=213 data-nosnippet>213</a>    <span class="attr">#[error(<span class="string">"confirmed read exceeded its timeout after {waited_ms} ms"</span>)]
+<a href=#214 id=214 data-nosnippet>214</a>    #[diagnostic(
+<a href=#215 id=215 data-nosnippet>215</a>        code(tdb::durability::read_timeout),
+<a href=#216 id=216 data-nosnippet>216</a>        help(
+<a href=#217 id=217 data-nosnippet>217</a>            <span class="string">"the confirmed-mode read waited for the durable offset to catch up to the snapshot taken at request entry, but the deadline passed first; increase the timeout, call engine.flush() before reading, or check whether a failed write is blocking durability progress"
+<a href=#218 id=218 data-nosnippet>218</a>        </span>)
+<a href=#219 id=219 data-nosnippet>219</a>    )]
+<a href=#220 id=220 data-nosnippet>220</a>    </span>ReadTimeout {
+<a href=#221 id=221 data-nosnippet>221</a>        <span class="doccomment">/// Wall-clock milliseconds spent waiting before giving up.
+<a href=#222 id=222 data-nosnippet>222</a>        </span>waited_ms: u64,
+<a href=#223 id=223 data-nosnippet>223</a>    },
+<a href=#224 id=224 data-nosnippet>224</a>}
+<a href=#225 id=225 data-nosnippet>225</a>
+<a href=#226 id=226 data-nosnippet>226</a><span class="kw">pub type </span><span class="prelude-ty">Result</span>&lt;T&gt; = std::result::Result&lt;T, TardigradeError&gt;;
 </code></pre></div></section></main></body></html>
