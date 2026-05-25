@@ -187,6 +187,7 @@ pub mod chunk_boundary;
 pub mod durability;
 pub mod engine;
 pub mod maintenance;
+pub mod metrics;
 pub(crate) mod pack_directory;
 pub(crate) mod pack_materialization;
 #[cfg(test)]

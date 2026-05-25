@@ -576,6 +576,13 @@ class Engine:
         this value and wait for it to reach a target. See the
         "Reliability & Consistency Rules" section of CLAUDE.md.
         """
+    def metrics_prometheus_text(self) -> builtins.str:
+        r"""
+        Render the process-wide Prometheus registry to text exposition
+        format. The same text the HTTP bridge serves at ``/metrics``;
+        exposed directly here so embedded consumers can scrape without
+        going through HTTP.
+        """
     def __repr__(self) -> builtins.str: ...
 
 @typing.final

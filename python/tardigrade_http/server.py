@@ -27,7 +27,7 @@ from typing import Callable
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 import tardigrade_db
 
@@ -271,6 +271,17 @@ def create_app(engine, kv_fn: KvCaptureFn | None = None) -> FastAPI:
                 status_code=HTTP_STATUS_BAD_REQUEST, detail=str(exc),
             ) from exc
         return SaveResponse(manifest=Manifest(**manifest))
+
+    @app.get("/metrics")
+    def metrics() -> PlainTextResponse:
+        # Prometheus scrapers expect ``text/plain; version=0.0.4``
+        # — the version qualifier is the standard exposition-format
+        # discriminator. PlainTextResponse defaults to text/plain
+        # without a version, so we set the media type explicitly.
+        return PlainTextResponse(
+            content=engine.metrics_prometheus_text(),
+            media_type="text/plain; version=0.0.4",
+        )
 
     @app.post("/mem/restore", response_model=RestoreResponse)
     def restore(req: RestoreRequest) -> RestoreResponse:

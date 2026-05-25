@@ -1118,9 +1118,13 @@ impl Engine {
             Ok((results, snapshot, tracker))
         })?;
 
-        // Confirmed-mode wait, outside the engine read lock.
+        // Confirmed-mode wait, outside the engine read lock. Use
+        // the metric-emitting wrapper so the outcome counter and
+        // wait-latency histogram update automatically.
         if let Some(timeout) = confirmed_timeout {
-            let wait_outcome = py.detach(move || tracker.wait_durable(snapshot, timeout));
+            let wait_outcome = py.detach(move || {
+                tdb_engine::metrics::wait_durable_with_metrics(&tracker, snapshot, timeout)
+            });
             if let Err(err) = wait_outcome {
                 return Err(PyRuntimeError::new_err(format!(
                     "confirmed read timeout: durability did not reach target \
@@ -1739,6 +1743,14 @@ impl Engine {
     /// "Reliability & Consistency Rules" section of CLAUDE.md.
     fn durable_offset(&self) -> PyResult<u64> {
         Ok(read_engine(&self.inner)?.durable_offset())
+    }
+
+    /// Render the process-wide Prometheus registry to text exposition
+    /// format. The same text the HTTP bridge serves at ``/metrics``;
+    /// exposed directly here so embedded consumers can scrape without
+    /// going through HTTP.
+    fn metrics_prometheus_text(&self) -> PyResult<String> {
+        Ok(read_engine(&self.inner)?.metrics_prometheus_text())
     }
 
     fn __repr__(&self) -> PyResult<String> {

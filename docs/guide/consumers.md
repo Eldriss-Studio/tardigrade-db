@@ -121,6 +121,21 @@ Consumers that rely on replay testing (snapshot a session, run again, expect bit
 
 ---
 
+## Observability
+
+The engine exports Prometheus-format metrics so consumers running in production can wire up the usual alerts. Embedded callers get them via `engine.metrics_prometheus_text() -> str`; the HTTP bridge serves them at `GET /metrics` with the standard `text/plain; version=0.0.4` content type.
+
+The current metric inventory:
+
+- `tdb_durable_offset` (gauge) — monotonic durability boundary; advances after every fsync.
+- `tdb_issued_offset` (gauge) — monotonic acceptance counter; always `>= tdb_durable_offset`. The gap between the two is "writes in flight."
+- `tdb_confirmed_read_total{outcome="ok"|"timeout"}` (counter) — confirmed-read outcomes split by category. Alert when the `timeout` rate climbs.
+- `tdb_confirmed_read_wait_seconds` (histogram) — wait latency for successful confirmed reads. Track p50 / p99.
+- `tdb_engine_open_seconds` (histogram) — open / replay duration. Use to spot replay regressions across releases.
+- `tdb_snapshot_write_seconds` (histogram) — wall-clock for snapshot writes. Useful for sizing maintenance windows.
+
+The exporter installs a process-global recorder at the first `Engine::open` call. If your application installs its own `metrics` recorder, do that before opening any TardigradeDB engine (the engine reuses an existing global recorder).
+
 ## Type stubs and contract enforcement
 
 The Python wheel ships PEP 561 type information for the entire engine surface. If your project uses `mypy`, `pyright`, or any IDE that reads type stubs, you get autocomplete, signature popups, and edit-time type-checking for every `tardigrade_db.Engine` method without any extra setup — `pip install tardigrade-db` and your tooling lights up.

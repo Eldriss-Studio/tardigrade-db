@@ -317,6 +317,11 @@ pub struct Engine {
     /// reads snapshot `issued` and wait on `durable` — see
     /// [`crate::durability`] for the contract.
     durability: Arc<crate::durability::DurabilityTracker>,
+    /// Render handle for the process-wide Prometheus recorder.
+    /// Cloned from [`crate::metrics::install_or_get_prometheus_handle`]
+    /// at engine open — every engine instance in this process feeds
+    /// the same registry and renders the same text.
+    metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
 }
 
 /// Configuration for the optional streaming-ingest write buffer.
@@ -475,6 +480,49 @@ impl Engine {
     #[must_use]
     pub fn durability_tracker(&self) -> Arc<crate::durability::DurabilityTracker> {
         Arc::clone(&self.durability)
+    }
+
+    /// Render the process-wide Prometheus registry to text format.
+    ///
+    /// Returns the standard Prometheus exposition format any
+    /// scraper consumes. The HTTP bridge serves this from
+    /// `GET /metrics`; embedded consumers can scrape directly.
+    ///
+    /// See [`crate::metrics`] for the metric inventory and naming
+    /// rationale.
+    #[must_use]
+    pub fn metrics_prometheus_text(&self) -> String {
+        self.metrics_handle.render()
+    }
+
+    /// Bump `issued`, update the Prometheus gauge, return the new
+    /// offset. Internal helper to keep every write site uniform —
+    /// every place that previously called `self.durability.issue_one()`
+    /// directly now goes through here so the gauge tracks.
+    #[allow(
+        clippy::cast_precision_loss,
+        // Reason: u64 → f64 for Prometheus gauge is the project's
+        // documented allow per `cast_precision_loss` workspace policy.
+        // Gauge values are display-only and tolerate the precision
+        // loss past 2^53.
+    )]
+    fn record_issued(&self) -> u64 {
+        let new = self.durability.issue_one();
+        metrics::gauge!(crate::metrics::names::ISSUED_OFFSET).set(new as f64);
+        new
+    }
+
+    /// Advance `durable` to the current `issued` high-water mark and
+    /// update the Prometheus gauge. Called after each successful fsync.
+    #[allow(
+        clippy::cast_precision_loss,
+        // Reason: same as `record_issued` — gauge values are display-only.
+    )]
+    fn publish_durable_now(&self) {
+        let target = self.durability.current_issued();
+        self.durability.publish_durable(target);
+        metrics::gauge!(crate::metrics::names::DURABLE_OFFSET)
+            .set(self.durability.current_durable() as f64);
     }
 
     /// Install a projection matrix for the `"projected"` retrieval-key
@@ -729,6 +777,11 @@ impl Engine {
         vamana_threshold: usize,
         segment_size: Option<u64>,
     ) -> Result<Self> {
+        // Time the open path — covers segment scan, WAL replay,
+        // derived-state rebuild. Recorded into the
+        // `tdb_engine_open_seconds` counter at the bottom.
+        let open_start = std::time::Instant::now();
+
         // Open durable backing stores (files + WAL handle).
         let pool = match segment_size {
             Some(size) => BlockPool::open_with_segment_size(dir, size)?,
@@ -774,9 +827,16 @@ impl Engine {
             projection_matrix: None,
             fingerprint_cache: None,
             durability: Arc::new(crate::durability::DurabilityTracker::new()),
+            metrics_handle: crate::metrics::install_or_get_prometheus_handle(),
         };
 
         engine.refresh()?;
+
+        // Record the open duration. Histogram so multi-engine
+        // processes (or test suites) can read p50/p99 across opens
+        // — consistent with the other duration metrics.
+        metrics::histogram!(crate::metrics::names::ENGINE_OPEN_SECONDS)
+            .record(open_start.elapsed().as_secs_f64());
 
         Ok(engine)
     }
@@ -1120,9 +1180,9 @@ impl Engine {
         // single coalesced fsync above. Bump issued accordingly and
         // publish the new high-water mark.
         for _ in 0..ids.len() {
-            self.durability.issue_one();
+            self.record_issued();
         }
-        self.durability.publish_durable(self.durability.current_issued());
+        self.publish_durable_now();
 
         // Phase 3: Index all cells into retrieval + governance (in memory, fast).
         for (id, owner, key, parent_cell_id, gov) in gov_entries {
@@ -1487,12 +1547,18 @@ impl Engine {
         &mut self,
         out_path: &std::path::Path,
     ) -> Result<crate::snapshot::SnapshotManifest> {
+        let started = std::time::Instant::now();
         self.flush()?;
         let stats = crate::snapshot::SnapshotStats {
             pack_count: self.pack_count(),
             owner_count: self.list_owners().len(),
         };
-        crate::snapshot::write_snapshot(&self.dir, out_path, stats)
+        let manifest = crate::snapshot::write_snapshot(&self.dir, out_path, stats)?;
+        // Record only on success — failed snapshots don't represent
+        // the steady-state cost a maintenance window must allow for.
+        metrics::histogram!(crate::metrics::names::SNAPSHOT_WRITE_SECONDS)
+            .record(started.elapsed().as_secs_f64());
+        Ok(manifest)
     }
 
     /// Restore a snapshot archive at `in_path` into `target_dir`,
@@ -1827,8 +1893,8 @@ impl Engine {
         // Durability: acceptance and durability happen together on
         // the non-buffered path. Bump issued and publish in one go
         // so the durable offset matches the write that just landed.
-        let issued = self.durability.issue_one();
-        self.durability.publish_durable(issued);
+        self.record_issued();
+        self.publish_durable_now();
 
         Ok(pack_id)
     }
@@ -1856,7 +1922,7 @@ impl Engine {
         // returned to the caller. Bump issued so a confirmed read
         // snapshotted between enqueue and flush sees the pending
         // write in its expected-durable set.
-        self.durability.issue_one();
+        self.record_issued();
 
         if should_flush {
             self.flush_buffer()?;
@@ -1920,7 +1986,7 @@ impl Engine {
             // Acceptance: each pack in this eager batch is committed
             // to durability by the persist call below. Bump issued
             // here so persist_packs_coalesced's publish covers them.
-            self.durability.issue_one();
+            self.record_issued();
         }
         self.persist_packs_coalesced(&id_pack_pairs)?;
         Ok(ids)
@@ -1976,7 +2042,7 @@ impl Engine {
         // Advance `durable` to the high water of issued so any
         // confirmed reader waiting on a pack persisted here unblocks.
         // No-op when issued hasn't advanced past the current durable.
-        self.durability.publish_durable(self.durability.current_issued());
+        self.publish_durable_now();
         Ok(())
     }
 

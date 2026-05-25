@@ -68,6 +68,15 @@ HTTP_EXPOSED: dict[str, RouteContract] = {
         response_model="SaveResponse",
         nested_models=("Manifest",),
     ),
+    "GET /metrics": RouteContract(
+        # Returns the Prometheus text exposition format. No request
+        # body, no Pydantic response model — `PlainTextResponse`
+        # returns the engine's render method output verbatim. The
+        # parity registry only checks the engine method exists.
+        engine_methods=("metrics_prometheus_text",),
+        request_model=None,
+        response_model=None,
+    ),
     "POST /mem/restore": RouteContract(
         # ``restore_from`` is a classmethod / staticmethod-style
         # constructor on ``tardigrade_db.Engine`` rather than an
