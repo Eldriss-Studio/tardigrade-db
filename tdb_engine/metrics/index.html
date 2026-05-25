@@ -1,0 +1,73 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Prometheus-format metrics layer — closes the last item on the April `SpacetimeDB` audit’s §5.1 “Adopt Now” list."><title>tdb_engine::metrics - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="tdb_engine" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-channel="1.95.0" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"><style>
+  .tdb-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: #1a1a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 0.35rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .tdb-nav a {
+    color: #8b949e;
+    text-decoration: none;
+  }
+  .tdb-nav a:hover { color: #e6edf3; }
+  .tdb-nav .tdb-brand {
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  /* Push rustdoc content down so the nav doesn't overlap */
+  body { margin-top: 2rem !important; }
+</style>
+<div class="tdb-nav">
+  <a class="tdb-brand" href="/tardigrade-db/tdb_engine/index.html">TardigradeDB</a>
+  <a href="/tardigrade-db/tdb_engine/index.html">API Docs</a>
+  <a href="/tardigrade-db/dev/bench/">Benchmarks</a>
+  <a href="https://github.com/Eldriss-Studio/tardigrade-db">GitHub</a>
+</div>
+
+</head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module metrics</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../tdb_engine/index.html">tdb_<wbr>engine</a><span class="version">0.7.7</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module metrics</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#design" title="Design">Design</a></li><li><a href="#why-render-only" title="Why render-only">Why render-only</a></li><li><a href="#metric-inventory" title="Metric inventory">Metric inventory</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#statics" title="Statics">Statics</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate tdb_<wbr>engine</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">tdb_engine</a></div><h1>Module <span>metrics</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/tdb_engine/metrics.rs.html#1-148">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Prometheus-format metrics layer — closes the last item on the
+April <code>SpacetimeDB</code> audit’s §5.1 “Adopt Now” list.</p>
+<h2 id="design"><a class="doc-anchor" href="#design">§</a>Design</h2>
+<p>The <code>metrics</code> facade crate stays cheap when no recorder is
+installed: the macros expand to no-ops. When the engine boots, it
+installs a <code>metrics-exporter-prometheus</code> recorder <em>once per
+process</em> (via <a href="https://doc.rust-lang.org/1.95.0/std/sync/once_lock/struct.OnceLock.html" title="struct std::sync::once_lock::OnceLock"><code>std::sync::OnceLock</code></a>) so every engine
+instance in the same process feeds the same global registry. The
+<a href="../engine/struct.Engine.html#method.metrics_prometheus_text" title="method tdb_engine::engine::Engine::metrics_prometheus_text"><code>Engine::metrics_prometheus_text</code></a> accessor calls the handle’s
+<code>render()</code> method to produce the Prometheus text exposition
+format.</p>
+<h2 id="why-render-only"><a class="doc-anchor" href="#why-render-only">§</a>Why render-only</h2>
+<p><code>metrics-exporter-prometheus</code>’s default mode spins up its own
+HTTP server on a configurable port. We don’t want that — the
+<code>FastAPI</code> bridge already runs an HTTP server, and adding a second
+one complicates deployment. Render-only mode (the handle’s
+<code>render()</code> method) returns the Prometheus text without any
+HTTP machinery; the bridge serves it from a <code>/metrics</code> route.</p>
+<h2 id="metric-inventory"><a class="doc-anchor" href="#metric-inventory">§</a>Metric inventory</h2>
+<ul>
+<li><code>tdb_durable_offset</code> (gauge) — monotonic durability boundary.</li>
+<li><code>tdb_issued_offset</code> (gauge) — monotonic acceptance counter.</li>
+<li><code>tdb_confirmed_read_total{outcome}</code> (counter) — confirmed-read
+outcomes by category (<code>ok</code>, <code>timeout</code>).</li>
+<li><code>tdb_confirmed_read_wait_seconds</code> (histogram) — wall-clock
+wait latency for confirmed reads that succeeded.</li>
+<li><code>tdb_engine_open_seconds</code> (counter) — time spent in
+<a href="../engine/struct.Engine.html#method.open" title="associated function tdb_engine::engine::Engine::open"><code>Engine::open</code></a> / variants (replay + state rebuild).</li>
+<li><code>tdb_snapshot_write_seconds</code> (histogram) — wall-clock duration
+of <a href="../engine/struct.Engine.html#method.snapshot" title="method tdb_engine::engine::Engine::snapshot"><code>Engine::snapshot</code></a> calls.</li>
+</ul>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="names/index.html" title="mod tdb_engine::metrics::names">names</a></dt><dd>Metric family names — kept in one place so call sites and
+dashboards stay in sync.</dd></dl><h2 id="statics" class="section-header">Statics<a href="#statics" class="anchor">§</a></h2><dl class="item-table"><dt><a class="static" href="static.METRICS_HANDLE.html" title="static tdb_engine::metrics::METRICS_HANDLE">METRICS_<wbr>HANDLE</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.install_or_get_prometheus_handle.html" title="fn tdb_engine::metrics::install_or_get_prometheus_handle">install_<wbr>or_<wbr>get_<wbr>prometheus_<wbr>handle</a></dt><dd>Install the process-wide Prometheus recorder if it has not been
+installed yet, and return a [<code>PrometheusHandle</code>] capable of
+rendering the registry to text.</dd><dt><a class="fn" href="fn.wait_durable_with_metrics.html" title="fn tdb_engine::metrics::wait_durable_with_metrics">wait_<wbr>durable_<wbr>with_<wbr>metrics</a></dt><dd>Wait for <code>snapshot</code> to become durable, emitting metrics for the
+outcome. Wraps <a href="../durability/struct.DurabilityTracker.html#method.wait_durable" title="method tdb_engine::durability::DurabilityTracker::wait_durable"><code>crate::durability::DurabilityTracker::wait_durable</code></a>
+so the confirmed-read call site doesn’t need to duplicate the
+counter+histogram boilerplate.</dd></dl></section></div></main></body></html>
