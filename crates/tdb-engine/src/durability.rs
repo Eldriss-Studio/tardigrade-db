@@ -99,6 +99,12 @@ impl DurabilityTracker {
     /// durable. Idempotent: a second call with the same or lower
     /// value is a no-op. Wakes every [`wait_durable`] caller.
     ///
+    /// `offset` is **clamped** to the current `issued` value so
+    /// `durable <= issued` is an unconditional invariant. A caller
+    /// that publishes a target ahead of `issued` advances `durable`
+    /// only as far as `issued` permits; the rest lands on a later
+    /// call once `issued` has caught up.
+    ///
     /// # Panics
     ///
     /// Panics if the internal notify mutex has been poisoned (a
@@ -108,16 +114,20 @@ impl DurabilityTracker {
     ///
     /// [`wait_durable`]: Self::wait_durable
     pub fn publish_durable(&self, offset: u64) {
+        // Clamp to issued — the durability boundary cannot lead
+        // acceptance. Caught by a property test in
+        // `tests/durability_proptest.rs::durable_never_exceeds_issued`.
+        let effective = offset.min(self.issued.load(Ordering::Acquire));
         // `fetch_max` semantics via CAS — keep the maximum so
         // out-of-order publishes don't regress the offset.
         let mut current = self.durable.load(Ordering::Acquire);
         loop {
-            if offset <= current {
+            if effective <= current {
                 return;
             }
             match self.durable.compare_exchange_weak(
                 current,
-                offset,
+                effective,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
@@ -205,9 +215,19 @@ mod tests {
         assert_eq!(t.current_issued(), 3);
     }
 
+    /// Helper: bump `issued` to a target value so the tracker's
+    /// invariant `durable <= issued` permits a publish at that
+    /// level. Mirrors the engine's own write-then-fsync pattern.
+    fn issue_to(t: &DurabilityTracker, target: u64) {
+        while t.current_issued() < target {
+            t.issue_one();
+        }
+    }
+
     #[test]
     fn publish_durable_is_monotonic() {
         let t = DurabilityTracker::new();
+        issue_to(&t, 10);
         t.publish_durable(5);
         assert_eq!(t.current_durable(), 5);
         t.publish_durable(3); // Lower — must not regress.
@@ -219,10 +239,24 @@ mod tests {
     #[test]
     fn wait_durable_returns_immediately_when_already_at_target() {
         let t = DurabilityTracker::new();
+        issue_to(&t, 5);
         t.publish_durable(5);
         let start = Instant::now();
         assert!(t.wait_durable(3, Duration::from_mins(1)).is_ok());
         assert!(start.elapsed() < Duration::from_millis(10));
+    }
+
+    #[test]
+    fn publish_durable_clamps_to_issued() {
+        // Documented invariant: publishing past `issued` advances
+        // durable only as far as `issued` permits. Caught by the
+        // proptest gate; pinned here as an example.
+        let t = DurabilityTracker::new();
+        t.publish_durable(100);
+        assert_eq!(t.current_durable(), 0, "no writes issued — durable must stay at 0");
+        t.issue_one();
+        t.publish_durable(100);
+        assert_eq!(t.current_durable(), 1, "one write issued — durable clamps to 1");
     }
 
     #[test]
@@ -236,6 +270,8 @@ mod tests {
     #[test]
     fn wait_durable_unblocks_when_publish_arrives() {
         let t = Arc::new(DurabilityTracker::new());
+        // Issue ahead so publish can advance durable to 5.
+        issue_to(&t, 5);
         let waiter = {
             let t = Arc::clone(&t);
             thread::spawn(move || t.wait_durable(5, Duration::from_secs(2)))
@@ -250,6 +286,7 @@ mod tests {
     #[test]
     fn multiple_waiters_unblock_on_single_publish() {
         let t = Arc::new(DurabilityTracker::new());
+        issue_to(&t, 7);
         let waiters: Vec<_> = (0..3)
             .map(|_| {
                 let t = Arc::clone(&t);

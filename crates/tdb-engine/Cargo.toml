@@ -27,6 +27,7 @@ metrics-exporter-prometheus = { version = "0.18", default-features = false }
 [dev-dependencies]
 criterion = { workspace = true }
 half = { workspace = true }
+proptest = "1.6"
 tempfile = { workspace = true }
 
 [[bench]]

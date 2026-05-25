@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e151f1b9d0d6306c92d50ab0d1ebb674ad939959c7357bf85c9ae9aa994c7b49 # shrinks to ops = [Publish { target_offset_from_issued: 1 }]
+cc 862aa6bcd6c58f34554540aff53351bb16567ef1121910d71758bfc9dd8c3073 # shrinks to ops = [Publish { target_offset_from_issued: 1 }]
+cc 6f4267272f1fa7875812e27aba5baa4cab6ee9ddc2d4d87b870d65a7c8a9ad3f # shrinks to ops = [Publish { target_offset_from_issued: 1 }]
