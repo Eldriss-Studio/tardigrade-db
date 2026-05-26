@@ -20,15 +20,15 @@ If any of those fail, fix before releasing — never tag broken state.
 
 ## Version policy
 
-Pre-1.0 SemVer per the [Cargo / Rust convention](https://doc.rust-lang.org/cargo/reference/semver.html), which is also how the Python packaging ecosystem reads it: while major is `0`, **minor functions as major**. Cargo treats `^0.2` as `>=0.2.0, <0.3.0` — bumping `0.2 → 0.3` signals an incompatible change to consumers.
+The convention used by this project pre-1.0 — match it because every shipped tag (`v0.1.0` through current) has followed it:
 
-That gives the right rules:
+- **Minor bump (`0.X.0`)**: a release that crosses a milestone consumers should pay attention to. New user-facing surface (new methods, new endpoints, new APIs that change what the engine *can do*); architectural primitives that reshape how consumers reason about the engine (the durability boundary, the metrics layer); coherent batches of work that ship together and want one anchor. Breaking changes also belong here — but in practice, pre-1.0 we have not shipped breaking changes, and minor bumps have been the "milestone marker" not the "incompatibility flag."
+- **Patch bump (`0.X.Y`)**: incremental additions and bug fixes within the current track. Example: `0.7.7` closed a `CalibrationResult.best_score()` foot-gun; `0.7.6` fixed two vLLM connector save-path crashes; both shipped as patches because they were tactical fixes inside the v0.7 track, not new milestones.
+- **No major bumps until 1.0**. 1.0 happens when the API is stable enough to commit to long-term. Not yet.
 
-- **Patch bump (`0.X.Y`)**: anything additive or backward-compatible — new methods, new enum variants on non-exhaustive types, new optional fields, bug fixes, internal refactors, documentation. The vast majority of pre-1.0 releases should be patch bumps.
-- **Minor bump (`0.X.0`)**: a breaking change consumers must adapt to. Removed or renamed public items, changed signatures, removed enum variants, semantic changes that older callers can't ignore.
-- **No major bumps until 1.0**: 1.0 happens when the public API is stable enough to commit to. Not yet.
+Why this isn't the by-the-book Cargo SemVer convention: Cargo treats `^0.2` as `>=0.2.0, <0.3.0`, which assigns *breakingness* to the minor bump and would push every additive feature batch to a patch. That works for libraries with external consumers who pin tight version ranges. Pre-1.0, with the sole maintainer and no external consumers pinning to specific minors, the milestone-marker convention is more useful to the project than the strict-incompatibility convention. **The expectation is to migrate to strict Cargo SemVer at 1.0**, when external consumers start pinning and the cost of misreading "minor = additive milestone" exceeds the cost of all releases being patches.
 
-**Common mistake to avoid:** bumping minor just because a release is "big" or "marks a milestone." Size of the diff doesn't matter; *breakingness* does. A 5000-line additive PR is a patch. A one-line rename of a public function is a minor.
+CHANGELOG.md's preamble names the same convention in one sentence ("minor bumps mark new user-facing surface, patch bumps mark fixes and internal changes"). Keep the two in sync — if the rule changes, change both.
 
 The workspace version (`Cargo.toml`'s `[workspace.package].version`) and the Python distribution version (`pyproject.toml`'s `[project].version`) must match. The PyO3 binding inherits from the workspace.
 
@@ -44,12 +44,24 @@ The workspace version (`Cargo.toml`'s `[workspace.package].version`) and the Pyt
 [ ] CHANGELOG.md: `[Unreleased]` content rolled into `[X.Y.Z] — YYYY-MM-DD`
 [ ] CHANGELOG.md: fresh empty `[Unreleased]` section added back
 [ ] Cargo.toml workspace version bumped to X.Y.Z
-[ ] pyproject.toml version bumped to X.Y.Z
+[ ] pyproject.toml version bumped to X.Y.Z (drives the wheel filename — maturin reads this, not Cargo.toml's workspace version)
+[ ] CITATION.cff `version:` field bumped, `date-released:` updated
+[ ] README.md status banner and "Current version" line bumped to vX.Y.Z
+[ ] SECURITY.md supported-versions table reflects new minor (only if the minor changed; patch bumps don't move support windows)
 [ ] `maturin develop` succeeds with the new version
 [ ] Commit the version bump: `git commit -m "🔖 release: vX.Y.Z"`
-[ ] Tag: `git tag -a vX.Y.Z -m "vX.Y.Z"`
+[ ] Tag the release commit explicitly (NOT main): `git tag vX.Y.Z <release-commit-sha>`
+[ ] Verify the tagged tree carries the new version: `git show vX.Y.Z:Cargo.toml | grep '^version'`
 [ ] Push: `git push origin main && git push origin vX.Y.Z`
+[ ] `gh release create vX.Y.Z --notes-file <changelog-section>` (triggers the publish workflow via on: release: published)
+[ ] Watch `gh run list --workflow=publish.yml --limit 1` until status = completed, conclusion = success
+[ ] Verify the artifact actually landed: `curl -s https://pypi.org/pypi/tardigrade-db/X.Y.Z/json | jq -r .info.version` returns `X.Y.Z`
 ```
+
+Two checklist entries to be aware of:
+
+- **`pyproject.toml` AND `Cargo.toml` both need bumping.** Maturin reads `pyproject.toml`'s `[project].version` for the wheel filename, not the Cargo.toml workspace version. The publish workflow has guards against version-vs-tag drift, but the right fix is to keep both manifests synced.
+- **Tagging main vs tagging the release commit.** GitHub Actions workflows triggered by `on: release: published` check out the *release's target commit*, not the tag's commit. If main has moved past the release commit and the release was created against main (the UI default), the workflow builds the wrong tree and PyPI rejects the wheel as a duplicate of the previous version's filename. `gh release create` from CLI uses the tag's target commit; the UI defaults to main. Verify with `git show vX.Y.Z:Cargo.toml | grep '^version'` before pushing.
 
 ## Build and publish
 
@@ -120,16 +132,30 @@ Things every release notes block should cover:
 
 ## What goes in CHANGELOG entries
 
-Group by category. Use the headings consistently so consumers diffing two releases get a stable shape:
+The reader is the consumer of the package, not its author. They want: "what can I do now that I couldn't before, and how does my code need to change?" — not a reverse-chronological list of commits. Section headers are Title Case, themed to *what the release delivers*, not the Keep-A-Changelog template (Added / Changed / Deprecated / Removed / Fixed). The themed style was adopted starting around `v0.7.x` and the project has stayed with it; new entries should match.
 
-- **Added** — new public surface.
-- **Changed** — behaviour change visible to consumers.
-- **Deprecated** — still works but on the way out; name the replacement.
-- **Removed** — gone.
-- **Fixed** — bug fix.
-- **Security** — vulnerability fix.
+Sections to draw from, used as needed:
 
-One bullet per user-facing item. Include the commit hash in parentheses if the diff is the canonical reference. Don't write "Phase 1A.2 lookback bug" — write "boundary-aware chunker no longer truncates mid-word at chunk edge (`abc1234`)" so the entry survives plan rewrites.
+- **General** — top-level capabilities, theme of the release, breaking changes
+- **Public API** — new exports, signature changes, deprecations
+- **HTTP API** — new endpoints, new query params, new error shapes
+- **Behaviour** — things that work differently without an API change
+- **Observability** — new metrics, new logging, new diagnostic surfaces
+- **Performance** — measurable wins the user will notice
+- **Test Infrastructure** — new test classes, drift-guards, parity gates (consumers care because their own CI inherits these)
+- **CI** — workflow changes consumers will notice via passing/failing checks
+- **Bug Fixes** — terminal section, purely factual
+- **Community Standards** — `SECURITY.md`, `CITATION.cff`, etc. when bumped
+
+Skip any section that has nothing in it. Per-entry shape: bold anchor (the symbol the user calls, in backticks if it's code) + colon + the delta. Use `→` for numerical or behavioural deltas (`"Cooldown 7s → 18s"`, `"Coverage threshold 80% → 75%"`). Tense: declarative, present, sentence fragments. "Sessions now expose …" not "Added event emission …".
+
+What goes in: concrete user-callable changes (new exports, behaviour shifts, error-shape changes), numerical deltas with `→`, breaking changes with a one-line migration hint when non-obvious, bug fixes the user might have hit.
+
+What stays out: internal refactors that don't change behaviour, build/lockfile/lint config changes, test framework migrations, PR numbers, SHAs, branch names, the *why* unless it's a security fix or a breaking-change rationale the user needs, internal-doc section references (no "§5.1", "punch list", "phase NN" — those rot fast and confuse future readers).
+
+Include the commit hash in parentheses if the diff is the canonical reference. Don't write "Phase 1A.2 lookback bug" — write "boundary-aware chunker no longer truncates mid-word at chunk edge (`abc1234`)" so the entry survives plan rewrites.
+
+Reference style: Valve's Dota 2 patch notes (<https://www.dota2.com/news/updates>) — the canonical example of changelog writing that the audience actually reads.
 
 ## Notes
 

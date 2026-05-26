@@ -14,6 +14,9 @@ Ned = "Ned"
 # `numpy.typing.NDArray` — typos splits the dotted path and reads
 # "ND" as a typo of "AND". The class is the real numpy type name.
 ND = "ND"
+# Dota 2 — referenced as the canonical changelog-writing style guide
+# in RELEASE.md. typos flags it as a typo of "Data".
+Dota = "Dota"
 
 [default.extend-identifiers]
 # flate2 — the de-facto Rust compression crate. typos splits the
