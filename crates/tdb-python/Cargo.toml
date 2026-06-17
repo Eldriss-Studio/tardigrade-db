@@ -34,7 +34,7 @@ tdb-retrieval = { workspace = true }
 tdb-storage = { workspace = true }
 half = { workspace = true }
 pyo3 = "0.28"
-numpy = "0.28"
+numpy = "0.29"
 # Stub generator. The `numpy` feature teaches it to map
 # `PyReadonlyArray1<f32>` and friends to `numpy.typing.NDArray[...]`
 # in generated .pyi instead of falling silently to `typing.Any`.
