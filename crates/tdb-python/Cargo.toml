@@ -33,7 +33,7 @@ tdb-retrieval = { workspace = true }
 # engine mutex for lock-free `pack_text` lookups).
 tdb-storage = { workspace = true }
 half = { workspace = true }
-pyo3 = "0.28"
+pyo3 = "0.29"
 numpy = "0.28"
 # Stub generator. The `numpy` feature teaches it to map
 # `PyReadonlyArray1<f32>` and friends to `numpy.typing.NDArray[...]`
