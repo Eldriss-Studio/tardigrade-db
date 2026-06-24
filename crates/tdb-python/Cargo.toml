@@ -38,7 +38,7 @@ numpy = "0.28"
 # Stub generator. The `numpy` feature teaches it to map
 # `PyReadonlyArray1<f32>` and friends to `numpy.typing.NDArray[...]`
 # in generated .pyi instead of falling silently to `typing.Any`.
-pyo3-stub-gen = { version = "0.22", features = ["numpy"] }
+pyo3-stub-gen = { version = "0.23", features = ["numpy"] }
 
 # Binary target that walks the PyO3 surface and emits .pyi files.
 # Invoked from the maturin build pipeline (see ../../pyproject.toml).
