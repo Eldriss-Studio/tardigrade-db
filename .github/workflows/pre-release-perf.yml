@@ -50,7 +50,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install free-threaded Python 3.13t
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13t'
 
