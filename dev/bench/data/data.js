@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788170456112,
+  "lastUpdate": 1788770144106,
   "repoUrl": "https://github.com/Eldriss-Studio/tardigrade-db",
   "entries": {
     "TardigradeDB Performance": [
@@ -11355,6 +11355,598 @@ window.BENCHMARK_DATA = {
             "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-16-payload-256-in... #3",
             "value": 13054148,
             "range": "± 300342",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Flagrare",
+            "username": "Flagrare",
+            "email": "flagrare@live.it"
+          },
+          "committer": {
+            "name": "Flagrare",
+            "username": "Flagrare",
+            "email": "flagrare@live.it"
+          },
+          "id": "505048013067d003daaa0a3af1de4edaf82a3018",
+          "message": "📝 docs(release): reconcile RELEASE.md with actual practice\n\nThe version policy section described strict Cargo SemVer (patch =\nadditive, minor = breaking), which is correct by-the-book but\ncontradicted by every shipped release this project has cut. v0.5,\nv0.6, v0.7, v0.8 are all additive-only milestone bumps; if the\nproject were following the documented rule they would have been\nv0.4.X, v0.4.Y, etc. Next release manager reading RELEASE.md first\nwould have picked the wrong bump.\n\nUpdates:\n\n- Version policy rewritten to describe the milestone-marker\n  convention the project actually follows: minor = milestone\n  consumers should pay attention to (new surface, new architectural\n  primitives, coherent batch); patch = incremental additions and\n  bug fixes within the current track. Explicitly flags this as a\n  pre-1.0 deviation from Cargo SemVer with a \"migrate to strict\n  SemVer at 1.0\" plan. Cross-references the matching one-line rule\n  in CHANGELOG.md so the two docs can't drift again.\n- Pre-release checklist extended: CITATION.cff version + date,\n  README.md status banner + current-version line, SECURITY.md\n  supported-versions table (only on minor bumps), the\n  pyproject.toml-vs-Cargo.toml duality (maturin reads pyproject for\n  the wheel filename), explicit tag-the-release-commit-not-main\n  guidance with the verify-via-git-show step, and the publish\n  workflow watching + PyPI artifact-actually-landed checks.\n- CHANGELOG entry guidance rewritten to match the themed-section\n  style the project adopted around v0.7.x (General / Public API /\n  HTTP API / Behaviour / Observability / Performance / Test\n  Infrastructure / CI / Bug Fixes / Community Standards) instead\n  of the Keep-A-Changelog template (Added / Changed / Deprecated /\n  Removed / Fixed). Per-entry style guide (bold anchor + colon +\n  delta, declarative present tense). Explicit no-internal-doc-\n  references rule.\n- typos.toml: allowlist 'Dota' (false-positive for 'Data') —\n  RELEASE.md cites Dota 2 patch notes as the changelog-writing\n  reference.",
+          "timestamp": "2026-05-26T00:58:49Z",
+          "url": "https://github.com/Eldriss-Studio/tardigrade-db/commit/505048013067d003daaa0a3af1de4edaf82a3018"
+        },
+        "date": 1788770141634,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "Q4 quantize — compress f32 → 4-bit (GGML Q4_0)/floats/64",
+            "value": 281,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 quantize — compress f32 → 4-bit (GGML Q4_0)/floats/128",
+            "value": 536,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 quantize — compress f32 → 4-bit (GGML Q4_0)/floats/256",
+            "value": 1055,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 quantize — compress f32 → 4-bit (GGML Q4_0)/floats/512",
+            "value": 2076,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 quantize — compress f32 → 4-bit (GGML Q4_0)/floats/1024",
+            "value": 4184,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 dequantize — decompress 4-bit → f32/floats/64",
+            "value": 99,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 dequantize — decompress 4-bit → f32/floats/128",
+            "value": 184,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 dequantize — decompress 4-bit → f32/floats/256",
+            "value": 348,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 dequantize — decompress 4-bit → f32/floats/512",
+            "value": 705,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 dequantize — decompress 4-bit → f32/floats/1024",
+            "value": 1442,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 round-trip — quantize + dequantize end-to-end/floats/128",
+            "value": 715,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 round-trip — quantize + dequantize end-to-end/floats/256",
+            "value": 1401,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Q4 round-trip — quantize + dequantize end-to-end/floats/512",
+            "value": 2810,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Block pool append — Q4-compress and fsync one cell to segment (dim=128)",
+            "value": 496698,
+            "range": "± 58140",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Block pool random read — dequantize one cell from 10K on disk (dim=128)",
+            "value": 19689,
+            "range": "± 96",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "BlockPool get — storage hydration/payload-128-cells-100/100",
+            "value": 19399,
+            "range": "± 145",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "BlockPool get — storage hydration/payload-256-cells-100/100",
+            "value": 19643,
+            "range": "± 130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "BlockPool get — storage hydration/payload-128-cells-1000/1000",
+            "value": 19439,
+            "range": "± 74",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "BlockPool get — storage hydration/payload-256-cells-1000/1000",
+            "value": 19718,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "BlockPool get — storage hydration/payload-128-cells-10000/10000",
+            "value": 19663,
+            "range": "± 65",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "BlockPool get — storage hydration/payload-256-cells-10000/10000",
+            "value": 19933,
+            "range": "± 664",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "FP32 dot product — baseline attention score/dim/64",
+            "value": 37,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "FP32 dot product — baseline attention score/dim/128",
+            "value": 83,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "FP32 dot product — baseline attention score/dim/256",
+            "value": 208,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "FP32 dot product — baseline attention score/dim/512",
+            "value": 447,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "INT8 dot product — NEON-accelerated attention score/dim/64",
+            "value": 5,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "INT8 dot product — NEON-accelerated attention score/dim/128",
+            "value": 6,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "INT8 dot product — NEON-accelerated attention score/dim/256",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "INT8 dot product — NEON-accelerated attention score/dim/512",
+            "value": 16,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "SLB query — hot-path INT8 cache lookup (top-5)/entries/256",
+            "value": 3397,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "SLB query — hot-path INT8 cache lookup (top-5)/entries/1024",
+            "value": 11381,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "SLB query — hot-path INT8 cache lookup (top-5)/entries/4096",
+            "value": 43292,
+            "range": "± 245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "PerTokenRetriever Top5Avg query — encoded per-token keys/cells-r1-100-r5-100-gw-1-cand-100/100",
+            "value": 151768,
+            "range": "± 1903",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "PerTokenRetriever Top5Avg query — encoded per-token keys/cells-r1-100-r5-100-gw-1-cand-320/1000",
+            "value": 707191,
+            "range": "± 5987",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "PerTokenRetriever Top5Avg query — encoded per-token keys/cells-r1-100-r5-100-gw-1-cand-320/10000",
+            "value": 3311330,
+            "range": "± 40317",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Vamana index build — DiskANN-style graph construction (dim=32)/nodes/100",
+            "value": 297105,
+            "range": "± 1949",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Vamana index build — DiskANN-style graph construction (dim=32)/nodes/500",
+            "value": 8560940,
+            "range": "± 54032",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Vamana index build — DiskANN-style graph construction (dim=32)/nodes/1000",
+            "value": 33781117,
+            "range": "± 195316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Vamana query — greedy beam search over 1K-node graph (dim=32, top-10)",
+            "value": 14426,
+            "range": "± 421",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "WAL append — fsync'd causal edge writes/edges/100",
+            "value": 29533173,
+            "range": "± 4299669",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "WAL append — fsync'd causal edge writes/edges/1000",
+            "value": 292551271,
+            "range": "± 11490159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "WAL replay — crash recovery: read 1K edges from disk",
+            "value": 3288684,
+            "range": "± 5332",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_write — single cell persist with fsync (dim=64)",
+            "value": 577969,
+            "range": "± 92624",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read — full pipeline: SLB → retriever → governance (1K cells, dim=64, top-5)",
+            "value": 207893,
+            "range": "± 476",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read — encoded per-token Top5Avg path/cells-r1-100-r5-100-gw-1-cand-100-vamana-changed-...",
+            "value": 880498,
+            "range": "± 1115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read — encoded per-token Top5Avg path/cells-r1-100-r5-100-gw-1-cand-320-vamana-changed-...",
+            "value": 8462523,
+            "range": "± 202368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read — encoded per-token Top5Avg path/cells-r1-100-r5-100-gw-1-cand-320-vamana-changed-... #2",
+            "value": 14327240,
+            "range": "± 555234",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-0-payload-128-...",
+            "value": 795518,
+            "range": "± 2652",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-0-payload-256-...",
+            "value": 794275,
+            "range": "± 1453",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-1-payload-128-...",
+            "value": 925386,
+            "range": "± 9625",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-1-payload-256-...",
+            "value": 928043,
+            "range": "± 4710",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-4-payload-128-...",
+            "value": 1320703,
+            "range": "± 8255",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-4-payload-256-...",
+            "value": 1323885,
+            "range": "± 7183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-16-payload-128...",
+            "value": 2898012,
+            "range": "± 9703",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-16-payload-256...",
+            "value": 2925345,
+            "range": "± 63722",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-0-payload-128-... #2",
+            "value": 8272822,
+            "range": "± 24301",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-0-payload-256-... #2",
+            "value": 8315328,
+            "range": "± 58252",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-1-payload-128-... #2",
+            "value": 8413103,
+            "range": "± 30524",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-1-payload-256-... #2",
+            "value": 8402314,
+            "range": "± 22891",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-4-payload-128-... #2",
+            "value": 8835734,
+            "range": "± 35870",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-4-payload-256-... #2",
+            "value": 8822453,
+            "range": "± 56736",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-16-payload-128... #2",
+            "value": 10449997,
+            "range": "± 45233",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-16-payload-256... #2",
+            "value": 10463649,
+            "range": "± 246695",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-0-payload-128-... #3",
+            "value": 25207086,
+            "range": "± 443525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-0-payload-256-... #3",
+            "value": 24996639,
+            "range": "± 476243",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-1-payload-128-... #3",
+            "value": 24956929,
+            "range": "± 369689",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-1-payload-256-... #3",
+            "value": 25283110,
+            "range": "± 538758",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-4-payload-128-... #3",
+            "value": 25660128,
+            "range": "± 446158",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-4-payload-256-... #3",
+            "value": 25999413,
+            "range": "± 428088",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-16-payload-128... #3",
+            "value": 27498694,
+            "range": "± 507431",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack — encoded per-token Top5Avg path/target-true-dedup-true-layers-16-payload-256... #3",
+            "value": 27964083,
+            "range": "± 452086",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-0-payload-128-ind...",
+            "value": 921203,
+            "range": "± 1566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-0-payload-256-ind...",
+            "value": 920697,
+            "range": "± 1902",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-1-payload-128-ind...",
+            "value": 920240,
+            "range": "± 9173",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-1-payload-256-ind...",
+            "value": 919397,
+            "range": "± 2504",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-4-payload-128-ind...",
+            "value": 920641,
+            "range": "± 2430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-4-payload-256-ind...",
+            "value": 920725,
+            "range": "± 1607",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-16-payload-128-in...",
+            "value": 923552,
+            "range": "± 6190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-16-payload-256-in...",
+            "value": 921986,
+            "range": "± 2498",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-0-payload-128-ind... #2",
+            "value": 8449641,
+            "range": "± 47546",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-0-payload-256-ind... #2",
+            "value": 8447418,
+            "range": "± 49714",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-1-payload-128-ind... #2",
+            "value": 8428988,
+            "range": "± 150854",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-1-payload-256-ind... #2",
+            "value": 8427955,
+            "range": "± 46005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-4-payload-128-ind... #2",
+            "value": 8428784,
+            "range": "± 44859",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-4-payload-256-ind... #2",
+            "value": 8472955,
+            "range": "± 92072",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-16-payload-128-in... #2",
+            "value": 8486826,
+            "range": "± 56859",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-16-payload-256-in... #2",
+            "value": 8445673,
+            "range": "± 32980",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-0-payload-128-ind... #3",
+            "value": 13466013,
+            "range": "± 386870",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-0-payload-256-ind... #3",
+            "value": 13359963,
+            "range": "± 356314",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-1-payload-128-ind... #3",
+            "value": 13508038,
+            "range": "± 368959",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-1-payload-256-ind... #3",
+            "value": 13724999,
+            "range": "± 436222",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-4-payload-128-ind... #3",
+            "value": 13587631,
+            "range": "± 370432",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-4-payload-256-ind... #3",
+            "value": 13742738,
+            "range": "± 416010",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-16-payload-128-in... #3",
+            "value": 13895973,
+            "range": "± 473894",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Engine mem_read_pack profile — retrieval cell only/target-true-dedup-true-layers-16-payload-256-in... #3",
+            "value": 13840237,
+            "range": "± 397147",
             "unit": "ns/iter"
           }
         ]
